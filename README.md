@@ -21,13 +21,13 @@
 
 ### 安装（Claude Code）
 
-所有插件均推荐全局安装（`-g`）——它们设计上就是跨项目通用的工具，
-在没有 ESLint 的项目里会自动静默跳过。
-
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins -g
+/plugin install eslint-lsp@darian-agent-plugins
 ```
+
+出现交互菜单后，选择 **Install for you (user scope)** 完成全局安装。
+这个插件是跨项目的基础设施，在没有 ESLint 配置的项目里会自动跳过。
 
 ### 设计理念
 
@@ -72,13 +72,13 @@ on in their IDEs.
 
 ### Installation (Claude Code)
 
-Install plugins globally (`-g`) — they're designed to work across all projects
-and silently skip projects that don't have ESLint configured.
-
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins -g
+/plugin install eslint-lsp@darian-agent-plugins
 ```
+
+When the interactive menu appears, select **Install for you (user scope)**
+for a global install. The plugin silently skips projects without ESLint.
 
 ### Design philosophy
 

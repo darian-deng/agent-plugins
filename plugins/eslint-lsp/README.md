@@ -50,13 +50,13 @@ Claude 编辑文件
 
 ### 安装
 
-推荐全局安装（`-g`）。这个插件是跨项目的基础设施——在没有 ESLint
-配置的项目里会自动静默跳过，不会有任何干扰。
-
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins -g
+/plugin install eslint-lsp@darian-agent-plugins
 ```
+
+出现交互菜单后，选择 **Install for you (user scope)** 完成全局安装。
+这个插件是跨项目的基础设施，在没有 ESLint 配置的项目里会自动跳过。
 
 安装完成后，当前及未来所有 Claude Code session 自动获得：
 
@@ -208,13 +208,13 @@ automatically on install. Claude can call it on demand to apply mechanical
 
 ### Installation
 
-Install globally (`-g`). This plugin is cross-project infrastructure — it
-silently skips projects without an ESLint config and never interferes.
-
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins -g
+/plugin install eslint-lsp@darian-agent-plugins
 ```
+
+When the interactive menu appears, select **Install for you (user scope)**
+for a global install. The plugin silently skips projects without ESLint.
 
 After installation, every Claude Code session automatically has:
 
