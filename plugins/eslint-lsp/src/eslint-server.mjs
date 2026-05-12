@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * eslint-lsp: Minimal ESLint Language Server for Claude Code
  *
