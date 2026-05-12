@@ -17,17 +17,22 @@
 
 | 插件 | 功能描述 | Claude Code | Cursor |
 |------|---------|:-----------:|:------:|
-| [eslint-lsp](./plugins/eslint-lsp) | 通过 LSP 实时推送 ESLint 诊断，并捆绑 `@eslint/mcp` 支持 AI 主动调用 autofix | ✅ LSP + MCP | ✅ MCP |
+| [eslint-lsp](./plugins/eslint-lsp) | 纯 ESLint LSP server：实时推送诊断，捆绑 `@eslint/mcp` 支持 AI 主动 autofix。适合不需要 TypeScript 语言智能的场景 | ✅ LSP + MCP | ✅ MCP |
+| [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP 代理 + ESLint 诊断二合一：完整保留 go-to-def / hover / references 等 TypeScript 能力，同时实时推送 ESLint 违规。TypeScript 项目的首选 | ✅ LSP | ✅ — |
 
 ### 安装（Claude Code）
 
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins
+/plugin install eslint-lsp@darian-agent-plugins      # 纯 ESLint
+# 或
+/plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
 ```
 
 出现交互菜单后，选择 **Install for you (user scope)** 完成全局安装。
-这个插件是跨项目的基础设施，在没有 ESLint 配置的项目里会自动跳过。
+插件在没有 ESLint 配置的项目里会自动跳过。
+
+> ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
 
 ### 设计理念
 
@@ -68,17 +73,22 @@ on in their IDEs.
 
 | Plugin | Description | Claude Code | Cursor |
 |--------|-------------|:-----------:|:------:|
-| [eslint-lsp](./plugins/eslint-lsp) | Real-time ESLint diagnostics via LSP, bundled with `@eslint/mcp` for AI-callable autofix | ✅ LSP + MCP | ✅ MCP |
+| [eslint-lsp](./plugins/eslint-lsp) | Standalone ESLint LSP server: real-time push diagnostics, bundled with `@eslint/mcp` for AI-callable autofix. Use when you don't need TypeScript language intelligence | ✅ LSP + MCP | ✅ MCP |
+| [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP proxy + ESLint diagnostics in one server: preserves full TypeScript intelligence (go-to-def, hover, references) while simultaneously pushing ESLint violations. The standard choice for TypeScript projects | ✅ LSP | ✅ — |
 
 ### Installation (Claude Code)
 
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins
+/plugin install eslint-lsp@darian-agent-plugins      # ESLint only
+# or
+/plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
 ```
 
 When the interactive menu appears, select **Install for you (user scope)**
 for a global install. The plugin silently skips projects without ESLint.
+
+> ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` first — both plugins claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
 
 ### Design philosophy
 
