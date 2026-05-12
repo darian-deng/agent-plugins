@@ -1,0 +1,25 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "darian-agent-plugins",
+  "version": "0.1.0",
+  "description": "Agent plugins for Claude Code — real-time ESLint diagnostics via LSP, and more.",
+  "owner": {
+    "name": "Darian Deng",
+    "email": "darian.deng@plaud.ai"
+  },
+  "plugins": [
+    {
+      "name": "eslint-lsp",
+      "source": "./plugins/eslint-lsp",
+      "description": "Real-time ESLint diagnostics for Claude Code via a lightweight LSP server. No vscode-eslint dependency. Supports ESLint v9+ flat config. Bundled with @eslint/mcp for AI-callable autofix.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": ["eslint", "lsp", "typescript", "lint", "diagnostics"],
+      "author": {
+        "name": "Darian Deng",
+        "email": "darian.deng@plaud.ai"
+      },
+      "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/eslint-lsp"
+    }
+  ]
+}
