@@ -1,7 +1,7 @@
 {
   "eslint": {
-    "command": "${CLAUDE_PLUGIN_DATA}/eslint-server.mjs",
-    "args": ["--stdio"],
+    "command": "/bin/sh",
+    "args": ["-c", "exec node \"$HOME/.claude/plugins/data/eslint-lsp-darian-agent-plugins/eslint-server.mjs\" --stdio"],
     "transport": "stdio",
     "extensionToLanguage": {
       ".ts":     "typescript",
