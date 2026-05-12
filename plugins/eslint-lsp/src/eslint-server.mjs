@@ -107,9 +107,12 @@ function getESLint(pkgRoot) {
     return null
   }
 
-  // v9: disable type-aware parsing to avoid scopeManager.addGlobals errors.
-  // v10+: use full config (scopeManager API is compatible).
-  const overrides = major < 10
+  // ESLint v10 added a required addGlobals() method to its scope manager API.
+  // Older @typescript-eslint/parser versions (< 8.x) don't implement it, causing
+  // a crash in SourceCode.finalize(). Setting project:false bypasses the TypeScript
+  // scope manager on those installs so non-type-aware rules still run correctly.
+  // ESLint v9 never had this API, so no override is needed there.
+  const overrides = major >= 10
     ? [{ languageOptions: { parserOptions: { project: false } } }]
     : []
 
@@ -176,7 +179,7 @@ async function runLint(uri, text) {
       source: 'eslint-lsp',
       code: 'eslint-lsp/config-error',
       message: isScopeError
-        ? `eslint-lsp: ESLint v${major} scope manager error — ${msg}. Upgrade to ESLint v10 for full compatibility.`
+        ? `eslint-lsp: ESLint v${major} scope manager error — ${msg}. Upgrade @typescript-eslint to v8+ for ESLint v10 compatibility.`
         : `eslint-lsp: ESLint failed to lint this file — ${msg}`,
     }])
     return

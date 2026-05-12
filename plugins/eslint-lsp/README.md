@@ -96,13 +96,15 @@ Server 通过 `createRequire(pkgRoot + '/package.json')` 从**你的项目**
 （`eslint: "^10.3.0"`），它运行时使用自带的 ESLint v10，而非你项目的
 ESLint。因此：
 
-- **项目使用 ESLint v10**：LSP 实时诊断 + MCP 机械修复全部可用 ✅
-- **项目使用 ESLint v9**：LSP 实时诊断完整可用 ✅；`@eslint/mcp`
-  因插件版本冲突无法正常运行 ❌
+- **ESLint v10 + `@typescript-eslint` ≥ 8.x**：LSP 诊断 + MCP 修复全部可用 ✅
+- **ESLint v10 + `@typescript-eslint` < 8.x**：LSP server 自动禁用类型感知规则
+  （`parserOptions.project: false`）以绕过 `scopeManager.addGlobals` 兼容性问题，
+  非类型感知规则（绝大多数规则）正常运行 ✅；MCP 正常 ✅
+- **ESLint v9**：LSP 诊断完整可用 ✅；`@eslint/mcp` 因其自带 ESLint v10
+  与项目插件版本冲突无法正常运行 ❌
 
-ESLint v9 项目的实际影响有限——Claude 通过 LSP 仍然能实时看到错误，
-并凭借对规则语义的理解直接修复。`@eslint/mcp` 的价值集中在
-`prefer-const`、格式修正等机械规则上，对架构类规则帮助不大。
+`@eslint/mcp` 的价值集中在 `prefer-const`、格式修正等机械规则上；对
+架构类规则，Claude 从 LSP 错误信息就能直接理解并修复，MCP 帮助有限。
 
 #### Config 热更新
 
@@ -275,15 +277,18 @@ code manually. Detection and remediation are complementary.
 ESLint v10 as a hard dependency (`eslint: "^10.3.0"`). It runs its own
 bundled ESLint v10, not your project's version. This means:
 
-- **ESLint v10 project**: real-time LSP diagnostics + MCP mechanical autofix
-  both work fully ✅
-- **ESLint v9 project**: real-time LSP diagnostics work fully ✅;
-  `@eslint/mcp` fails due to plugin version conflicts ❌
+- **ESLint v10 + `@typescript-eslint` ≥ 8.x**: full LSP diagnostics + MCP
+  autofix ✅
+- **ESLint v10 + `@typescript-eslint` < 8.x**: the LSP server automatically
+  disables type-aware rules (`parserOptions.project: false`) to work around the
+  `scopeManager.addGlobals` incompatibility. Non-type-aware rules (the
+  majority) run correctly ✅; MCP works ✅
+- **ESLint v9**: full LSP diagnostics ✅; `@eslint/mcp` fails because its
+  bundled ESLint v10 conflicts with the project's v9-era plugins ❌
 
-The practical impact on ESLint v9 projects is limited — Claude still sees
-every error in real time via LSP and can fix them using its understanding of
-the rule semantics. `@eslint/mcp` primarily helps with mechanical rules like
-`prefer-const` or formatting; for architectural rules it adds little value.
+`@eslint/mcp` primarily adds value for mechanical rules like `prefer-const`
+or formatting. For architectural rules, Claude can understand and fix errors
+directly from the LSP diagnostic message without needing MCP.
 
 #### Config hot-reload
 
