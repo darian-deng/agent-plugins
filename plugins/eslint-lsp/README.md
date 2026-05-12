@@ -47,6 +47,7 @@ Claude 编辑文件
 - Node.js **≥ 18**
 - 项目中已安装 ESLint **v9+**，且使用 flat config（`eslint.config.*`）
 - `eslint` 包在项目的 `node_modules` 中（server 使用你项目自己的 ESLint）
+- 如需启用 `@eslint/mcp` 的机械修复能力，项目须升级到 ESLint **v10**（见下方说明）
 
 ### 安装
 
@@ -82,10 +83,26 @@ Server 通过 `createRequire(pkgRoot + '/package.json')` 从**你的项目**
 
 #### `@eslint/mcp`（MCP server）
 
-通过 `.mcp.json` 自动注册。两者分工明确：
+通过 `.mcp.json` 自动注册，两者分工明确：
 
-- **LSP server**：被动感知（push-based），每次文件变更自动触发
-- **`@eslint/mcp`**：主动修复（pull-based），Claude 按需调用
+- **LSP server**：被动感知（push-based），每次文件变更自动触发，是本插件的核心能力
+- **`@eslint/mcp`**：主动修复（pull-based），Claude 按需调用执行 `eslint --fix`
+
+**为什么捆绑 `@eslint/mcp`？** LSP server 告诉 Claude"哪里有问题"，
+`@eslint/mcp` 让 Claude 能直接触发机械性修复，而不必手动重写代码。
+两者是检测与修复的互补关系。
+
+**`@eslint/mcp` 的版本要求**：`@eslint/mcp` 将 ESLint v10 作为硬依赖
+（`eslint: "^10.3.0"`），它运行时使用自带的 ESLint v10，而非你项目的
+ESLint。因此：
+
+- **项目使用 ESLint v10**：LSP 实时诊断 + MCP 机械修复全部可用 ✅
+- **项目使用 ESLint v9**：LSP 实时诊断完整可用 ✅；`@eslint/mcp`
+  因插件版本冲突无法正常运行 ❌
+
+ESLint v9 项目的实际影响有限——Claude 通过 LSP 仍然能实时看到错误，
+并凭借对规则语义的理解直接修复。`@eslint/mcp` 的价值集中在
+`prefer-const`、格式修正等机械规则上，对架构类规则帮助不大。
 
 #### Config 热更新
 
@@ -205,6 +222,8 @@ automatically on install. Claude can call it on demand to apply mechanical
 - ESLint **v9+** with flat config (`eslint.config.*`) in your project
 - The `eslint` package must be in your project's `node_modules` (the server
   loads your project's ESLint, not a bundled copy)
+- To use `@eslint/mcp` mechanical autofix, your project must be on ESLint
+  **v10** (see details below)
 
 ### Installation
 
@@ -244,9 +263,27 @@ Registered automatically via `.mcp.json`. The two components have distinct
 responsibilities:
 
 - **LSP server**: passive detection (push-based), fires automatically after
-  each file change
+  each file change — this is the core feature of the plugin
 - **`@eslint/mcp`**: active remediation (pull-based), Claude calls it when
-  it wants to apply a fix
+  it wants to apply a mechanical `eslint --fix`
+
+**Why bundle `@eslint/mcp`?** The LSP server tells Claude _where_ errors
+are. `@eslint/mcp` lets Claude trigger mechanical fixes without rewriting
+code manually. Detection and remediation are complementary.
+
+**ESLint version requirement for `@eslint/mcp`**: `@eslint/mcp` ships with
+ESLint v10 as a hard dependency (`eslint: "^10.3.0"`). It runs its own
+bundled ESLint v10, not your project's version. This means:
+
+- **ESLint v10 project**: real-time LSP diagnostics + MCP mechanical autofix
+  both work fully ✅
+- **ESLint v9 project**: real-time LSP diagnostics work fully ✅;
+  `@eslint/mcp` fails due to plugin version conflicts ❌
+
+The practical impact on ESLint v9 projects is limited — Claude still sees
+every error in real time via LSP and can fix them using its understanding of
+the rule semantics. `@eslint/mcp` primarily helps with mechanical rules like
+`prefer-const` or formatting; for architectural rules it adds little value.
 
 #### Config hot-reload
 
