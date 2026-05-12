@@ -193,7 +193,7 @@ const uriGeneration = new Map() // uri → generation counter; incremented on di
 
 function scheduleLint(uri, text) {
   clearTimeout(lintDebounce.get(uri))
-  lintDebounce.set(uri, setTimeout(() => runLint(uri, text), 300))
+  lintDebounce.set(uri, setTimeout(() => runLint(uri, text), 0))
 }
 
 async function runLint(uri, text) {

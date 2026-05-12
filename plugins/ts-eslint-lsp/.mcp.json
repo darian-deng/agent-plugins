@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "eslint-ide": {
+      "type": "sse-ide",
+      "url": "http://127.0.0.1:7475/sse"
+    }
+  }
+}
