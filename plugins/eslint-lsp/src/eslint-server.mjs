@@ -10,6 +10,10 @@
  * - Resolves ESLint from each file's nearest package root (supports monorepos).
  * - 300ms debounce prevents redundant lints during rapid edits.
  * - Watches flat config files and clears ESLint cache on change.
+ * - On ESLint v9: disables type-aware parsing (parserOptions.project: false) to
+ *   avoid the scopeManager.addGlobals incompatibility with @typescript-eslint.
+ *   Non-type-aware rules (the majority) still run correctly.
+ * - On ESLint v10+: full config, all rules active.
  */
 
 import { createRequire } from 'node:module'
@@ -34,7 +38,7 @@ process.stdin.on('data', (chunk) => {
       _buf = _buf.slice(sep + 4)
     }
     if (_buf.length < _len) break
-    try { dispatch(JSON.parse(_buf.slice(0, _len))) } catch { /* malformed JSON */ }
+    try { dispatch(JSON.parse(_buf.slice(0, _len))) } catch { /* malformed JSON — ignore and continue */ }
     _buf = _buf.slice(_len)
     _len = -1
   }
@@ -76,7 +80,7 @@ function findPkgRoot(filePath) {
 
 // ─── ESLint instance cache (per package root) ─────────────────────────────────
 
-/** @type {Map<string, import('eslint').ESLint>} */
+/** @type {Map<string, { instance: import('eslint').ESLint, major: number }>} */
 const eslintCache = new Map()
 /** @type {Map<string, import('node:fs').FSWatcher[]>} */
 const configWatchers = new Map()
@@ -84,25 +88,35 @@ const configWatchers = new Map()
 /**
  * Load or return cached ESLint instance for a package root.
  * Uses the PROJECT's ESLint, not any bundled version.
+ *
+ * For ESLint v9: applies parserOptions.project=false override to avoid the
+ * scopeManager.addGlobals incompatibility introduced by @typescript-eslint
+ * when type-aware parsing is enabled. Non-type-aware rules are unaffected.
  */
 function getESLint(pkgRoot) {
   if (eslintCache.has(pkgRoot)) return eslintCache.get(pkgRoot)
 
   // Resolve `eslint` from the user's project, not from the plugin directory.
-  // createRequire(file) creates a require() that resolves relative to `file`.
   const req = createRequire(resolve(pkgRoot, 'package.json'))
-  let ESLint
+  let ESLint, major
   try {
     ;({ ESLint } = req('eslint'))
+    major = parseInt(req('eslint/package.json').version, 10)
   } catch {
     // ESLint not installed in this package — skip silently.
     return null
   }
 
-  const instance = new ESLint({ cwd: pkgRoot })
-  eslintCache.set(pkgRoot, instance)
+  // v9: disable type-aware parsing to avoid scopeManager.addGlobals errors.
+  // v10+: use full config (scopeManager API is compatible).
+  const overrides = major < 10
+    ? [{ languageOptions: { parserOptions: { project: false } } }]
+    : []
+
+  const instance = new ESLint({ cwd: pkgRoot, overrideConfig: overrides })
+  eslintCache.set(pkgRoot, { instance, major })
   watchConfigs(pkgRoot)
-  return instance
+  return { instance, major }
 }
 
 /**
@@ -142,15 +156,29 @@ async function runLint(uri, text) {
   const pkgRoot = findPkgRoot(filePath)
   if (!pkgRoot) return
 
-  const eslint = getESLint(pkgRoot)
-  if (!eslint) return
+  const cached = getESLint(pkgRoot)
+  if (!cached) return
+
+  const { instance: eslint, major } = cached
 
   let results
   try {
     results = await eslint.lintText(text, { filePath })
-  } catch {
-    // Config error or parse error — clear diagnostics and move on.
-    publishDiagnostics(uri, [])
+  } catch (err) {
+    // Surface the failure as a visible warning diagnostic instead of silently
+    // clearing diagnostics. This ensures Claude (and the developer) can see
+    // that ESLint failed rather than incorrectly assuming the file is clean.
+    const msg = err?.message ?? String(err)
+    const isScopeError = /addGlobals|scopeManager/i.test(msg)
+    publishDiagnostics(uri, [{
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      severity: 2, // Warning
+      source: 'eslint-lsp',
+      code: 'eslint-lsp/config-error',
+      message: isScopeError
+        ? `eslint-lsp: ESLint v${major} scope manager error — ${msg}. Upgrade to ESLint v10 for full compatibility.`
+        : `eslint-lsp: ESLint failed to lint this file — ${msg}`,
+    }])
     return
   }
 
@@ -182,7 +210,7 @@ function dispatch(msg) {
           capabilities: {
             textDocumentSync: 1, // TextDocumentSyncKind.Full
           },
-          serverInfo: { name: 'eslint-lsp', version: '0.1.0' },
+          serverInfo: { name: 'eslint-lsp', version: '0.2.0' },
         },
       })
       break

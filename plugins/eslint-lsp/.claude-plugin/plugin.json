@@ -1,6 +1,6 @@
 {
   "name": "eslint-lsp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Real-time ESLint diagnostics for Claude Code via a lightweight LSP server. No vscode-eslint dependency. Supports ESLint v9+ flat config. Bundled with @eslint/mcp for AI-callable autofix.",
   "author": {
     "name": "Darian Deng",
