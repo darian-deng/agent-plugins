@@ -1,7 +1,7 @@
 {
   "ts-eslint": {
     "command": "/bin/sh",
-    "args": ["-c", "exec node \"$HOME/.claude/plugins/data/ts-eslint-lsp-darian-agent-plugins/ts-eslint-proxy.mjs\" --stdio"],
+    "args": ["-c", "exec node \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" --stdio"],
     "transport": "stdio",
     "extensionToLanguage": {
       ".ts":     "typescript",
