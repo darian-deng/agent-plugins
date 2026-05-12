@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

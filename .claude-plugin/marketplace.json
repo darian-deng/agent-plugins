@@ -9,6 +9,19 @@
   },
   "plugins": [
     {
+      "name": "ts-eslint-lsp",
+      "source": "./plugins/ts-eslint-lsp",
+      "description": "TypeScript LSP proxy with unified real-time ESLint diagnostics. Preserves all TypeScript intelligence while adding ESLint push diagnostics into Claude's context.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": ["typescript", "eslint", "lsp", "diagnostics", "proxy", "ai-coding"],
+      "author": {
+        "name": "Darian Deng",
+        "email": "darian.deng@plaud.ai"
+      },
+      "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/ts-eslint-lsp"
+    },
+    {
       "name": "eslint-lsp",
       "source": "./plugins/eslint-lsp",
       "description": "Real-time ESLint diagnostics for Claude Code via a lightweight LSP server. No vscode-eslint dependency. Supports ESLint v9+ flat config. Bundled with @eslint/mcp for AI-callable autofix.",
