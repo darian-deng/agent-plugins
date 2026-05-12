@@ -1,14 +1,16 @@
 {
-  "SessionStart": [
-    {
-      "matcher": "",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/eslint-server.mjs\" \"${CLAUDE_PLUGIN_DATA}/eslint-server.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/eslint-server.mjs\"",
-          "timeout": 10
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/eslint-server.mjs\" \"${CLAUDE_PLUGIN_DATA}/eslint-server.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/eslint-server.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }
