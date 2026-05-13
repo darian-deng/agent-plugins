@@ -135,7 +135,7 @@ async function getDiagnostics(uri) {
 function writeLock() {
   try { mkdirSync(LOCK_DIR, { recursive: true }) } catch { /* exists */ }
   const lock = {
-    workspaceFolders: [],
+    workspaceFolders: [homedir()],
     pid: process.pid,
     ideName: 'eslint-aggregator',
     transport: 'sse',
@@ -245,6 +245,8 @@ async function handleRpcCall(msg, sessionId, res) {
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
+  const ts = new Date().toISOString()
+  process.stderr.write(`[${ts}] ${req.method} ${url.pathname} auth=${req.headers['authorization']?.slice(0,20) ?? 'none'}\n`)
 
   if (req.method === 'GET' && url.pathname === '/sse') {
     const sessionId = randomBytes(8).toString('hex')
