@@ -253,27 +253,18 @@ async function runLint(uri, text) {
 
 // ─── ESLint warm-up ───────────────────────────────────────────────────────────
 
-async function warmUpEslint(projectDir) {
-  const dir = resolve(projectDir)
-  const pkgRoot = findPkgRoot(join(dir, '_'))  // find config from project root
+let warmedUp = false
+
+async function warmUpEslint(filePath) {
+  if (warmedUp) return
+  warmedUp = true
+  const pkgRoot = findPkgRoot(filePath)
   if (!pkgRoot) return
   const cached = getESLint(pkgRoot)
   if (!cached) return
-  // find first .ts file in src/ or the project root to lint
-  const { readdir } = await import('node:fs/promises')
-  const candidates = ['src', '.']
-  for (const sub of candidates) {
-    const target = join(dir, sub)
-    let entries
-    try { entries = await readdir(target, { recursive: true }) } catch { continue }
-    const first = entries.find(e => /\.tsx?$/.test(e) && !e.includes('node_modules'))
-    if (!first) continue
-    const filePath = join(target, first)
-    const text = await readFile(filePath, 'utf8').catch(() => null)
-    if (!text) continue
-    await cached.instance.lintText(text, { filePath }).catch(() => {})
-    return
-  }
+  const text = await readFile(filePath, 'utf8').catch(() => null)
+  if (!text) return
+  await cached.instance.lintText(text, { filePath }).catch(() => {})
 }
 
 // ─── Client message dispatcher ────────────────────────────────────────────────
@@ -302,7 +293,6 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
         serverInfo: { name: 'ts-eslint-proxy', version: '0.1.0' },
       }})
     }
-    warmUpEslint(projectDir).catch(() => {})
     return
   }
 
@@ -317,7 +307,10 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'textDocument/didOpen') {
     sendToTsServer(msg)
-    scheduleLint(msg.params.textDocument.uri, msg.params.textDocument.text)
+    const { uri, text } = msg.params.textDocument
+    const filePath = uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri
+    warmUpEslint(filePath).catch(() => {})
+    scheduleLint(uri, text)
     return
   }
 
