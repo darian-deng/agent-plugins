@@ -2,6 +2,7 @@
 
 import { createRequire } from 'node:module'
 import { existsSync, watch } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -250,6 +251,31 @@ async function runLint(uri, text) {
   mergeDiagnostics(uri)
 }
 
+// ─── ESLint warm-up ───────────────────────────────────────────────────────────
+
+async function warmUpEslint(projectDir) {
+  const dir = resolve(projectDir)
+  const pkgRoot = findPkgRoot(join(dir, '_'))  // find config from project root
+  if (!pkgRoot) return
+  const cached = getESLint(pkgRoot)
+  if (!cached) return
+  // find first .ts file in src/ or the project root to lint
+  const { readdir } = await import('node:fs/promises')
+  const candidates = ['src', '.']
+  for (const sub of candidates) {
+    const target = join(dir, sub)
+    let entries
+    try { entries = await readdir(target, { recursive: true }) } catch { continue }
+    const first = entries.find(e => /\.tsx?$/.test(e) && !e.includes('node_modules'))
+    if (!first) continue
+    const filePath = join(target, first)
+    const text = await readFile(filePath, 'utf8').catch(() => null)
+    if (!text) continue
+    await cached.instance.lintText(text, { filePath }).catch(() => {})
+    return
+  }
+}
+
 // ─── Client message dispatcher ────────────────────────────────────────────────
 
 let initializePromise = null // guard: delay 'initialized' until 'initialize' completes
@@ -259,6 +285,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
   const { method, id } = msg
 
   if (method === 'initialize') {
+    const projectDir = msg.params?.rootUri?.replace(/^file:\/\//, '') ?? process.cwd()
     if (tsServerAlive) {
       initializePromise = requestTsServer(msg).then(tsResponse => {
         sendToClient(tsResponse)
@@ -275,6 +302,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
         serverInfo: { name: 'ts-eslint-proxy', version: '0.1.0' },
       }})
     }
+    warmUpEslint(projectDir).catch(() => {})
     return
   }
 
