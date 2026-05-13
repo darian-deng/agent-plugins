@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && { kill $(lsof -ti :7475) 2>/dev/null; true; } && ESLINT_IDE_PORT=7475 node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-ide-server.mjs\" >> \"${CLAUDE_PLUGIN_DATA}/eslint-ide-server.log\" 2>&1 &",
+            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\"",
             "timeout": 10
           }
         ]
