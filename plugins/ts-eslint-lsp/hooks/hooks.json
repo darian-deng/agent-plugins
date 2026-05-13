@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && if ! lsof -ti :7475 > /dev/null 2>&1; then mkdir -p \"${HOME}/.claude/logs\" && ESLINT_IDE_PORT=7475 node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-aggregator.mjs\" >> \"${HOME}/.claude/logs/eslint-aggregator.log\" 2>&1 & fi",
+            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && if [ ! -f \"${HOME}/.claude/ide/7475.lock\" ]; then mkdir -p \"${HOME}/.claude/logs\" && ESLINT_IDE_PORT=7475 node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-aggregator.mjs\" >> \"${HOME}/.claude/logs/eslint-aggregator.log\" 2>&1 & fi",
             "timeout": 10
           }
         ]
