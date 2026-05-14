@@ -126,7 +126,16 @@ async function main() {
   // Slow path: direct ESLint (~1s)
   if (output === null) output = await lintDirect(filePath)
 
-  if (output) process.stdout.write(output)
+  if (!output) return  // no errors
+
+  // PostToolUse requires JSON with additionalContext for Claude to see it.
+  // Plain text stdout goes to debug log only.
+  // decision:"block" prevents Claude from finishing until errors are fixed.
+  const json = JSON.stringify({
+    decision: 'block',
+    reason: output.trimEnd(),
+  })
+  process.stdout.write(json)
 }
 
 main().catch(() => {})
