@@ -17,11 +17,16 @@
 
 **AI 写代码时最隐蔽的质量盲区**：Claude 不知道自己违反了 ESLint 规则。
 
-每一次 AI coding session 都在重复同一个循环：
+传统 IDE 里，lint 错误实时飘红——代码写出来就能看到，开发者当场修，不存在滞后。
+
+AI coding 的问题不完全是"忘了跑 lint"，而是**每一次修改都带来新的不确定性**：
 
 ```
-Claude 写代码 → 你跑 pnpm lint → 你把错误粘回去 → Claude 修复 → 重复
+Claude 改动代码 → 跑 lint → 发现错误 → Claude 修复 → 修复有没有改坏其他地方？→ 重新检查
 ```
+
+lint 是即时的，但每次修复本身都可能引入新问题，迫使你反复验证。
+AI 写的代码量大、改动集中，这个循环比手写代码时代价高得多。
 
 Claude Code 有 LSP client 能力。如果 ESLint 作为 LSP server 运行，每次 AI
 修改文件后，ESLint 会通过 `textDocument/publishDiagnostics` 协议推送违规信息——
@@ -163,11 +168,16 @@ A single LSP server that proxies `typescript-language-server` for full TypeScrip
 
 **The hidden quality blind spot in AI coding**: Claude doesn't know it's violating ESLint rules.
 
-Every AI coding session repeats the same loop:
+In a traditional IDE, lint errors appear in real time — you see them as you type and fix them immediately, with no lag.
+
+The problem with AI coding isn't just "forgetting to run lint." It's that **every change introduces new uncertainty**:
 
 ```
-Claude writes code → you run pnpm lint → you paste errors back → Claude fixes → repeat
+Claude edits code → run lint → errors found → Claude fixes → did the fix break something else? → check again
 ```
+
+Lint runs are instant, but each fix can introduce new problems, forcing another round of verification.
+Because AI-generated changes are large and concentrated, this cycle is far more costly than in traditional development.
 
 Claude Code has a built-in LSP client. If ESLint runs as an LSP server, it pushes violations via `textDocument/publishDiagnostics` after every file edit — Claude sees the errors in the next turn and can fix them without manual copy-paste.
 
