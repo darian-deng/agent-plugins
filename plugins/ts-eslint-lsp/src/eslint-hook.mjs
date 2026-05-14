@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// PostToolUse hook: lint the written file, output errors to stdout for same-turn fix.
-// Fast path (~50ms): delegates to running aggregator's /lint endpoint.
-// Slow path (~1s): spawns ESLint directly.
+// PostToolUse hook: Claude Code passes JSON via stdin with tool_input/tool_response.
+// Runs ESLint on the written file and outputs errors to stdout for same-turn fix.
 
 import { createRequire } from 'node:module'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -59,8 +58,7 @@ async function lintViaAggregator(filePath) {
   if (!port) return null
   try {
     const uri = 'file://' + filePath
-    const result = await httpGet(`http://127.0.0.1:${port}/lint?uri=${encodeURIComponent(uri)}`)
-    return result  // '' means no errors (204), string means errors
+    return await httpGet(`http://127.0.0.1:${port}/lint?uri=${encodeURIComponent(uri)}`)
   } catch {
     return null
   }
@@ -99,25 +97,33 @@ async function lintDirect(filePath) {
   }
 }
 
+async function readStdin() {
+  return new Promise((resolve) => {
+    let data = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', chunk => { data += chunk })
+    process.stdin.on('end', () => resolve(data))
+    process.stdin.on('error', () => resolve(''))
+  })
+}
+
 async function main() {
-  const toolResultFile = process.argv[2]
-  if (!toolResultFile) return
+  const raw = await readStdin()
+  if (!raw.trim()) return
 
-  let toolResult
-  try {
-    const raw = await readFile(toolResultFile, 'utf8')
-    toolResult = JSON.parse(raw)
-  } catch { return }
+  let payload
+  try { payload = JSON.parse(raw) } catch { return }
 
-  const filePath = toolResult?.tool_input?.file_path
+  // Claude Code sends: {session_id, tool_name, tool_input, tool_response}
+  const filePath = payload?.tool_input?.file_path
   if (!filePath) return
   if (!/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(filePath)) return
   if (!existsSync(filePath)) return
 
-  // Fast path: aggregator (warm ESLint ~50ms)
+  // Fast path: aggregator (~50ms warm)
   let output = await lintViaAggregator(filePath)
 
-  // Slow path: direct ESLint (~1s cold)
+  // Slow path: direct ESLint (~1s)
   if (output === null) output = await lintDirect(filePath)
 
   if (output) process.stdout.write(output)
