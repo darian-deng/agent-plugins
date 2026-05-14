@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// PostToolUse hook: lint the written file and output errors so Claude fixes in the same turn.
-// Fast path: delegates to running aggregator (warm ESLint, ~50ms).
-// Slow path: spawns ESLint directly if aggregator is not running (~500-2000ms).
+// PostToolUse hook: lint the written file, output errors to stdout for same-turn fix.
+// Fast path (~50ms): delegates to running aggregator's /lint endpoint.
+// Slow path (~1s): spawns ESLint directly.
 
 import { createRequire } from 'node:module'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 import { get } from 'node:http'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 
 const FLAT_CONFIGS = [
   'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
@@ -29,18 +28,13 @@ function findPkgRoot(filePath) {
 }
 
 function getAggregatorPort() {
-  const lockDir = join(homedir(), '.claude', 'ide')
-  // Find any .lock file matching our aggregator
   try {
-    const { readdirSync, readFileSync } = await import('node:fs')
-  } catch {}
-  try {
-    const fs = await import('node:fs')
-    const files = fs.readdirSync(lockDir).filter(f => f.endsWith('.lock'))
+    const lockDir = join(homedir(), '.claude', 'ide')
+    const files = readdirSync(lockDir).filter(f => f.endsWith('.lock'))
     for (const f of files) {
       try {
-        const lock = JSON.parse(fs.readFileSync(join(lockDir, f), 'utf8'))
-        if (lock.ideName === 'eslint-aggregator') return lock.port ?? parseInt(f)
+        const lock = JSON.parse(readFileSync(join(lockDir, f), 'utf8'))
+        if (lock.ideName === 'eslint-aggregator') return parseInt(f)
       } catch {}
     }
   } catch {}
@@ -49,33 +43,27 @@ function getAggregatorPort() {
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    get(url, (res) => {
+    const req = get(url, (res) => {
       if (res.statusCode === 204) { resolve(''); return }
       let data = ''
       res.on('data', chunk => { data += chunk })
       res.on('end', () => resolve(data))
-    }).on('error', reject).setTimeout(3000, function() { this.destroy(new Error('timeout')) })
+    })
+    req.on('error', reject)
+    req.setTimeout(3000, () => { req.destroy(new Error('timeout')) })
   })
 }
 
 async function lintViaAggregator(filePath) {
-  // Read port from lockfile
+  const port = getAggregatorPort()
+  if (!port) return null
   try {
-    const { readdirSync, readFileSync } = (await import('node:fs'))
-    const lockDir = join(homedir(), '.claude', 'ide')
-    const files = readdirSync(lockDir).filter(f => f.endsWith('.lock'))
-    for (const f of files) {
-      try {
-        const lock = JSON.parse(readFileSync(join(lockDir, f), 'utf8'))
-        if (lock.ideName !== 'eslint-aggregator') continue
-        const port = lock.port ?? parseInt(f)
-        const uri = `file://${encodeURIComponent(filePath).replace(/%2F/g, '/')}`
-        const result = await httpGet(`http://127.0.0.1:${port}/lint?uri=${encodeURIComponent('file://' + filePath)}`)
-        return result
-      } catch {}
-    }
-  } catch {}
-  return null
+    const uri = 'file://' + filePath
+    const result = await httpGet(`http://127.0.0.1:${port}/lint?uri=${encodeURIComponent(uri)}`)
+    return result  // '' means no errors (204), string means errors
+  } catch {
+    return null
+  }
 }
 
 async function lintDirect(filePath) {
@@ -113,27 +101,26 @@ async function lintDirect(filePath) {
 
 async function main() {
   const toolResultFile = process.argv[2]
-  if (!toolResultFile) process.exit(0)
+  if (!toolResultFile) return
 
   let toolResult
   try {
     const raw = await readFile(toolResultFile, 'utf8')
     toolResult = JSON.parse(raw)
-  } catch { process.exit(0) }
+  } catch { return }
 
   const filePath = toolResult?.tool_input?.file_path
-  if (!filePath) process.exit(0)
-  if (!/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(filePath)) process.exit(0)
-  if (!existsSync(filePath)) process.exit(0)
+  if (!filePath) return
+  if (!/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(filePath)) return
+  if (!existsSync(filePath)) return
 
-  // Fast path: aggregator (warm ESLint)
+  // Fast path: aggregator (warm ESLint ~50ms)
   let output = await lintViaAggregator(filePath)
 
-  // Slow path: direct ESLint
+  // Slow path: direct ESLint (~1s cold)
   if (output === null) output = await lintDirect(filePath)
 
   if (output) process.stdout.write(output)
-  process.exit(0)
 }
 
-main().catch(() => process.exit(0))
+main().catch(() => {})
