@@ -2,7 +2,7 @@
 
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
-import { existsSync, watch, writeFileSync, unlinkSync, mkdirSync } from 'node:fs'
+import { existsSync, watch, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { homedir } from 'node:os'
@@ -152,6 +152,9 @@ function removeLock() {
 process.on('exit', removeLock)
 process.on('SIGTERM', () => { removeLock(); process.exit(0) })
 process.on('SIGINT', () => { removeLock(); process.exit(0) })
+// Prevent ESLint plugin async errors from crashing the aggregator process
+process.on('uncaughtException', (err) => process.stderr.write(`eslint-aggregator: uncaught — ${err.message}\n`))
+process.on('unhandledRejection', (reason) => process.stderr.write(`eslint-aggregator: unhandledRejection — ${reason}\n`))
 
 const sseClients = new Map()
 
@@ -337,23 +340,32 @@ server.listen(PORT, '127.0.0.1', () => {
   writeLock()
   process.stderr.write(`eslint-aggregator: listening on port ${PORT}\n`)
 
+  // Scan up to 3 levels deep for eslint.config.* — handles monorepos where the
+  // config lives in a sub-package (e.g. apps/plaud-desktop/) rather than the root.
   const pkgRoot = findPkgRoot(resolve(PROJECT_ROOT, 'index.ts'))
     ?? findPkgRoot(resolve(PROJECT_ROOT, 'src', 'index.ts'))
     ?? (() => {
-      for (const name of FLAT_CONFIGS) {
-        if (existsSync(resolve(PROJECT_ROOT, name))) return PROJECT_ROOT
+      const scan = (dir, depth) => {
+        if (depth === 0) return null
+        for (const name of FLAT_CONFIGS) {
+          if (existsSync(`${dir}/${name}`)) return dir
+        }
+        try {
+          for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue
+            const found = scan(`${dir}/${e.name}`, depth - 1)
+            if (found) return found
+          }
+        } catch {}
+        return null
       }
-      return null
+      return scan(PROJECT_ROOT, 3)
     })()
 
   if (pkgRoot) {
-    const cached = getESLint(pkgRoot)
-    if (cached) {
-      // Run lintText on a tiny dummy file to fully initialize all plugins.
-      // Without this, the first real /lint call takes ~5s loading plugin rules.
-      cached.instance.lintText('const x = 1\n', { filePath: resolve(pkgRoot, '_warmup_.ts') })
-        .catch(() => {})
-        .then(() => process.stderr.write(`eslint-aggregator: prewarmed ESLint for ${pkgRoot}\n`))
-    }
+    // Create and cache the ESLint instance eagerly so the first /lint call skips instance
+    // creation (~100ms). Rule loading still happens on the first lintText call (~4s).
+    getESLint(pkgRoot)
+    process.stderr.write(`eslint-aggregator: prewarmed ESLint instance for ${pkgRoot}\n`)
   }
 })
