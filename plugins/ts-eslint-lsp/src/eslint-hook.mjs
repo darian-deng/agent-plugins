@@ -33,7 +33,12 @@ function getAggregatorPort() {
     for (const f of files) {
       try {
         const lock = JSON.parse(readFileSync(join(lockDir, f), 'utf8'))
-        if (lock.ideName === 'eslint-aggregator') return parseInt(f)
+        if (lock.ideName !== 'eslint-aggregator') continue
+        // Verify process is alive before waiting 10s on a dead socket
+        if (lock.pid) {
+          try { process.kill(lock.pid, 0) } catch { continue }
+        }
+        return parseInt(f)
       } catch {}
     }
   } catch {}

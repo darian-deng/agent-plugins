@@ -18,7 +18,7 @@ function makeFrameParser(onMessage) {
         const sep = buf.indexOf('\r\n\r\n')
         if (sep === -1) break
         const m = buf.slice(0, sep).match(/Content-Length:\s*(\d+)/i)
-        if (!m) break
+        if (!m) { buf = buf.slice(sep + 4); continue } // skip unrecognised header block
         len = +m[1]
         buf = buf.slice(sep + 4)
       }
@@ -194,7 +194,7 @@ const uriGeneration = new Map() // uri → generation counter; incremented on di
 
 function scheduleLint(uri, text) {
   clearTimeout(lintDebounce.get(uri))
-  lintDebounce.set(uri, setTimeout(() => runLint(uri, text), 0))
+  lintDebounce.set(uri, setTimeout(() => runLint(uri, text ?? '').catch(() => {}), 0))
 }
 
 async function runLint(uri, text) {
@@ -298,7 +298,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'initialized') {
     if (initializePromise) {
-      initializePromise.then(() => sendToTsServer(msg))
+      initializePromise.then(() => sendToTsServer(msg)).catch(() => sendToTsServer(msg))
     } else {
       sendToTsServer(msg)
     }
@@ -316,6 +316,8 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'textDocument/didChange') {
     sendToTsServer(msg)
+    // contentChanges[].text is the full document when textDocumentSync:1 (full).
+    // We negotiate sync:1 in our initialize response, so .at(-1).text is always full content.
     const text = msg.params.contentChanges.at(-1)?.text ?? ''
     scheduleLint(msg.params.textDocument.uri, text)
     return
