@@ -245,9 +245,6 @@ async function handleRpcCall(msg, sessionId, res) {
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
-  const ts = new Date().toISOString()
-  process.stderr.write(`[${ts}] ${req.method} ${url.pathname} auth=${req.headers['authorization']?.slice(0,20) ?? 'none'}\n`)
-
   if (req.method === 'GET' && url.pathname === '/sse') {
     const sessionId = randomBytes(8).toString('hex')
 
@@ -350,7 +347,13 @@ server.listen(PORT, '127.0.0.1', () => {
     })()
 
   if (pkgRoot) {
-    getESLint(pkgRoot)
-    process.stderr.write(`eslint-aggregator: prewarmed ESLint for ${pkgRoot}\n`)
+    const cached = getESLint(pkgRoot)
+    if (cached) {
+      // Run lintText on a tiny dummy file to fully initialize all plugins.
+      // Without this, the first real /lint call takes ~5s loading plugin rules.
+      cached.instance.lintText('const x = 1\n', { filePath: resolve(pkgRoot, '_warmup_.ts') })
+        .catch(() => {})
+        .then(() => process.stderr.write(`eslint-aggregator: prewarmed ESLint for ${pkgRoot}\n`))
+    }
   }
 })

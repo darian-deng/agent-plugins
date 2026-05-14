@@ -49,7 +49,7 @@ function httpGet(url) {
       res.on('end', () => resolve(data))
     })
     req.on('error', reject)
-    req.setTimeout(3000, () => { req.destroy(new Error('timeout')) })
+    req.setTimeout(10000, () => { req.destroy(new Error('timeout')) })
   })
 }
 
