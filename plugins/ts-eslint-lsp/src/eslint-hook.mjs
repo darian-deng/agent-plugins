@@ -131,7 +131,11 @@ async function main() {
   // Slow path: direct ESLint (~1s)
   if (output === null) output = await lintDirect(filePath)
 
-  if (!output) return  // no errors
+  if (!output) {
+    // Explicitly confirm ESLint passed so Claude doesn't try to verify via Bash.
+    process.stdout.write(JSON.stringify({ additionalContext: 'ESLint: no issues found.' }))
+    return
+  }
 
   // PostToolUse requires JSON with additionalContext for Claude to see it.
   // Plain text stdout goes to debug log only.
