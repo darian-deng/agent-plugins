@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-hook.mjs\" \"${CLAUDE_TOOL_RESULT_FILE_PATH}\"",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }
