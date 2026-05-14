@@ -293,6 +293,30 @@ const server = createServer((req, res) => {
     return
   }
 
+  // Hook endpoint: GET /lint?uri=file:///path/to/file — returns ESLint results as plain text
+  if (req.method === 'GET' && url.pathname === '/lint') {
+    const uri = url.searchParams.get('uri')
+    if (!uri) { res.writeHead(400); res.end('Missing uri'); return }
+    runLint(uri).then((diags) => {
+      if (diags.length === 0) { res.writeHead(204); res.end(); return }
+      const filePath = uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri
+      const lines = [`ESLint found ${diags.length} issue(s) in ${filePath}:`]
+      for (const d of diags) {
+        const sev = d.severity === 1 ? 'error' : 'warning'
+        const loc = `${(d.range.start.line ?? 0) + 1}:${(d.range.start.character ?? 0) + 1}`
+        const rule = d.code ? ` [${d.code}]` : ''
+        lines.push(`  ${sev} ${loc}  ${d.message}${rule}`)
+      }
+      const errors = diags.filter(d => d.severity === 1)
+      if (errors.length > 0) lines.push(`Please fix ${errors.length} error(s) before finishing.`)
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.end(lines.join('\n') + '\n')
+    }).catch((err) => {
+      res.writeHead(500); res.end(err?.message ?? String(err))
+    })
+    return
+  }
+
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
