@@ -67,12 +67,12 @@ export async function runInit(cwd) {
         execSync('node --version', { stdio: 'pipe' });
     }
     catch {
-        return { ok: false, reason: 'feat-flow init 失败：未找到 Node.js。请先安装 Node.js（建议 LTS v20+）。' };
+        return { ok: false, reason: 'feat-flow init 失败：未找到 Node.js\n\n安装：https://nodejs.org（推荐 LTS v20+）' };
     }
     // 3. git repo check
     const gitRoot = getGitRoot(cwd);
     if (!gitRoot) {
-        return { ok: false, reason: 'feat-flow init 失败：当前目录不是 git 仓库。请在项目根目录下运行。' };
+        return { ok: false, reason: 'feat-flow init 失败：当前目录不是 git 仓库\n\n请在项目根目录下运行。' };
     }
     // 4. ensure .claude/ exists
     mkdirSync(join(gitRoot, '.claude'), { recursive: true });
@@ -85,14 +85,11 @@ export async function runInit(cwd) {
     // 8. write init record to CLAUDE_PLUGIN_DATA
     writeInitRecord(gitRoot, { git_remote: getGitRemote(gitRoot) });
     const helperContent = readHelper();
-    const message = `✅ feat-flow 已初始化！\n\n` +
-        `项目路径：${gitRoot}\n` +
-        `阶段文档：${gitRoot}/.feat-flow/stages/（可按项目需求修改后提交到 git）\n\n` +
-        `你现在可以：\n` +
-        `  feat-flow start <需求描述>   — 开始新工作流\n` +
-        `  feat-flow help               — 查看所有命令\n\n` +
-        `默认工作流包含 8 个阶段，AI 会引导你完成每一步。` +
-        (helperContent ? `\n\n--- feat-flow 使用参考 ---\n${helperContent}` : '');
+    const message = `**feat-flow 初始化完成**\n\n` +
+        `- 阶段文档 \`.feat-flow/stages/\` 已就绪（可按项目定制后提交到 git）\n` +
+        `- \`.gitignore\` 已更新\n\n` +
+        `使用 \`feat-flow start <需求描述>\` 开始工作流。` +
+        (helperContent ? `\n\n---\n\n${helperContent}` : '');
     return { ok: true, message };
 }
 //# sourceMappingURL=init-handler.js.map

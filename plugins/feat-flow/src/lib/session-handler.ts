@@ -41,34 +41,29 @@ export async function handleSessionStart(input: SessionStartInput): Promise<Hook
   const lines: string[] = [];
 
   lines.push(
-    `[feat-flow] 正在继续 flow: ${state.flow_id}`,
-    `当前阶段: ${state.current_stage}`,
+    `**feat-flow** 工作流恢复中`,
+    ``,
+    `- Flow: \`${state.flow_id}\``,
+    `- 阶段: **${state.current_stage}**`,
   );
 
   if (state.waiting_for_gate) {
     // IMPORTANT: never inject the token value into additionalContext (AI-visible).
     // Token is only retrievable by the human via: ! cat .feat-flow/gate-token
     lines.push(
-      '',
-      `⏳ 等待 GATE 审批（${state.gate_type}）`,
-      `gate_context: ${state.gate_context ?? ''}`,
-      '',
-      `请用户执行：feat-flow approve <token>`,
-      `如弹窗已关闭，可执行：! cat ${paths(cwd).gateToken}`,
+      ``,
+      `⏳ 等待 GATE 审批（${state.gate_type === 'task' ? '任务级' : '阶段级'}）`,
+      ``,
+      `请等待用户执行：\`feat-flow approve <token>\``,
+      `Token 查看：\`! cat ${paths(cwd).gateToken}\``,
     );
   } else {
-    lines.push(`期望下一步: ${state.expected_next}`);
-    // Inject stage document content
+    lines.push(``, `下一步: ${state.expected_next}`);
     const stageDoc = join(STAGES_DIR, `${state.current_stage}.md`);
     if (existsSync(stageDoc)) {
-      lines.push('', '--- 当前阶段指令 ---', readFileSync(stageDoc, 'utf-8'));
+      lines.push('', '---', '', readFileSync(stageDoc, 'utf-8'));
     }
   }
-
-  lines.push(
-    '',
-    `如需了解 feat-flow 工作流规则，参见：${HELPER_PATH}`,
-  );
 
   const out: SessionOutput = {
     hookEventName: 'SessionStart',

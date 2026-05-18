@@ -65,12 +65,7 @@ export function isUserScopeInstall(cwd: string): boolean {
 }
 
 export const GLOBAL_SCOPE_ERROR =
-  '[feat-flow] ❌ 不支持 user scope（全局）安装\n\n' +
-  'feat-flow 管理项目级工作流状态，必须以 project scope 或 local scope 安装。\n\n' +
-  '修复步骤：\n' +
-  '  1. 在 Claude Code 中卸载全局安装：\n' +
-  '     /plugin uninstall feat-flow@darian-agent-plugins\n\n' +
-  '  2. 重新安装，选择正确 scope：\n' +
-  '     /plugin install feat-flow@darian-agent-plugins\n' +
-  '     → 选择：Install for all collaborators on this repository (project scope)\n' +
-  '     → 或选择：Install for you, in this repo only (local scope)';
+  'feat-flow 需要以 project 或 local scope 安装（当前为 user scope）\n\n' +
+  '修复：\n' +
+  '  claude plugin uninstall feat-flow@darian-agent-plugins\n' +
+  '  claude plugin install feat-flow@darian-agent-plugins --scope project';

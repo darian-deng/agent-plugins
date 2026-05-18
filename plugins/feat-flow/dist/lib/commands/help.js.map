@@ -1,1 +1,1 @@
-{"version":3,"file":"help.js","sourceRoot":"","sources":["../../../src/lib/commands/help.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,WAAW,EAAE,MAAM,cAAc,CAAC;AAE3C,MAAM,CAAC,MAAM,SAAS,GAAG;;;;;;;;;;;;;;;;;;OAkBlB,WAAW;CACjB,CAAC,IAAI,EAAE,CAAC"}
+{"version":3,"file":"help.js","sourceRoot":"","sources":["../../../src/lib/commands/help.ts"],"names":[],"mappings":"AAEA,MAAM,CAAC,MAAM,SAAS,GAAG;;;;;;;;;;;;;;CAcxB,CAAC,IAAI,EAAE,CAAC"}

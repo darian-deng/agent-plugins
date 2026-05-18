@@ -7,9 +7,6 @@ import { handleApprove } from './approve.js';
 import { handleAbort } from './abort.js';
 import { handleResume } from './resume.js';
 import { handleStatus } from './status.js';
-import { HELPER_PATH } from '../config.js';
-
-const HELPER_REMINDER = `如需了解 feat-flow 工作流规则，参见：${HELPER_PATH}`;
 
 function deny(reason: string): HookOutput {
   const out: UserPromptOutput = {
@@ -78,20 +75,11 @@ export async function handleUserPromptSubmit(input: UserPromptInput): Promise<Ho
       break;
     case 'help':
     case '':
-      result = allow(HELP_TEXT + '\n\n' + HELPER_REMINDER);
+      result = allow(HELP_TEXT);
       break;
     default:
-      result = deny(`未知命令：feat-flow ${subCmd}\n\n` + HELP_TEXT);
+      result = deny(`未知命令：feat-flow ${subCmd}\n\n可用命令：init | start | approve | abort | resume | status | help`);
       break;
-  }
-
-  // Append helper reminder to additionalContext for all feat-flow commands
-  if (result.hookSpecificOutput && 'additionalContext' in result.hookSpecificOutput) {
-    const existing = result.hookSpecificOutput.additionalContext ?? '';
-    if (!existing.includes('helper.md')) {
-      (result.hookSpecificOutput as UserPromptOutput).additionalContext =
-        existing + (existing ? '\n\n' : '') + HELPER_REMINDER;
-    }
   }
 
   return result;

@@ -387,8 +387,8 @@ describe('PostToolUse: context window monitoring', () => {
 
     const result = await handlePostToolUse(editInput(planMd, repoRoot));
     expect(result?.systemMessage).toMatch(/55%|60%/);
-    // urgent indicator
-    expect(result?.systemMessage).toMatch(/立即|urgent|🚨/i);
+    // urgent indicator — new format uses ⚠️ and "紧张"
+    expect(result?.systemMessage).toMatch(/⚠️|紧张|urgent/i);
   });
 });
 

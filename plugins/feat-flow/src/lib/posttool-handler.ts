@@ -128,12 +128,10 @@ function needsGate(stage: StageId, decision: Extract<GateDecision, { triggered: 
 // ─── Context window monitoring ─────────────────────────────────────────────────
 
 function buildContextWarning(pct: number, level: 'warn' | 'urgent'): string {
-  const emoji = level === 'urgent' ? '🚨' : '⚠️';
-  const threshold = level === 'urgent' ? URGENT_PCT : WARN_PCT;
+  const prefix = level === 'urgent' ? '> ⚠️ **Context 紧张**' : '> Context';
   return (
-    `${emoji} Context 已用 ${pct}%（阈值 ${threshold}%）\n` +
-    `建议：完成当前 task 后执行 /clear，然后重开 session。\n` +
-    `feat-flow 支持随时 /clear，state.json 持久化，进度不丢失。`
+    `${prefix} 已用 **${pct}%**\n` +
+    `> 完成当前任务后执行 \`/clear\` — 状态持久化，进度不丢失。`
   );
 }
 
@@ -174,21 +172,20 @@ export async function handlePostToolUse(input: PostToolInput): Promise<HookOutpu
       writeState(cwd, updatedState);
       appendTransition(cwd, `GATE_TRIGGERED stage=${state.current_stage} type=${decision.type}`);
 
-      const tokenHint =
-        `如弹窗已关闭，执行：! cat ${paths(cwd).gateToken}\n` +
-        `然后输入：feat-flow approve <token>`;
-
       const ctx =
-        `[feat-flow] ${state.current_stage} 完成条件已满足（${decision.type}）。\n` +
-        `GATE token 已生成，已通过 systemMessage 告知用户。\n` +
-        `请停止工作，提示用户执行：feat-flow approve <token>\n` +
-        `AI 无法自行通过审批——这是设计约束，不是 bug。\n` +
-        `如需了解规则：${HELPER_PATH}`;
+        `**feat-flow GATE**\n\n` +
+        `${state.current_stage} 完成条件已满足（${decision.type === 'task' ? '任务级' : '阶段级'}）。\n\n` +
+        `请停止工作，等待用户审批：\`feat-flow approve <token>\`\n\n` +
+        `AI 不能自行通过审批——这是设计约束，非 bug。`;
+
+      const systemMsg =
+        `feat-flow: ${state.current_stage} ✓\n` +
+        `Token 查看：! cat ${paths(cwd).gateToken}\n` +
+        `审批：feat-flow approve <token>`;
 
       const postOut: PostToolOutput = { hookEventName: 'PostToolUse', additionalContext: ctx };
       output = {
-        systemMessage:
-          `✅ feat-flow: ${state.current_stage} 完成条件已满足\n\n${tokenHint}`,
+        systemMessage: systemMsg,
         hookSpecificOutput: postOut,
       };
     } else {
@@ -204,8 +201,8 @@ export async function handlePostToolUse(input: PostToolInput): Promise<HookOutpu
       } catch { /* ignore */ }
 
       const ctx =
-        `[feat-flow] ${state.current_stage} 完成，自动推进到 ${nextState.current_stage}。\n` +
-        `请继续执行下一阶段任务。${stageContent}`;
+        `**feat-flow: ${state.current_stage} → ${nextState.current_stage}**\n\n` +
+        `自动推进完成，请继续执行下一阶段任务。${stageContent}`;
 
       const postOut: PostToolOutput = { hookEventName: 'PostToolUse', additionalContext: ctx };
       output = { hookSpecificOutput: postOut };
