@@ -4,6 +4,6 @@
   "description": "Real-time ESLint diagnostics for Claude Code via a lightweight LSP server. No vscode-eslint dependency. Supports ESLint v9+ flat config. Bundled with @eslint/mcp for AI-callable autofix.",
   "author": {
     "name": "Darian Deng",
-    "email": "darian.deng@plaud.ai"
+    "email": "imdengxianyu@qq.com"
   }
 }
