@@ -33,6 +33,19 @@
         "email": "darian.deng@plaud.ai"
       },
       "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/eslint-lsp"
+    },
+    {
+      "name": "feat-flow",
+      "source": "./plugins/feat-flow",
+      "description": "8-stage AI workflow control system with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": ["workflow", "ai", "hooks", "state", "approval"],
+      "author": {
+        "name": "Darian Deng",
+        "email": "darian.deng@plaud.ai"
+      },
+      "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/feat-flow"
     }
   ]
 }
