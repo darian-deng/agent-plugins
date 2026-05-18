@@ -3,6 +3,8 @@
 export interface BaseHookInput {
   session_id: string;
   cwd: string;
+  transcript_path?: string;
+  permission_mode?: string;
 }
 
 export interface UserPromptInput extends BaseHookInput {
@@ -14,7 +16,9 @@ export interface PostToolInput extends BaseHookInput {
   hook_event_name: 'PostToolUse';
   tool_name: string;
   tool_input: Record<string, unknown>;
-  tool_result: unknown;
+  tool_response: unknown;
+  tool_use_id?: string;
+  duration_ms?: number;
 }
 
 export interface PreToolInput extends BaseHookInput {
@@ -25,7 +29,9 @@ export interface PreToolInput extends BaseHookInput {
 
 export interface SessionStartInput extends BaseHookInput {
   hook_event_name: 'SessionStart';
+  source?: 'startup' | 'resume' | 'clear' | 'compact';
   model?: string;
+  agent_type?: string;
 }
 
 export interface PreCompactInput extends BaseHookInput {

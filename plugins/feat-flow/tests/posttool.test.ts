@@ -34,7 +34,7 @@ function editInput(filePath: string, repoRoot: string): PostToolInput {
     cwd: repoRoot,
     tool_name: 'Edit',
     tool_input: { file_path: filePath },
-    tool_result: { success: true },
+    tool_response: { success: true },
   };
 }
 
