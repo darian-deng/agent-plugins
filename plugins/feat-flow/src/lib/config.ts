@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { homedir } from 'os';
+import { existsSync, readFileSync } from 'fs';
 
 const thisFile = fileURLToPath(import.meta.url);
 // src/lib/config.ts → src/lib → src → plugin-root
@@ -33,13 +33,25 @@ export function contextSizeForModel(model: string): number {
   return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_SIZE;
 }
 
-// User-scope (global) install detection: plugin files land under
-// ~/.claude/plugins/cache/ for user scope, inside the project for
-// project/local scope.
-const GLOBAL_CACHE = join(homedir(), '.claude', 'plugins', 'cache');
+// Scope detection: all scopes (user/project/local) share the same cache path,
+// so path-based detection is unreliable. Instead, check whether the plugin is
+// registered in the project's settings files (project/local scope) or not (user scope).
+function hasPluginInSettings(settingsPath: string): boolean {
+  try {
+    const s = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+    const plugins = s['enabledPlugins'] as Record<string, unknown> | undefined;
+    return plugins?.['feat-flow@darian-agent-plugins'] === true;
+  } catch {
+    return false;
+  }
+}
 
-export function isGlobalInstall(): boolean {
-  return PLUGIN_ROOT.startsWith(GLOBAL_CACHE);
+export function isUserScopeInstall(cwd: string): boolean {
+  const projectSettings = join(cwd, '.claude', 'settings.json');
+  const localSettings = join(cwd, '.claude', 'settings.local.json');
+  const inProject = existsSync(projectSettings) && hasPluginInSettings(projectSettings);
+  const inLocal = existsSync(localSettings) && hasPluginInSettings(localSettings);
+  return !inProject && !inLocal;
 }
 
 export const GLOBAL_SCOPE_ERROR =

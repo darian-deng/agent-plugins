@@ -56,36 +56,42 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 ok "git 仓库 (${REPO_ROOT})"
 
-# ── 3. scope 检测（仅支持 project / local scope）────────────────────────────
-INSTALLED_JSON="$HOME/.claude/plugins/installed_plugins.json"
-if [ -f "$INSTALLED_JSON" ]; then
-  if node -e "
-const fs = require('fs');
-try {
-  const data = JSON.parse(fs.readFileSync(process.env.HOME + '/.claude/plugins/installed_plugins.json', 'utf8'));
-  const entries = (data.plugins || {})['feat-flow@darian-agent-plugins'] || [];
-  if (entries.some(e => e.scope === 'user')) process.exit(0);
-} catch(e) {}
+# ── 3. scope 检测（project 或 local scope 才允许运行）────────────────────────
+# project scope → 插件在 .claude/settings.json
+# local scope   → 插件在 .claude/settings.local.json
+PLUGIN_KEY="feat-flow@darian-agent-plugins"
+IN_PROJECT=false
+IN_LOCAL=false
+
+if node -e "
+const fs=require('fs'),p='.claude/settings.json';
+try{const s=JSON.parse(fs.readFileSync(p,'utf8'));if(s.enabledPlugins?.['$PLUGIN_KEY']===true)process.exit(0);}catch(e){}
 process.exit(1);
-" 2>/dev/null; then
-    fail "feat-flow 以 user scope（全局）安装，不支持此模式"
-    echo ""
-    echo "  feat-flow 管理项目级工作流状态，必须以 project 或 local scope 安装。"
-    echo ""
-    echo "  修复步骤，在 Claude Code 中执行："
-    echo "    1. 卸载全局安装："
-    echo "       /plugin uninstall feat-flow@darian-agent-plugins"
-    echo ""
-    echo "    2. 重新安装，选择正确 scope："
-    echo "       /plugin install feat-flow@darian-agent-plugins"
-    echo "       → Install for all collaborators on this repository (project scope)"
-    echo "       → 或 Install for you, in this repo only (local scope)"
-    echo ""
-    echo "❌ setup 失败"
-    exit 1
-  fi
+" 2>/dev/null; then IN_PROJECT=true; fi
+
+if node -e "
+const fs=require('fs'),p='.claude/settings.local.json';
+try{const s=JSON.parse(fs.readFileSync(p,'utf8'));if(s.enabledPlugins?.['$PLUGIN_KEY']===true)process.exit(0);}catch(e){}
+process.exit(1);
+" 2>/dev/null; then IN_LOCAL=true; fi
+
+if [ "$IN_PROJECT" = false ] && [ "$IN_LOCAL" = false ]; then
+  fail "feat-flow 未以 project/local scope 安装"
+  echo ""
+  echo "  feat-flow 管理项目级工作流状态，必须以 project 或 local scope 安装。"
+  echo "  如果你选择了 'Install for you (user scope)'，请按以下步骤修复："
+  echo ""
+  echo "  在 Claude Code 中执行："
+  echo "    /plugin uninstall feat-flow@darian-agent-plugins"
+  echo "    /plugin install feat-flow@darian-agent-plugins"
+  echo "  安装时选择："
+  echo "    → Install for all collaborators on this repository (project scope)"
+  echo "    → 或 Install for you, in this repo only (local scope)"
+  echo ""
+  echo "❌ setup 失败"
+  exit 1
 fi
-ok "安装 scope 验证通过（project / local scope）"
+ok "安装 scope 验证通过（$([ "$IN_PROJECT" = true ] && echo project || echo local) scope）"
 
 # ── 5. Claude Code 目录检测 ──────────────────────────────────────────────────
 if [ ! -d ".claude" ]; then

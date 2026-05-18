@@ -3,7 +3,7 @@ import { join } from 'path';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from '../types.js';
 import { runPreflight, getBaseSha } from '../preflight.js';
 import { writeState, writeMarker, makeInitialState, appendTransition, paths } from '../state.js';
-import { contextSizeForModel, STAGES_DIR, HELPER_PATH } from '../config.js';
+import { contextSizeForModel, isUserScopeInstall, GLOBAL_SCOPE_ERROR, STAGES_DIR, HELPER_PATH } from '../config.js';
 
 function slugify(text: string): string {
   const result = text
@@ -18,6 +18,15 @@ function slugify(text: string): string {
 
 export async function handleStart(input: UserPromptInput): Promise<HookOutput> {
   const { cwd, session_id, user_prompt } = input;
+
+  if (isUserScopeInstall(cwd)) {
+    const out: UserPromptOutput = {
+      hookEventName: 'UserPromptSubmit',
+      permissionDecision: 'deny',
+      permissionDecisionReason: GLOBAL_SCOPE_ERROR,
+    };
+    return { hookSpecificOutput: out };
+  }
 
   const requirement = user_prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
 

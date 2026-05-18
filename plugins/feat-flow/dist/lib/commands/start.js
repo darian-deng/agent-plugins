@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { runPreflight, getBaseSha } from '../preflight.js';
 import { writeState, writeMarker, makeInitialState, appendTransition, paths } from '../state.js';
-import { contextSizeForModel, STAGES_DIR, HELPER_PATH } from '../config.js';
+import { contextSizeForModel, isUserScopeInstall, GLOBAL_SCOPE_ERROR, STAGES_DIR, HELPER_PATH } from '../config.js';
 function slugify(text) {
     const result = text
         .toLowerCase()
@@ -15,6 +15,14 @@ function slugify(text) {
 }
 export async function handleStart(input) {
     const { cwd, session_id, user_prompt } = input;
+    if (isUserScopeInstall(cwd)) {
+        const out = {
+            hookEventName: 'UserPromptSubmit',
+            permissionDecision: 'deny',
+            permissionDecisionReason: GLOBAL_SCOPE_ERROR,
+        };
+        return { hookSpecificOutput: out };
+    }
     const requirement = user_prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
     if (!requirement) {
         const out = {

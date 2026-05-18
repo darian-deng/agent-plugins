@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { homedir } from 'os';
+import { existsSync, readFileSync } from 'fs';
 const thisFile = fileURLToPath(import.meta.url);
 // src/lib/config.ts → src/lib → src → plugin-root
 export const PLUGIN_ROOT = dirname(dirname(dirname(thisFile)));
@@ -28,12 +28,25 @@ export function contextSizeForModel(model) {
         return envOverride;
     return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_SIZE;
 }
-// User-scope (global) install detection: plugin files land under
-// ~/.claude/plugins/cache/ for user scope, inside the project for
-// project/local scope.
-const GLOBAL_CACHE = join(homedir(), '.claude', 'plugins', 'cache');
-export function isGlobalInstall() {
-    return PLUGIN_ROOT.startsWith(GLOBAL_CACHE);
+// Scope detection: all scopes (user/project/local) share the same cache path,
+// so path-based detection is unreliable. Instead, check whether the plugin is
+// registered in the project's settings files (project/local scope) or not (user scope).
+function hasPluginInSettings(settingsPath) {
+    try {
+        const s = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+        const plugins = s['enabledPlugins'];
+        return plugins?.['feat-flow@darian-agent-plugins'] === true;
+    }
+    catch {
+        return false;
+    }
+}
+export function isUserScopeInstall(cwd) {
+    const projectSettings = join(cwd, '.claude', 'settings.json');
+    const localSettings = join(cwd, '.claude', 'settings.local.json');
+    const inProject = existsSync(projectSettings) && hasPluginInSettings(projectSettings);
+    const inLocal = existsSync(localSettings) && hasPluginInSettings(localSettings);
+    return !inProject && !inLocal;
 }
 export const GLOBAL_SCOPE_ERROR = '[feat-flow] ❌ 不支持 user scope（全局）安装\n\n' +
     'feat-flow 管理项目级工作流状态，必须以 project scope 或 local scope 安装。\n\n' +

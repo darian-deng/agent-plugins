@@ -6,7 +6,7 @@ import { handleApprove } from './approve.js';
 import { handleAbort } from './abort.js';
 import { handleResume } from './resume.js';
 import { handleStatus } from './status.js';
-import { HELPER_PATH, isGlobalInstall, GLOBAL_SCOPE_ERROR } from '../config.js';
+import { HELPER_PATH, isUserScopeInstall, GLOBAL_SCOPE_ERROR } from '../config.js';
 
 const HELPER_REMINDER = `如需了解 feat-flow 工作流规则，参见：${HELPER_PATH}`;
 
@@ -33,11 +33,6 @@ function allow(additionalContext?: string, systemMessage?: string): HookOutput {
 export async function handleUserPromptSubmit(input: UserPromptInput): Promise<HookOutput> {
   const { cwd, user_prompt } = input;
   const prompt = user_prompt.trim();
-
-  // ── Global (user scope) install guard ─────────────────────────────────────
-  if (isGlobalInstall() && (/^feat-flow\s/i.test(prompt) || prompt.toLowerCase() === 'feat-flow')) {
-    return deny(GLOBAL_SCOPE_ERROR);
-  }
 
   // ── feat-flow command routing ──────────────────────────────────────────────
   if (/^feat-flow\s/i.test(prompt) || prompt.toLowerCase() === 'feat-flow') {

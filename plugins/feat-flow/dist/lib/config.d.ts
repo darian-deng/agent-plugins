@@ -10,6 +10,6 @@ export declare const REWARN_DELTA_PCT = 5;
 /** Model name → context window size lookup */
 export declare const MODEL_CONTEXT: Record<string, number>;
 export declare function contextSizeForModel(model: string): number;
-export declare function isGlobalInstall(): boolean;
+export declare function isUserScopeInstall(cwd: string): boolean;
 export declare const GLOBAL_SCOPE_ERROR: string;
 //# sourceMappingURL=config.d.ts.map

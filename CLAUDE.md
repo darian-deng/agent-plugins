@@ -45,6 +45,35 @@ hooks.json 使用 `node dist/hooks/xxx.js`，`node` 在任何 Node.js 环境都�
 
 `minClaudeCodeVersion` 不是合法字段（`claude plugin validate` 会报错），不要加。
 
+## plugin 生命周期命令（完整）
+
+所有命令在 Claude Code 里加 `!` 前缀直接跑 CLI，或用 `/plugin` 交互菜单：
+
+```bash
+# 安装（--scope 缺省为 user，feat-flow 必须指定 project 或 local）
+! claude plugin install feat-flow@darian-agent-plugins --scope project
+! claude plugin install feat-flow@darian-agent-plugins --scope local
+
+# 卸载（--scope 缺省为 user，需要和安装时一致）
+! claude plugin uninstall feat-flow@darian-agent-plugins --scope project
+! claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+
+# 更新到新版本（同样需要指定 scope）
+! claude plugin update feat-flow@darian-agent-plugins --scope project
+
+# 禁用/启用（不删除文件）
+! claude plugin disable feat-flow@darian-agent-plugins --scope project
+! claude plugin enable feat-flow@darian-agent-plugins --scope project
+
+# 重载（修改 hooks/settings 后）
+/reload-plugins
+```
+
+scope 说明：
+- `user`   → `~/.claude/settings.json`，全局生效，**feat-flow 不支持**
+- `project` → `.claude/settings.json`，随 git 共享给团队
+- `local`  → `.claude/settings.local.json`，gitignored，仅本人在此 repo 生效
+
 ## marketplace 更新说明
 
 `/plugin marketplace add` 会把 manifest 克隆到本地缓存。
