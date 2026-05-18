@@ -56,14 +56,45 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 ok "git 仓库 (${REPO_ROOT})"
 
-# ── 3. Claude Code 目录检测 ──────────────────────────────────────────────────
+# ── 3. scope 检测（仅支持 project / local scope）────────────────────────────
+INSTALLED_JSON="$HOME/.claude/plugins/installed_plugins.json"
+if [ -f "$INSTALLED_JSON" ]; then
+  if node -e "
+const fs = require('fs');
+try {
+  const data = JSON.parse(fs.readFileSync(process.env.HOME + '/.claude/plugins/installed_plugins.json', 'utf8'));
+  const entries = (data.plugins || {})['feat-flow@darian-agent-plugins'] || [];
+  if (entries.some(e => e.scope === 'user')) process.exit(0);
+} catch(e) {}
+process.exit(1);
+" 2>/dev/null; then
+    fail "feat-flow 以 user scope（全局）安装，不支持此模式"
+    echo ""
+    echo "  feat-flow 管理项目级工作流状态，必须以 project 或 local scope 安装。"
+    echo ""
+    echo "  修复步骤，在 Claude Code 中执行："
+    echo "    1. 卸载全局安装："
+    echo "       /plugin uninstall feat-flow@darian-agent-plugins"
+    echo ""
+    echo "    2. 重新安装，选择正确 scope："
+    echo "       /plugin install feat-flow@darian-agent-plugins"
+    echo "       → Install for all collaborators on this repository (project scope)"
+    echo "       → 或 Install for you, in this repo only (local scope)"
+    echo ""
+    echo "❌ setup 失败"
+    exit 1
+  fi
+fi
+ok "安装 scope 验证通过（project / local scope）"
+
+# ── 5. Claude Code 目录检测 ──────────────────────────────────────────────────
 if [ ! -d ".claude" ]; then
   warn ".claude/ 目录不存在，将自动创建"
   mkdir -p .claude
 fi
 ok "Claude Code 项目目录"
 
-# ── 4. .gitignore 更新 ───────────────────────────────────────────────────────
+# ── 6. .gitignore 更新 ───────────────────────────────────────────────────────
 GITIGNORE=".gitignore"
 NEEDED_ENTRIES=(
   ".feat-flow/secret"
@@ -89,7 +120,7 @@ else
   ok ".gitignore 已包含所有 feat-flow 条目"
 fi
 
-# ── 5. .feat-flow 目录初始化 ─────────────────────────────────────────────────
+# ── 7. .feat-flow 目录初始化 ─────────────────────────────────────────────────
 mkdir -p .feat-flow
 
 cat > .feat-flow/.initialized << MARKER

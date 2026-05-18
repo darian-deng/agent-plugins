@@ -2,11 +2,19 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput, HookOutput, SessionOutput } from './types.js';
 import { readState, writeState, hasActiveFlow, paths } from './state.js';
-import { contextSizeForModel } from './config.js';
+import { contextSizeForModel, isGlobalInstall, GLOBAL_SCOPE_ERROR } from './config.js';
 import { STAGES_DIR, HELPER_PATH } from './config.js';
 
 export async function handleSessionStart(input: SessionStartInput): Promise<HookOutput | null> {
   const { cwd, session_id, model } = input;
+
+  if (isGlobalInstall()) {
+    const out: SessionOutput = {
+      hookEventName: 'SessionStart',
+      additionalContext: GLOBAL_SCOPE_ERROR,
+    };
+    return { systemMessage: GLOBAL_SCOPE_ERROR, hookSpecificOutput: out };
+  }
 
   if (!hasActiveFlow(cwd)) return null;
 
