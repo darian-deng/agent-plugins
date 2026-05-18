@@ -1,0 +1,10 @@
+{
+  "name": "feat-flow",
+  "version": "0.1.0",
+  "description": "Structured AI workflow for medium/large requirements. 8-stage pipeline with human-approval gates, context persistence, and mechanical enforcement via hooks.",
+  "author": {
+    "name": "Darian Deng",
+    "email": "imdengxianyu@qq.com"
+  },
+  "minClaudeCodeVersion": "1.0.0"
+}

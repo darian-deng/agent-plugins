@@ -19,6 +19,7 @@
 |------|---------|:-----------:|:------:|
 | [eslint-lsp](./plugins/eslint-lsp) | 纯 ESLint LSP server：实时推送诊断，捆绑 `@eslint/mcp` 支持 AI 主动 autofix。适合不需要 TypeScript 语言智能的场景 | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP 代理 + ESLint 诊断二合一：完整保留 go-to-def / hover / references 等 TypeScript 能力，同时实时推送 ESLint 违规。TypeScript 项目的首选 | ✅ LSP | ✅ — |
+| [feat-flow](./plugins/feat-flow) | AI 工作流控制系统：8 阶段结构化开发流程，含人工审批门（GATE）、跨 session 状态持久化、hooks 机械执行保障。适合中大型需求的高质量交付 | ✅ Plugin | ❌ |
 
 ### 安装（Claude Code）
 
@@ -27,7 +28,14 @@
 /plugin install eslint-lsp@darian-agent-plugins      # 纯 ESLint
 # 或
 /plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
+# 或（必须 project scope）
+/plugin install feat-flow@darian-agent-plugins --scope project  # AI 工作流
 ```
+
+<!-- prettier-ignore -->
+> [!NOTE]
+> `feat-flow` 必须安装在**项目级别**（`--scope project`），不支持 user
+> scope 全局安装，因为它管理的是项目级别的工作流状态。
 
 出现交互菜单后，选择 **Install for you (user scope)** 完成全局安装。
 插件在没有 ESLint 配置的项目里会自动跳过。
@@ -75,6 +83,7 @@ on in their IDEs.
 |--------|-------------|:-----------:|:------:|
 | [eslint-lsp](./plugins/eslint-lsp) | Standalone ESLint LSP server: real-time push diagnostics, bundled with `@eslint/mcp` for AI-callable autofix. Use when you don't need TypeScript language intelligence | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP proxy + ESLint diagnostics in one server: preserves full TypeScript intelligence (go-to-def, hover, references) while simultaneously pushing ESLint violations. The standard choice for TypeScript projects | ✅ LSP | ✅ — |
+| [feat-flow](./plugins/feat-flow) | AI workflow control system: 8-stage structured development pipeline with human-approval gates, cross-session state persistence, and mechanically-enforced hooks. Designed for high-quality delivery of medium-to-large requirements | ✅ Plugin | ❌ |
 
 ### Installation (Claude Code)
 
@@ -83,10 +92,18 @@ on in their IDEs.
 /plugin install eslint-lsp@darian-agent-plugins      # ESLint only
 # or
 /plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
+# or (project scope required)
+/plugin install feat-flow@darian-agent-plugins --scope project  # AI workflow
 ```
 
 When the interactive menu appears, select **Install for you (user scope)**
 for a global install. The plugin silently skips projects without ESLint.
+
+<!-- prettier-ignore -->
+> [!NOTE]
+> `feat-flow` must be installed at **project scope** (`--scope project`). It
+> manages per-project workflow state and is not suitable for global user-scope
+> installation.
 
 > ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` first — both plugins claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
 

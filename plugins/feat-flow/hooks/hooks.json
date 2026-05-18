@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/userprompt.ts\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/posttool.ts\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/pretool.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/session.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/compact.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
