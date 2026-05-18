@@ -29,7 +29,7 @@ function allow(additionalContext, systemMessage) {
 export async function handleUserPromptSubmit(input) {
     const { cwd } = input;
     const prompt = input.prompt.trim();
-    if (!(/^feat-flow\s/i.test(prompt) || prompt.toLowerCase() === 'feat-flow')) {
+    if (!/^feat-flow/i.test(prompt)) {
         // Non feat-flow messages always pass through
         return allow();
     }
