@@ -116,10 +116,10 @@ export interface ActiveMarker {
   started_at: string;
 }
 
-export interface SetupMarker {
-  setup_version: string;
-  setup_at: string;
-  gitignore_ok: boolean;
+export interface InitRecord {
+  initialized_at: string;
+  node_version: string;
+  git_remote: string;
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────

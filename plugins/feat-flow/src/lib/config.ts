@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import { homedir } from 'os';
 
 const thisFile = fileURLToPath(import.meta.url);
 // src/lib/config.ts → src/lib → src → plugin-root
@@ -31,6 +32,15 @@ export function contextSizeForModel(model: string): number {
   const envOverride = parseInt(process.env['FEAT_FLOW_CONTEXT_SIZE'] ?? '', 10);
   if (!isNaN(envOverride) && envOverride > 0) return envOverride;
   return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_SIZE;
+}
+
+// Plugin-level persistent data directory — survives plugin updates.
+// Defaults to the standard Claude Code plugin data path when env var is absent.
+export function getPluginDataDir(): string {
+  return (
+    process.env['CLAUDE_PLUGIN_DATA'] ??
+    join(homedir(), '.claude', 'plugins', 'data', 'feat-flow-darian-agent-plugins')
+  );
 }
 
 // Scope detection: all scopes (user/project/local) share the same cache path,

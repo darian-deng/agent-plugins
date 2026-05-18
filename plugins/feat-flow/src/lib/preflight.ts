@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { isSetupDone, hasActiveFlow } from './state.js';
+import { hasActiveFlow } from './state.js';
 
 export interface PreflightResult {
   ok: boolean;
@@ -7,29 +7,18 @@ export interface PreflightResult {
   warnings: string[];
 }
 
+// Runs checks specific to `feat-flow start`:
+// - no active flow (can't start a second one)
+// - clean working tree (need a clean base_sha)
+// Git-repo and init checks are handled by auto-init in the router.
 export function runPreflight(repoRoot: string): PreflightResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // 1. git repo check
-  try {
-    execSync('git rev-parse --show-toplevel', { cwd: repoRoot, stdio: 'pipe' });
-  } catch {
-    errors.push('当前目录不是 git 仓库。请在项目根目录下运行 feat-flow start。');
-    return { ok: false, errors, warnings };
-  }
-
-  // 2. setup done check
-  if (!isSetupDone(repoRoot)) {
-    errors.push('当前项目尚未初始化 feat-flow。请先运行：feat-flow-setup');
-  }
-
-  // 3. no active flow
   if (hasActiveFlow(repoRoot)) {
     errors.push('已有活跃 flow 正在进行中。请先运行 feat-flow abort 终止，或使用 feat-flow status 查看当前状态。');
   }
 
-  // 4. clean working tree (base_sha integrity)
   try {
     const status = execSync('git status --porcelain', { cwd: repoRoot, stdio: 'pipe' })
       .toString()

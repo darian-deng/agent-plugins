@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync, appendFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync, appendFileSync, realpathSync } from 'fs';
 import { join } from 'path';
-import type { FeatFlowState, ActiveMarker } from './types.js';
+import type { FeatFlowState, ActiveMarker, InitRecord } from './types.js';
 import { STATE_NOTE, NEXT_STAGE as NEXT } from './types.js';
+import { getPluginDataDir } from './config.js';
 
 // ─── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -11,9 +12,45 @@ export const paths = (repoRoot: string) => ({
   gateToken: join(repoRoot, '.feat-flow/gate-token'),
   transitionsLog: join(repoRoot, '.feat-flow/transitions.log'),
   violationsLog: join(repoRoot, '.feat-flow/violations.log'),
-  initialized: join(repoRoot, '.feat-flow/.initialized'),
   marker: join(repoRoot, '.claude/.feat-flow-active'),
 });
+
+// ─── Init record (stored in CLAUDE_PLUGIN_DATA, not in project) ────────────────
+
+function realKey(p: string): string {
+  try { return realpathSync(p); } catch { return p; }
+}
+
+function projectsFilePath(dataDir: string): string {
+  return join(dataDir, 'projects.json');
+}
+
+function readProjects(dataDir: string): Record<string, InitRecord> {
+  try {
+    return JSON.parse(readFileSync(projectsFilePath(dataDir), 'utf-8')) as Record<string, InitRecord>;
+  } catch {
+    return {};
+  }
+}
+
+export function isInitDone(cwd: string, dataDir?: string): boolean {
+  const dir = dataDir ?? getPluginDataDir();
+  const projects = readProjects(dir);
+  return realKey(cwd) in projects;
+}
+
+export function writeInitRecord(cwd: string, record: Partial<InitRecord> = {}, dataDir?: string): void {
+  const dir = dataDir ?? getPluginDataDir();
+  mkdirSync(dir, { recursive: true });
+  const projects = readProjects(dir);
+  projects[realKey(cwd)] = {
+    initialized_at: new Date().toISOString(),
+    node_version: process.version,
+    git_remote: record.git_remote ?? '',
+    ...record,
+  };
+  writeFileSync(projectsFilePath(dir), JSON.stringify(projects, null, 2));
+}
 
 // ─── Read ───────────────────────────────────────────────────────────────────────
 
@@ -39,10 +76,6 @@ export function hasActiveFlow(repoRoot: string): boolean {
   return existsSync(paths(repoRoot).marker);
 }
 
-export function isSetupDone(repoRoot: string): boolean {
-  return existsSync(paths(repoRoot).initialized);
-}
-
 export function readGateToken(repoRoot: string): string | null {
   try {
     return readFileSync(paths(repoRoot).gateToken, 'utf-8').trim();
@@ -63,7 +96,6 @@ export function writeState(repoRoot: string, state: FeatFlowState): void {
   try {
     renameSync(tmp, p.stateJson);
   } catch {
-    // fallback if rename fails (e.g. cross-device)
     writeFileSync(p.stateJson, readFileSync(tmp));
     try { unlinkSync(tmp); } catch { /* ignore */ }
   }
@@ -132,7 +164,6 @@ export function advanceStage(state: FeatFlowState): FeatFlowState {
   if (!next) return state;
   const now = new Date().toISOString();
   const updated = { ...state };
-  // Mark current stage completed
   updated.stage_progress = {
     ...state.stage_progress,
     [state.current_stage]: {

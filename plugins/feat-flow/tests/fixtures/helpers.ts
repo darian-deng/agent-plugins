@@ -2,64 +2,79 @@ import { execSync } from 'child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { FeatFlowState, ActiveMarker, SetupMarker } from '../../src/lib/types.js';
+import type { FeatFlowState, ActiveMarker, InitRecord } from '../../src/lib/types.js';
+import { writeInitRecord as stateWriteInitRecord } from '../../src/lib/state.js';
 
 export const PLUGIN_ROOT = join(import.meta.dirname, '../..');
-export const STAGE_DOCS_DIR = join(PLUGIN_ROOT, 'stages');
+export const PLUGIN_STAGES_DIR = join(PLUGIN_ROOT, 'stages');
+// Keep backward-compat alias
+export const STAGE_DOCS_DIR = PLUGIN_STAGES_DIR;
 
 /**
- * Create an isolated temp git repo for each test.
- * Returns the repo root path. Call cleanup() in afterEach.
+ * Create an isolated temp git repo + plugin data dir for each test.
+ * Sets process.env.CLAUDE_PLUGIN_DATA to the temp data dir so all
+ * production code under test uses it automatically.
  */
-export function createTestRepo(): { repoRoot: string; cleanup: () => void } {
+export function createTestRepo(): {
+  repoRoot: string;
+  pluginDataDir: string;
+  cleanup: () => void;
+} {
   const repoRoot = mkdtempSync(join(tmpdir(), 'feat-flow-test-'));
+  const pluginDataDir = mkdtempSync(join(tmpdir(), 'feat-flow-data-'));
 
-  // git init with .gitignore so .feat-flow/ doesn't appear as untracked
+  const prevDataDir = process.env['CLAUDE_PLUGIN_DATA'];
+  process.env['CLAUDE_PLUGIN_DATA'] = pluginDataDir;
+
   execSync('git init -q', { cwd: repoRoot });
   execSync('git config user.email "test@test.com"', { cwd: repoRoot });
   execSync('git config user.name "Test"', { cwd: repoRoot });
   writeFileSync(join(repoRoot, '.gitignore'), [
-    '.feat-flow/secret',
-    '.feat-flow/gate-token',
     '.feat-flow/state.json',
+    '.feat-flow/gate-token',
     '.feat-flow/violations.log',
-    '.feat-flow/.initialized',
     '.feat-flow/*.tmp',
+    '.feat-flow/transitions.log',
   ].join('\n'));
   execSync('git add .gitignore', { cwd: repoRoot });
   execSync('git commit -m "init" -q', { cwd: repoRoot });
 
-  // create required dirs
   mkdirSync(join(repoRoot, '.claude'), { recursive: true });
   mkdirSync(join(repoRoot, '.feat-flow'), { recursive: true });
 
+  // Simulate project-scope installation so isUserScopeInstall() returns false.
+  // Commit so the working tree stays clean for preflight checks.
+  writeFileSync(
+    join(repoRoot, '.claude', 'settings.json'),
+    JSON.stringify({ enabledPlugins: { 'feat-flow@darian-agent-plugins': true } }, null, 2),
+  );
+  execSync('git add .claude/settings.json', { cwd: repoRoot });
+  execSync('git commit -m "chore: add feat-flow settings" -q', { cwd: repoRoot });
+
   return {
     repoRoot,
-    cleanup: () => rmSync(repoRoot, { recursive: true, force: true }),
+    pluginDataDir,
+    cleanup: () => {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(pluginDataDir, { recursive: true, force: true });
+      if (prevDataDir === undefined) delete process.env['CLAUDE_PLUGIN_DATA'];
+      else process.env['CLAUDE_PLUGIN_DATA'] = prevDataDir;
+    },
   };
+}
+
+/** Write an init record for the given repo — simulates "already initialised". */
+export function writeInitRecord(
+  repoRoot: string,
+  pluginDataDir: string,
+  record: Partial<InitRecord> = {},
+): void {
+  stateWriteInitRecord(repoRoot, record, pluginDataDir);
 }
 
 export function writeMarker(repoRoot: string, flowId: string): void {
-  const marker: ActiveMarker = {
-    flow_id: flowId,
-    started_at: new Date().toISOString(),
-  };
-  writeFileSync(
-    join(repoRoot, '.claude/.feat-flow-active'),
-    JSON.stringify(marker, null, 2),
-  );
-}
-
-export function writeSetupMarker(repoRoot: string): void {
-  const marker: SetupMarker = {
-    setup_version: '1.0.0',
-    setup_at: new Date().toISOString(),
-    gitignore_ok: true,
-  };
-  writeFileSync(
-    join(repoRoot, '.feat-flow/.initialized'),
-    JSON.stringify(marker, null, 2),
-  );
+  const marker: ActiveMarker = { flow_id: flowId, started_at: new Date().toISOString() };
+  writeFileSync(join(repoRoot, '.claude/.feat-flow-active'), JSON.stringify(marker, null, 2));
 }
 
 export function writeState(repoRoot: string, partial: Partial<FeatFlowState>): void {
@@ -91,7 +106,6 @@ export function writeGateToken(repoRoot: string, token: string): void {
   writeFileSync(join(repoRoot, '.feat-flow/gate-token'), token);
 }
 
-/** Build a design.md that passes stage-1 completion checks (200+ English words for wc -w). */
 export function makeStage1Design(extraContent = ''): string {
   const base = `# User Authentication System
 
@@ -138,7 +152,6 @@ Requirements confirmed.
   return base + extraContent;
 }
 
-/** Build plan.md with N tasks, optionally marking some complete or adding [GATE]. */
 export function makePlanMd(options: {
   total: number;
   completed?: number;

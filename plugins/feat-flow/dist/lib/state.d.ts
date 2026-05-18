@@ -1,17 +1,17 @@
-import type { FeatFlowState, ActiveMarker } from './types.js';
+import type { FeatFlowState, ActiveMarker, InitRecord } from './types.js';
 export declare const paths: (repoRoot: string) => {
     stateDir: string;
     stateJson: string;
     gateToken: string;
     transitionsLog: string;
     violationsLog: string;
-    initialized: string;
     marker: string;
 };
+export declare function isInitDone(cwd: string, dataDir?: string): boolean;
+export declare function writeInitRecord(cwd: string, record?: Partial<InitRecord>, dataDir?: string): void;
 export declare function readState(repoRoot: string): FeatFlowState | null;
 export declare function readMarker(repoRoot: string): ActiveMarker | null;
 export declare function hasActiveFlow(repoRoot: string): boolean;
-export declare function isSetupDone(repoRoot: string): boolean;
 export declare function readGateToken(repoRoot: string): string | null;
 export declare function writeState(repoRoot: string, state: FeatFlowState): void;
 export declare function writeMarker(repoRoot: string, flowId: string): void;
