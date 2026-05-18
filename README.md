@@ -23,13 +23,18 @@
 
 ### 安装（Claude Code）
 
+**第一步：注册插件来源（每台机器只需一次）**
+
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins      # 纯 ESLint
-# 或
-/plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
-# 或（必须 project scope）
-/plugin install feat-flow@darian-agent-plugins --scope project  # AI 工作流
+```
+
+**第二步：安装所需插件**
+
+```
+/plugin install eslint-lsp@darian-agent-plugins           # 纯 ESLint
+/plugin install ts-eslint-lsp@darian-agent-plugins        # TypeScript + ESLint
+/plugin install feat-flow@darian-agent-plugins --scope project  # AI 工作流（必须 project scope）
 ```
 
 <!-- prettier-ignore -->
@@ -87,17 +92,23 @@ on in their IDEs.
 
 ### Installation (Claude Code)
 
+**Step 1: Register the plugin source (once per machine)**
+
 ```
 /plugin marketplace add darian-deng/agent-plugins
-/plugin install eslint-lsp@darian-agent-plugins      # ESLint only
-# or
-/plugin install ts-eslint-lsp@darian-agent-plugins   # TypeScript + ESLint
-# or (project scope required)
-/plugin install feat-flow@darian-agent-plugins --scope project  # AI workflow
 ```
 
-When the interactive menu appears, select **Install for you (user scope)**
-for a global install. The plugin silently skips projects without ESLint.
+**Step 2: Install the plugin you need**
+
+```
+/plugin install eslint-lsp@darian-agent-plugins           # ESLint only
+/plugin install ts-eslint-lsp@darian-agent-plugins        # TypeScript + ESLint
+/plugin install feat-flow@darian-agent-plugins --scope project  # AI workflow (project scope required)
+```
+
+For `eslint-lsp` and `ts-eslint-lsp`, when the interactive menu appears,
+select **Install for you (user scope)** for a global install. The plugin
+silently skips projects without ESLint.
 
 <!-- prettier-ignore -->
 > [!NOTE]

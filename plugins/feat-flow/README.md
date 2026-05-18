@@ -29,7 +29,13 @@ feat-flow 是一个 Claude Code 插件，为中大型需求实施提供结构化
 **安装（每个项目仅需一次）：**
 
 ```bash
-claude plugin install feat-flow@darian-agent-plugins --scope project
+# 第一步：注册插件来源（每台机器只需一次）
+/plugin marketplace add darian-deng/agent-plugins
+
+# 第二步：在项目目录下安装
+/plugin install feat-flow@darian-agent-plugins --scope project
+
+# 第三步：初始化项目环境
 feat-flow-setup
 ```
 
@@ -200,7 +206,13 @@ The following steps show a typical workflow.
 **Install (once per project):**
 
 ```bash
-claude plugin install feat-flow@darian-agent-plugins --scope project
+# Step 1: Register the plugin source (once per machine)
+/plugin marketplace add darian-deng/agent-plugins
+
+# Step 2: Install in your project directory
+/plugin install feat-flow@darian-agent-plugins --scope project
+
+# Step 3: Initialize the project environment
 feat-flow-setup
 ```
 
