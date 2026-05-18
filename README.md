@@ -32,18 +32,15 @@
 **第二步：安装所需插件**
 
 ```
-/plugin install eslint-lsp@darian-agent-plugins           # 纯 ESLint
-/plugin install ts-eslint-lsp@darian-agent-plugins        # TypeScript + ESLint
-/plugin install feat-flow@darian-agent-plugins --scope project  # AI 工作流（必须 project scope）
+/plugin install eslint-lsp@darian-agent-plugins     # 纯 ESLint
+/plugin install ts-eslint-lsp@darian-agent-plugins  # TypeScript + ESLint
+/plugin install feat-flow@darian-agent-plugins      # AI 工作流
 ```
 
-<!-- prettier-ignore -->
-> [!NOTE]
-> `feat-flow` 必须安装在**项目级别**（`--scope project`），不支持 user
-> scope 全局安装，因为它管理的是项目级别的工作流状态。
+出现交互菜单后，按需选择安装范围：
 
-出现交互菜单后，选择 **Install for you (user scope)** 完成全局安装。
-插件在没有 ESLint 配置的项目里会自动跳过。
+- `eslint-lsp` / `ts-eslint-lsp`：选 **Install for you (user scope)**，全局生效，在没有 ESLint 配置的项目里会自动跳过。
+- `feat-flow`：选 **Install for all collaborators on this repository (project scope)**，写入项目的 `.claude/settings.json`，随代码库共享给团队成员。
 
 > ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
 
@@ -112,20 +109,15 @@ on in their IDEs.
 **Step 2: Install the plugin you need**
 
 ```
-/plugin install eslint-lsp@darian-agent-plugins           # ESLint only
-/plugin install ts-eslint-lsp@darian-agent-plugins        # TypeScript + ESLint
-/plugin install feat-flow@darian-agent-plugins --scope project  # AI workflow (project scope required)
+/plugin install eslint-lsp@darian-agent-plugins     # ESLint only
+/plugin install ts-eslint-lsp@darian-agent-plugins  # TypeScript + ESLint
+/plugin install feat-flow@darian-agent-plugins      # AI workflow
 ```
 
-For `eslint-lsp` and `ts-eslint-lsp`, when the interactive menu appears,
-select **Install for you (user scope)** for a global install. The plugin
-silently skips projects without ESLint.
+When the interactive menu appears, choose the appropriate scope:
 
-<!-- prettier-ignore -->
-> [!NOTE]
-> `feat-flow` must be installed at **project scope** (`--scope project`). It
-> manages per-project workflow state and is not suitable for global user-scope
-> installation.
+- `eslint-lsp` / `ts-eslint-lsp`: select **Install for you (user scope)** for a global install. The plugin silently skips projects without ESLint.
+- `feat-flow`: select **Install for all collaborators on this repository (project scope)**. This writes to the project's `.claude/settings.json` and is shared with your team via version control.
 
 > ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` first — both plugins claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
 
