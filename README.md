@@ -47,6 +47,17 @@
 
 > ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
 
+### 故障排查
+
+**`Plugin "xxx" not found in marketplace "darian-agent-plugins"`**
+
+`/plugin marketplace add` 会把 marketplace 清单克隆到本地，之后 `/plugin install` 只读本地缓存，不自动同步远端更新。遇到这个报错，先刷新一次缓存再重试：
+
+```
+/plugin marketplace update darian-agent-plugins
+/plugin install <plugin-name>@darian-agent-plugins
+```
+
 ### 设计理念
 
 人类用 IDE 写代码时，ESLint 的错误在毫秒内出现——不是等你手动跑
@@ -117,6 +128,17 @@ silently skips projects without ESLint.
 > installation.
 
 > ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` first — both plugins claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
+
+### Troubleshooting
+
+**`Plugin "xxx" not found in marketplace "darian-agent-plugins"`**
+
+`/plugin marketplace add` clones the marketplace manifest locally. After that, `/plugin install` reads only from the local cache — it does not auto-sync remote updates. If you hit this error, refresh the cache and retry:
+
+```
+/plugin marketplace update darian-agent-plugins
+/plugin install <plugin-name>@darian-agent-plugins
+```
 
 ### Design philosophy
 

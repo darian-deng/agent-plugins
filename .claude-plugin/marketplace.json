@@ -5,7 +5,7 @@
   "description": "Agent plugins for Claude Code — real-time ESLint diagnostics via LSP, and more.",
   "owner": {
     "name": "Darian Deng",
-    "email": "darian.deng@plaud.ai"
+    "email": "imdengxianyu@qq.com"
   },
   "plugins": [
     {
@@ -17,7 +17,7 @@
       "tags": ["typescript", "eslint", "lsp", "diagnostics", "proxy", "ai-coding"],
       "author": {
         "name": "Darian Deng",
-        "email": "darian.deng@plaud.ai"
+        "email": "imdengxianyu@qq.com"
       },
       "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/ts-eslint-lsp"
     },
@@ -30,7 +30,7 @@
       "tags": ["eslint", "lsp", "typescript", "lint", "diagnostics"],
       "author": {
         "name": "Darian Deng",
-        "email": "darian.deng@plaud.ai"
+        "email": "imdengxianyu@qq.com"
       },
       "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/eslint-lsp"
     },
@@ -43,7 +43,7 @@
       "tags": ["workflow", "ai", "hooks", "state", "approval"],
       "author": {
         "name": "Darian Deng",
-        "email": "darian.deng@plaud.ai"
+        "email": "imdengxianyu@qq.com"
       },
       "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/feat-flow"
     }
