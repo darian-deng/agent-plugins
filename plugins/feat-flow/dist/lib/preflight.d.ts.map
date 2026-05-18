@@ -1,0 +1,1 @@
+{"version":3,"file":"preflight.d.ts","sourceRoot":"","sources":["../../src/lib/preflight.ts"],"names":[],"mappings":"AAGA,MAAM,WAAW,eAAe;IAC9B,EAAE,EAAE,OAAO,CAAC;IACZ,MAAM,EAAE,MAAM,EAAE,CAAC;IACjB,QAAQ,EAAE,MAAM,EAAE,CAAC;CACpB;AAED,wBAAgB,YAAY,CAAC,QAAQ,EAAE,MAAM,GAAG,eAAe,CAuC9D;AAED,wBAAgB,UAAU,CAAC,QAAQ,EAAE,MAAM,GAAG,MAAM,CAQnD"}

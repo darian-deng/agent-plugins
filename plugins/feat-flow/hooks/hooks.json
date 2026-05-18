@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/userprompt.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/userprompt.js\"",
             "timeout": 15
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/posttool.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/posttool.js\"",
             "timeout": 15
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/pretool.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/pretool.js\"",
             "timeout": 5
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/session.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/session.js\"",
             "timeout": 10
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes tsx \"${CLAUDE_PLUGIN_ROOT}/src/hooks/compact.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/compact.js\"",
             "timeout": 5
           }
         ]

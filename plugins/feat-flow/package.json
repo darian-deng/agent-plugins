@@ -5,6 +5,7 @@
   "type": "module",
   "author": "Darian Deng <imdengxianyu@qq.com>",
   "scripts": {
+    "build": "tsc --project tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

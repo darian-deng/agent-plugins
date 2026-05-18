@@ -22,9 +22,12 @@ function deny(reason: string): HookOutput {
 function allow(additionalContext?: string, systemMessage?: string): HookOutput {
   const out: UserPromptOutput = {
     hookEventName: 'UserPromptSubmit',
-    additionalContext,
+    ...(additionalContext !== undefined && { additionalContext }),
   };
-  return { systemMessage, hookSpecificOutput: out };
+  return {
+    ...(systemMessage !== undefined && { systemMessage }),
+    hookSpecificOutput: out,
+  };
 }
 
 export async function handleUserPromptSubmit(input: UserPromptInput): Promise<HookOutput> {
