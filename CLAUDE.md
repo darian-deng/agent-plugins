@@ -51,23 +51,22 @@ hooks.json 使用 `node dist/hooks/xxx.js`，`node` 在任何 Node.js 环境都�
 
 ```bash
 # 安装（--scope 缺省为 user，feat-flow 必须指定 project 或 local）
-! claude plugin install feat-flow@darian-agent-plugins --scope project
-! claude plugin install feat-flow@darian-agent-plugins --scope local
+claude plugin install feat-flow@darian-agent-plugins --scope project
+claude plugin install feat-flow@darian-agent-plugins --scope local
 
-# 卸载（--scope 缺省为 user，需要和安装时一致）
-! claude plugin uninstall feat-flow@darian-agent-plugins --scope project
-! claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+# 卸载（需和安装时的 scope 一致）
+claude plugin uninstall feat-flow@darian-agent-plugins --scope project
+claude plugin uninstall feat-flow@darian-agent-plugins --scope local
 
-# 更新到新版本（同样需要指定 scope）
-! claude plugin update feat-flow@darian-agent-plugins --scope project
-
-# 禁用/启用（不删除文件）
-! claude plugin disable feat-flow@darian-agent-plugins --scope project
-! claude plugin enable feat-flow@darian-agent-plugins --scope project
+# 更新
+claude plugin update feat-flow@darian-agent-plugins --scope project
+claude plugin update feat-flow@darian-agent-plugins --scope local
 
 # 重载（修改 hooks/settings 后）
 /reload-plugins
 ```
+
+在 Claude Code 内执行时加 `!` 前缀：`! claude plugin install ...`
 
 scope 说明：
 - `user`   → `~/.claude/settings.json`，全局生效，**feat-flow 不支持**

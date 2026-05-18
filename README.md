@@ -23,36 +23,66 @@
 
 ### 安装（Claude Code）
 
+以下所有命令在终端直接运行，或在 Claude Code 里加 `!` 前缀执行（如 `! claude plugin install ...`）。
+
 **第一步：注册插件来源（每台机器只需一次）**
 
-```
-/plugin marketplace add darian-deng/agent-plugins
+```bash
+claude plugin marketplace add darian-deng/agent-plugins
 ```
 
 **第二步：安装所需插件**
 
-```
-/plugin install eslint-lsp@darian-agent-plugins     # 纯 ESLint
-/plugin install ts-eslint-lsp@darian-agent-plugins  # TypeScript + ESLint
-/plugin install feat-flow@darian-agent-plugins      # AI 工作流
-```
+```bash
+# eslint-lsp / ts-eslint-lsp：全局安装（user scope），在所有项目生效
+claude plugin install eslint-lsp@darian-agent-plugins --scope user
+claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
 
-出现交互菜单后，按需选择安装范围：
-
-- `eslint-lsp` / `ts-eslint-lsp`：选 **Install for you (user scope)**，全局生效，在没有 ESLint 配置的项目里会自动跳过。
-- `feat-flow`：选 **Install for all collaborators on this repository (project scope)**，写入项目的 `.claude/settings.json`，随代码库共享给团队成员。
+# feat-flow：必须指定 project 或 local scope（见下方说明）
+claude plugin install feat-flow@darian-agent-plugins --scope project  # 团队共用
+claude plugin install feat-flow@darian-agent-plugins --scope local    # 个人使用
+```
 
 > ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
+
+**更新 / 卸载**
+
+```bash
+# 更新（需指定安装时的 scope）
+claude plugin update feat-flow@darian-agent-plugins --scope project
+claude plugin update feat-flow@darian-agent-plugins --scope local
+
+# 卸载（需指定安装时的 scope）
+claude plugin uninstall feat-flow@darian-agent-plugins --scope project
+claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+```
+
+**安装完成后重载**
+
+```
+/reload-plugins
+```
+
+---
+
+### feat-flow 的 scope 选择
+
+feat-flow 管理的是**项目级工作流状态**（阶段进度、审批记录、分支快照），因此它的很多行为需要针对不同项目分别配置，**不支持 user scope（全局安装）**。
+
+| Scope | 适用场景 | 配置文件 |
+|-------|---------|---------|
+| `project` | 团队协作，所有成员共用同一套工作流配置 | `.claude/settings.json`（提交到 git） |
+| `local` | 个人使用，不影响其他协作者 | `.claude/settings.local.json`（gitignore） |
 
 ### 故障排查
 
 **`Plugin "xxx" not found in marketplace "darian-agent-plugins"`**
 
-`/plugin marketplace add` 会把 marketplace 清单克隆到本地，之后 `/plugin install` 只读本地缓存，不自动同步远端更新。遇到这个报错，先刷新一次缓存再重试：
+`marketplace add` 会把 manifest 克隆到本地缓存，之后 install 只读缓存，不自动同步远端更新。遇到此报错，先刷新缓存：
 
-```
-/plugin marketplace update darian-agent-plugins
-/plugin install <plugin-name>@darian-agent-plugins
+```bash
+claude plugin marketplace update darian-agent-plugins
+claude plugin install <plugin-name>@darian-agent-plugins --scope <scope>
 ```
 
 ### 设计理念
@@ -100,36 +130,66 @@ on in their IDEs.
 
 ### Installation (Claude Code)
 
+Run the following commands in your terminal, or prefix them with `!` inside Claude Code (e.g. `! claude plugin install ...`).
+
 **Step 1: Register the plugin source (once per machine)**
 
-```
-/plugin marketplace add darian-deng/agent-plugins
+```bash
+claude plugin marketplace add darian-deng/agent-plugins
 ```
 
 **Step 2: Install the plugin you need**
 
+```bash
+# eslint-lsp / ts-eslint-lsp: global install (user scope), active across all projects
+claude plugin install eslint-lsp@darian-agent-plugins --scope user
+claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
+
+# feat-flow: must use project or local scope (see below)
+claude plugin install feat-flow@darian-agent-plugins --scope project  # team use
+claude plugin install feat-flow@darian-agent-plugins --scope local    # personal use
 ```
-/plugin install eslint-lsp@darian-agent-plugins     # ESLint only
-/plugin install ts-eslint-lsp@darian-agent-plugins  # TypeScript + ESLint
-/plugin install feat-flow@darian-agent-plugins      # AI workflow
+
+> ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` — both claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
+
+**Update / Uninstall**
+
+```bash
+# Update (specify the scope used at install time)
+claude plugin update feat-flow@darian-agent-plugins --scope project
+claude plugin update feat-flow@darian-agent-plugins --scope local
+
+# Uninstall (specify the scope used at install time)
+claude plugin uninstall feat-flow@darian-agent-plugins --scope project
+claude plugin uninstall feat-flow@darian-agent-plugins --scope local
 ```
 
-When the interactive menu appears, choose the appropriate scope:
+**Reload after install**
 
-- `eslint-lsp` / `ts-eslint-lsp`: select **Install for you (user scope)** for a global install. The plugin silently skips projects without ESLint.
-- `feat-flow`: select **Install for all collaborators on this repository (project scope)**. This writes to the project's `.claude/settings.json` and is shared with your team via version control.
+```
+/reload-plugins
+```
 
-> ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` first — both plugins claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
+---
+
+### feat-flow scope selection
+
+feat-flow manages **per-project workflow state** — stage progress, approval records, branch snapshots. Because its behavior is intentionally project-specific, **user scope (global install) is not supported**.
+
+| Scope | When to use | Config file |
+|-------|------------|-------------|
+| `project` | Team use — all collaborators share the same workflow config | `.claude/settings.json` (committed to git) |
+| `local` | Personal use — does not affect other collaborators | `.claude/settings.local.json` (gitignored) |
 
 ### Troubleshooting
 
 **`Plugin "xxx" not found in marketplace "darian-agent-plugins"`**
 
-`/plugin marketplace add` clones the marketplace manifest locally. After that, `/plugin install` reads only from the local cache — it does not auto-sync remote updates. If you hit this error, refresh the cache and retry:
+`marketplace add` clones the manifest locally. After that, `install` reads only from the local cache and does not auto-sync remote updates. If you hit this error, refresh the cache first:
 
-```
-/plugin marketplace update darian-agent-plugins
-/plugin install <plugin-name>@darian-agent-plugins
+```bash
+claude plugin marketplace update darian-agent-plugins
+claude plugin install <plugin-name>@darian-agent-plugins --scope <scope>
 ```
 
 ### Design philosophy
