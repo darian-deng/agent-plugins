@@ -33,9 +33,13 @@ hooks.json 使用 `node dist/hooks/xxx.js`，`node` 在任何 Node.js 环境都�
 ### 发布流程
 
 1. 修改 `src/` 代码
-2. `npm run build` 验证无编译错误
-3. 提交 `src/` + `dist/` 变更
-4. push 到 main — CI 会重新验证 build 并更新 dist/
+2. 更新版本号（**必须**，否则 `/plugin update` 不会触发更新）：
+   - `plugins/feat-flow/package.json` → `"version"`
+   - `plugins/feat-flow/.claude-plugin/plugin.json` → `"version"`
+   - `.claude-plugin/marketplace.json` → feat-flow 条目的 `"version"`
+3. `npm run build` 验证无编译错误，同时把新版本号编进 dist/
+4. 提交 `src/` + `dist/` + 所有版本号变更
+5. push 到 main — CI 会重新验证 build 并更新 dist/
 
 ### plugin.json 字段说明
 
