@@ -6,9 +6,9 @@ import { writeState, writeMarker, paths, appendTransition } from '../state.js';
 import { STAGES_DIR, HELPER_PATH } from '../config.js';
 
 export async function handleResume(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, user_prompt } = input;
+  const { cwd, prompt } = input;
 
-  const branch = user_prompt.replace(/^feat-flow\s+resume\s*/i, '').trim();
+  const branch = prompt.replace(/^feat-flow\s+resume\s*/i, '').trim();
 
   if (!branch) {
     const out: UserPromptOutput = {

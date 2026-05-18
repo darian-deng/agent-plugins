@@ -3,8 +3,8 @@ import { join } from 'path';
 import { readState, writeState, readGateToken, removeGateToken, advanceStage, hasActiveFlow, appendTransition, paths } from '../state.js';
 import { STAGES_DIR, HELPER_PATH } from '../config.js';
 export async function handleApprove(input) {
-    const { cwd, user_prompt } = input;
-    const token = user_prompt.replace(/^feat-flow\s+approve\s*/i, '').trim();
+    const { cwd, prompt } = input;
+    const token = prompt.replace(/^feat-flow\s+approve\s*/i, '').trim();
     if (!hasActiveFlow(cwd)) {
         const out = {
             hookEventName: 'UserPromptSubmit',

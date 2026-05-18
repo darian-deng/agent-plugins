@@ -4,7 +4,7 @@ export interface BaseHookInput {
 }
 export interface UserPromptInput extends BaseHookInput {
     hook_event_name: 'UserPromptSubmit';
-    user_prompt: string;
+    prompt: string;
 }
 export interface PostToolInput extends BaseHookInput {
     hook_event_name: 'PostToolUse';

@@ -38,7 +38,7 @@
       "name": "feat-flow",
       "source": "./plugins/feat-flow",
       "description": "8-stage AI workflow control system with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "category": "development",
       "tags": ["workflow", "ai", "hooks", "state", "approval"],
       "author": {

@@ -14,8 +14,8 @@ function slugify(text) {
     return result || 'flow'; // fallback: pure CJK input → 'flow'
 }
 export async function handleStart(input) {
-    const { cwd, session_id, user_prompt } = input;
-    const requirement = user_prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
+    const { cwd, session_id, prompt } = input;
+    const requirement = prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
     if (!requirement) {
         const out = {
             hookEventName: 'UserPromptSubmit',

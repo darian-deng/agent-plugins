@@ -17,9 +17,9 @@ function slugify(text: string): string {
 }
 
 export async function handleStart(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, session_id, user_prompt } = input;
+  const { cwd, session_id, prompt } = input;
 
-  const requirement = user_prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
+  const requirement = prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
 
   if (!requirement) {
     const out: UserPromptOutput = {

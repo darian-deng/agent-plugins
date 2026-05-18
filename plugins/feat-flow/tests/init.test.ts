@@ -7,7 +7,7 @@ import { handleUserPromptSubmit } from '../src/lib/commands/router.js';
 import type { UserPromptInput } from '../src/lib/types.js';
 
 function input(prompt: string, repoRoot: string): UserPromptInput {
-  return { hook_event_name: 'UserPromptSubmit', session_id: 'sess-001', cwd: repoRoot, user_prompt: prompt };
+  return { hook_event_name: 'UserPromptSubmit', session_id: 'sess-001', cwd: repoRoot, prompt: prompt };
 }
 
 // ─── isInitDone ────────────────────────────────────────────────────────────────

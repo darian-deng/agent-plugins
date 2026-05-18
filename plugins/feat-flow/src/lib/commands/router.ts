@@ -32,8 +32,8 @@ function allow(additionalContext?: string, systemMessage?: string): HookOutput {
 }
 
 export async function handleUserPromptSubmit(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, user_prompt } = input;
-  const prompt = user_prompt.trim();
+  const { cwd } = input;
+  const prompt = input.prompt.trim();
 
   if (!(/^feat-flow\s/i.test(prompt) || prompt.toLowerCase() === 'feat-flow')) {
     // Non feat-flow messages always pass through

@@ -5,9 +5,9 @@ import { readState, writeState, readGateToken, removeGateToken, advanceStage, ha
 import { STAGES_DIR, HELPER_PATH } from '../config.js';
 
 export async function handleApprove(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, user_prompt } = input;
+  const { cwd, prompt } = input;
 
-  const token = user_prompt.replace(/^feat-flow\s+approve\s*/i, '').trim();
+  const token = prompt.replace(/^feat-flow\s+approve\s*/i, '').trim();
 
   if (!hasActiveFlow(cwd)) {
     const out: UserPromptOutput = {
