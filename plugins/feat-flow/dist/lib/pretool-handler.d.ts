@@ -1,3 +1,3 @@
-import type { PreToolInput, HookOutput } from './types.js';
-export declare function handlePreToolUse(input: PreToolInput): Promise<HookOutput | null>;
+import type { PreToolInput, PreToolOutput } from './types.js';
+export declare function handlePreTool(input: PreToolInput): Promise<PreToolOutput | null>;
 //# sourceMappingURL=pretool-handler.d.ts.map

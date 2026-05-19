@@ -1,3 +1,3 @@
-import type { UserPromptInput, HookOutput } from '../types.js';
-export declare function handleApprove(input: UserPromptInput): Promise<HookOutput>;
+import type { CommandResult } from '../types.js';
+export declare function handleApprove(repoRoot: string, flowName: string, token: string): Promise<CommandResult>;
 //# sourceMappingURL=approve.d.ts.map

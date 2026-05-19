@@ -1,156 +1,100 @@
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import type { UserPromptInput, HookOutput, UserPromptOutput, FeatFlowState } from '../types.js';
-import { writeState, writeMarker, paths, appendTransition } from '../state.js';
-import { STAGES_DIR, HELPER_PATH } from '../config.js';
+import {
+  readActiveState,
+  writeActiveState,
+  appendTransition,
+  type ActiveState,
+} from '../state.js';
+import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
+import type { CommandResult } from '../types.js';
 
-export async function handleResume(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, prompt } = input;
-
-  const branch = prompt.replace(/^feat-flow\s+resume\s*/i, '').trim();
-
-  if (!branch) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        '请提供要恢复的 abort branch 名称。\n\n' +
-        '用法：feat-flow resume <branch>\n' +
-        '例如：feat-flow resume feat-flow/aborted-2026-01-15T10-30-00\n\n' +
-        '查看可用 abort 分支：git branch | grep feat-flow/aborted',
+export async function handleResume(
+  repoRoot: string,
+  flowName: string,
+  branch: string
+): Promise<CommandResult> {
+  if (!branch.trim()) {
+    return {
+      action: 'deny',
+      reason: `Usage: ${flowName} resume <branch>\nExample: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`,
     };
-    return { hookSpecificOutput: out };
   }
 
-  // Validate branch name to prevent shell injection
-  if (!/^[\w./-]+$/.test(branch)) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `无效的 branch 名称：${branch}`,
+  const existing = await readActiveState(repoRoot, flowName);
+  if (existing) {
+    return {
+      action: 'deny',
+      reason: `Flow '${existing.flow_name}' is already active. Run '${existing.flow_name} abort' before resuming.`,
     };
-    return { hookSpecificOutput: out };
   }
 
-  const exec = (cmd: string) => {
+  const exec = (cmd: string): string | null => {
     try {
-      return execSync(cmd, { cwd, stdio: 'pipe' }).toString().trim();
+      return execSync(cmd, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
     } catch {
       return null;
     }
   };
 
-  // Check branch exists
-  const branchCheck = exec(`git rev-parse --verify ${branch}`);
+  const branchCheck = exec(`git rev-parse --verify "${branch}"`);
   if (!branchCheck) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        `Branch "${branch}" 不存在。\n\n` +
-        '查看可用 abort 分支：\n  git branch | grep feat-flow/aborted',
-    };
-    return { hookSpecificOutput: out };
+    return { action: 'deny', reason: `Branch "${branch}" does not exist.` };
   }
 
-  // Find state-snapshot.json in the branch (search in docs/feat-flows/*/state-snapshot.json)
-  const snapshotSearch = exec(
-    `git ls-tree -r --name-only ${branch} -- docs/feat-flows/ 2>/dev/null`,
-  );
-  const snapshotPath = snapshotSearch
-    ?.split('\n')
-    .find(f => f.endsWith('state-snapshot.json'));
+  // look for snapshot in docs/{flowName}/*/state-snapshot.json
+  const lsOutput = exec(`git ls-tree -r --name-only "${branch}" -- docs/${flowName}/ 2>/dev/null`);
+  const snapshotPath = lsOutput?.split('\n').find((f) => f.endsWith('state-snapshot.json'));
 
   if (!snapshotPath) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        `Branch "${branch}" 中没有找到 state-snapshot.json。\n` +
-        '这可能不是一个 feat-flow abort 分支，或者 abort 时没有保存状态快照。',
+    return {
+      action: 'deny',
+      reason: `No state-snapshot.json found in branch "${branch}". This may not be a valid abort branch.`,
     };
-    return { hookSpecificOutput: out };
   }
 
-  // Checkout the snapshot from the branch
-  const snapshotContent = exec(`git show ${branch}:${snapshotPath}`);
+  const snapshotContent = exec(`git show "${branch}:${snapshotPath}"`);
   if (!snapshotContent) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `无法读取 ${branch} 中的 state-snapshot.json。`,
-    };
-    return { hookSpecificOutput: out };
+    return { action: 'deny', reason: `Could not read state-snapshot.json from branch "${branch}".` };
   }
 
-  let snapshot: Partial<FeatFlowState>;
+  let snapshot: Partial<ActiveState>;
   try {
-    snapshot = JSON.parse(snapshotContent);
+    snapshot = JSON.parse(snapshotContent) as Partial<ActiveState>;
   } catch {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `state-snapshot.json 格式无效，无法解析。`,
-    };
-    return { hookSpecificOutput: out };
+    return { action: 'deny', reason: 'state-snapshot.json is not valid JSON.' };
   }
 
-  const flowId = snapshot.flow_id ?? 'resumed-flow';
-  const currentStage = snapshot.current_stage ?? 'stage-1';
+  const config = await loadFlowConfig(repoRoot, flowName);
+  const currentStage = snapshot.current_stage ?? config.stages[0]!.id;
 
-  // Initialize .feat-flow/ from snapshot
-  const p = paths(cwd);
-  mkdirSync(p.stateDir, { recursive: true });
-
-  const restoredState: FeatFlowState = {
-    _note: '此文件由 feat-flow 控制系统自动管理。请勿手动修改。如需查看当前状态，请运行 feat-flow status。',
-    schema_version: '1.0',
-    flow_id: flowId,
+  const restored: ActiveState = {
+    flow_id: snapshot.flow_id ?? `${flowName}-resumed`,
+    flow_name: flowName,
     requirement: snapshot.requirement ?? '',
     current_stage: currentStage,
     base_sha: snapshot.base_sha ?? 'HEAD',
     started_at: snapshot.started_at ?? new Date().toISOString(),
-    last_session_id: input.session_id,
-    context_size: snapshot.context_size ?? 1_000_000,
-    stage_progress: snapshot.stage_progress ?? {},
-    waiting_for_gate: false,
-    gate_type: null,
-    gate_context: null,
-    expected_next: snapshot.expected_next ?? `continue ${currentStage}`,
+    last_session_id: null,
+    context_size: 0,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    approved_task_gates: snapshot.approved_task_gates ?? [],
   };
 
-  writeState(cwd, restoredState);
-  writeMarker(cwd, flowId);
-  appendTransition(cwd, `FLOW_RESUMED from_branch=${branch} stage=${currentStage}`);
+  await writeActiveState(repoRoot, flowName, restored);
+  await appendTransition(repoRoot, flowName, `RESUMED from_branch=${branch} stage=${currentStage}`);
 
-  // Inject stage context
-  const stageDoc = join(STAGES_DIR, `${currentStage}.md`);
+  const stageCfg = getStageConfig(config, currentStage);
+  const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
   let stageContent = '';
-  try {
-    if (existsSync(stageDoc)) {
-      stageContent = '\n\n--- ' + currentStage + ' 指令 ---\n' + readFileSync(stageDoc, 'utf-8');
-    }
-  } catch { /* non-fatal */ }
+  if (existsSync(promptPath)) {
+    stageContent = readFileSync(promptPath, 'utf-8');
+  }
 
   const ctx =
-    `✅ feat-flow 已从 ${branch} 恢复\n\n` +
-    `flow_id:      ${flowId}\n` +
-    `需求:         ${restoredState.requirement}\n` +
-    `当前阶段:     ${currentStage}\n` +
-    `base_sha:     ${restoredState.base_sha}\n\n` +
-    `前面已完成的工作已保存在 ${branch} 分支，可用 git log ${branch} 查看。\n` +
-    `如需了解工作流规则：${HELPER_PATH}` +
+    `Flow '${flowName}' resumed from branch: ${branch}\n` +
+    `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
     stageContent;
 
-  const out: UserPromptOutput = {
-    hookEventName: 'UserPromptSubmit',
-    additionalContext: ctx,
-  };
-  return {
-    systemMessage: `✅ feat-flow 已从 ${branch} 恢复 | 当前阶段: ${currentStage}`,
-    hookSpecificOutput: out,
-  };
+  return { action: 'allow', additionalContext: ctx };
 }

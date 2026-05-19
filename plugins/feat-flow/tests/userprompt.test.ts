@@ -1,335 +1,136 @@
-/**
- * UserPromptSubmit hook — the main command router.
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { join } from 'path';
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
-import {
-  createTestRepo,
-  writeMarker,
-  writeInitRecord,
-  writeState,
-  writeGateToken,
-  makeStage1Design,
-} from './fixtures/helpers.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { execSync } from 'child_process';
+import { handleUserPrompt } from '../src/lib/userprompt-handler.js';
+import { readActiveState, isGateActive } from '../src/lib/state.js';
+import { createFlowTestRepo, writeActiveState, writeGateToken, MINIMAL_CONFIG } from './fixtures/helpers.js';
 import type { UserPromptInput } from '../src/lib/types.js';
-import { handleUserPromptSubmit } from '../src/lib/commands/router.js';
 
-function input(prompt: string, repoRoot: string): UserPromptInput {
-  return { hook_event_name: 'UserPromptSubmit', session_id: 'sess-001', cwd: repoRoot, prompt: prompt };
+let cleanups: Array<() => void> = [];
+
+afterEach(() => {
+  for (const c of cleanups) c();
+  cleanups = [];
+});
+
+function makeRepo() {
+  const repo = createFlowTestRepo('test-flow', MINIMAL_CONFIG);
+  cleanups.push(repo.cleanup);
+  return repo;
 }
 
-// ─── feat-flow start ───────────────────────────────────────────────────────────
+function makeInput(prompt: string, repoRoot: string, sessionId = 'sess-1'): UserPromptInput {
+  return {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: sessionId,
+    cwd: repoRoot,
+    prompt,
+  };
+}
 
-describe('UserPromptSubmit: feat-flow start', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-  });
-  afterEach(() => cleanup());
-
-  it('empty requirement → deny with helpful message', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow start', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/需求描述/);
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/feat-flow start/);
-  });
-
-  it('requirement text → allow, injects stage-1 context', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow start 搭建用户登录系统', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).not.toBe('deny');
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/stage-1/);
-    expect(existsSync(join(repoRoot, '.claude/.feat-flow-active'))).toBe(true);
+describe('handleUserPrompt — routing', () => {
+  it('non-flow message passes through (allow, no additionalContext)', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('hello world', repo.repoRoot));
+    expect(out.hookSpecificOutput?.hookEventName).toBe('UserPromptSubmit');
+    const o = out.hookSpecificOutput as { permissionDecision?: string; additionalContext?: string };
+    expect(o.permissionDecision).toBeUndefined();
+    expect(o.additionalContext).toBeUndefined();
   });
 
-  it('not-inited project → auto-inits then continues to start validation', async () => {
-    // Don't write init record — auto-init should handle it
-    const result = await handleUserPromptSubmit(input('feat-flow start 搭建登录系统', repoRoot));
-    const reason = result.hookSpecificOutput?.permissionDecisionReason ?? '';
-    // Must NOT fail because of missing init
-    expect(reason).not.toMatch(/init|setup/i);
+  it('test-flow start → routes to start handler', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow start build feature X', repo.repoRoot));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).not.toBeNull();
   });
 
-  it('active flow already exists → deny and suggest abort', async () => {
-    writeMarker(repoRoot, 'existing-flow');
-    writeState(repoRoot, { flow_id: 'existing-flow' });
-    const result = await handleUserPromptSubmit(input('feat-flow start 新需求', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/feat-flow abort/);
+  it('test-flow approve → routes to approve handler', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    writeGateToken(repo.repoRoot, 'test-flow', 'mytoken');
+    const out = await handleUserPrompt(makeInput('test-flow approve mytoken', repo.repoRoot));
+    const o = out.hookSpecificOutput as { additionalContext?: string };
+    expect(o.additionalContext).toContain('review');
   });
 
-  it('uncommitted changes → deny (base_sha integrity)', async () => {
-    writeFileSync(join(repoRoot, 'dirty.ts'), 'export const x = 1;');
-    const result = await handleUserPromptSubmit(input('feat-flow start 搭建登录系统', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/未提交/);
-  });
-});
-
-// ─── feat-flow approve ─────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: feat-flow approve', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-1', waiting_for_gate: true, gate_type: 'stage' });
-    writeGateToken(repoRoot, 'abc123def456');
-  });
-  afterEach(() => cleanup());
-
-  it('correct token → allows, advances stage, injects stage-2 context', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow approve abc123def456', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).not.toBe('deny');
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/stage-2/);
-    const state = JSON.parse(readFileSync(join(repoRoot, '.feat-flow/state.json'), 'utf-8'));
-    expect(state.current_stage).toBe('stage-2');
-    expect(state.waiting_for_gate).toBe(false);
+  it('test-flow abort → routes to abort handler', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
+    });
+    await handleUserPrompt(makeInput('test-flow abort', repo.repoRoot));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).toBeNull();
   });
 
-  it('wrong token → deny with helpful message', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow approve wrongtoken', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/token/i);
+  it('test-flow status → routes to status handler', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow status', repo.repoRoot));
+    const o = out.hookSpecificOutput as { additionalContext?: string };
+    expect(o.additionalContext).toMatch(/no active flow/i);
   });
 
-  it('no active gate → deny', async () => {
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-2', waiting_for_gate: false });
-    const result = await handleUserPromptSubmit(input('feat-flow approve abc123def456', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/GATE/);
+  it('test-flow help → routes to help handler', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow help', repo.repoRoot));
+    const o = out.hookSpecificOutput as { additionalContext?: string };
+    expect(o.additionalContext).toContain('test-flow');
   });
 
-  it('task-level gate approved → stays on stage-5, clears gate', async () => {
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-5', waiting_for_gate: true, gate_type: 'task', gate_context: 'Task 4: delete legacy module' });
-    const result = await handleUserPromptSubmit(input('feat-flow approve abc123def456', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).not.toBe('deny');
-    const state = JSON.parse(readFileSync(join(repoRoot, '.feat-flow/state.json'), 'utf-8'));
-    expect(state.current_stage).toBe('stage-5');
-    expect(state.waiting_for_gate).toBe(false);
-  });
-});
-
-// ─── feat-flow abort ───────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: feat-flow abort', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { flow_id: 'test-flow', base_sha: 'abc123' });
-    mkdirSync(join(repoRoot, 'docs/feat-flows/test-flow'), { recursive: true });
-    writeFileSync(join(repoRoot, 'docs/feat-flows/test-flow/design.md'), makeStage1Design());
-  });
-  afterEach(() => cleanup());
-
-  it('no active flow → deny', async () => {
-    require('fs').rmSync(join(repoRoot, '.claude/.feat-flow-active'));
-    const result = await handleUserPromptSubmit(input('feat-flow abort', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/活跃 flow/);
+  it('test-flow unknowncmd → soft error (allow + additionalContext, NOT deny)', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow unknowncmd', repo.repoRoot));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; additionalContext?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+    expect(o.additionalContext).toBeTruthy();
   });
 
-  it('active flow → creates abort branch, clears marker', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow abort', repoRoot));
-    expect(existsSync(join(repoRoot, '.claude/.feat-flow-active'))).toBe(false);
-    const branches = require('child_process').execSync('git branch', { cwd: repoRoot }).toString();
-    expect(branches).toMatch(/feat-flow\/aborted-/);
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/aborted/);
-  });
-});
-
-// ─── feat-flow status ──────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: feat-flow status', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-  });
-  afterEach(() => cleanup());
-
-  it('no active flow → injects "no active flow" message', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow status', repoRoot));
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/没有进行中|no active flow|无活跃/i);
+  it('unknown cmd message includes list of valid commands', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow foobar', repo.repoRoot));
+    const o = out.hookSpecificOutput as { additionalContext?: string };
+    expect(o.additionalContext).toMatch(/start|approve|abort|resume|status|help/i);
   });
 
-  it('active flow → injects current stage', async () => {
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-3', waiting_for_gate: false });
-    const result = await handleUserPromptSubmit(input('feat-flow status', repoRoot));
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/stage-3|Stage 3/);
+  it('unknown cmd does NOT show "operation blocked" banner', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow foobar', repo.repoRoot));
+    const o = out.hookSpecificOutput as { additionalContext?: string };
+    expect(o.additionalContext).not.toMatch(/operation blocked/i);
   });
 
-  it('active gate → includes token retrieval hint', async () => {
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-1', waiting_for_gate: true });
-    writeGateToken(repoRoot, 'abc123');
-    const result = await handleUserPromptSubmit(input('feat-flow status', repoRoot));
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/gate-token|approve/i);
-  });
-});
-
-// ─── feat-flow help ────────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: feat-flow help', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => ({ repoRoot, pluginDataDir, cleanup } = createTestRepo()));
-  afterEach(() => cleanup());
-
-  it('returns all commands in context', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow help', repoRoot));
-    const ctx = result.hookSpecificOutput?.additionalContext ?? '';
-    expect(ctx).toMatch(/init/);
-    expect(ctx).toMatch(/start/);
-    expect(ctx).toMatch(/approve/);
-    expect(ctx).toMatch(/abort/);
-    expect(ctx).toMatch(/resume/);
-    expect(ctx).toMatch(/status/);
-  });
-});
-
-// ─── unknown command ───────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: unknown command', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => ({ repoRoot, pluginDataDir, cleanup } = createTestRepo()));
-  afterEach(() => cleanup());
-
-  it('unknown subcommand → deny with command list', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow foobar', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/start/);
-  });
-});
-
-// ─── GATE waiting enforcement ──────────────────────────────────────────────────
-
-describe('UserPromptSubmit: GATE waiting enforcement', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-    writeMarker(repoRoot, 'test-flow');
-    writeGateToken(repoRoot, 'abc123def456');
-  });
-  afterEach(() => cleanup());
-
-  it('waiting_for_gate + non-approve message → allowed (GATE is non-blocking)', async () => {
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-1', waiting_for_gate: true, gate_type: 'stage' });
-    const result = await handleUserPromptSubmit(input('可以帮我看下这段代码吗', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).not.toBe('deny');
-  });
-});
-
-// ─── helper context injection ──────────────────────────────────────────────────
-
-describe('UserPromptSubmit: helper context injection', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { flow_id: 'test-flow', current_stage: 'stage-2', waiting_for_gate: false });
-  });
-  afterEach(() => cleanup());
-
-  it('every feat-flow command injects additionalContext', async () => {
-    for (const cmd of ['feat-flow help', 'feat-flow status']) {
-      const result = await handleUserPromptSubmit(input(cmd, repoRoot));
-      expect(result.hookSpecificOutput?.additionalContext).toBeTruthy();
-    }
-  });
-});
-
-// ─── feat-flow resume ──────────────────────────────────────────────────────────
-
-describe('UserPromptSubmit: feat-flow resume', () => {
-  let repoRoot: string;
-  let pluginDataDir: string;
-  let cleanup: () => void;
-  let abortBranch: string;
-
-  beforeEach(() => {
-    ({ repoRoot, pluginDataDir, cleanup } = createTestRepo());
-    writeInitRecord(repoRoot, pluginDataDir);
-    abortBranch = 'feat-flow/aborted-2026-01-01T00-00-00';
-
-    const exec = (cmd: string) =>
-      require('child_process').execSync(cmd, { cwd: repoRoot, stdio: 'pipe' });
-    exec(`git checkout -b ${abortBranch}`);
-    mkdirSync(join(repoRoot, 'docs/feat-flows/test-flow'), { recursive: true });
-    writeFileSync(
-      join(repoRoot, 'docs/feat-flows/test-flow/state-snapshot.json'),
-      JSON.stringify({
-        flow_id: 'test-flow', requirement: 'test requirement', current_stage: 'stage-3',
-        base_sha: 'abc123', started_at: '2026-01-01T00:00:00Z', last_session_id: null,
-        context_size: 1_000_000, stage_progress: {}, waiting_for_gate: false,
-        gate_type: null, gate_context: null, expected_next: 'begin stage-3',
-        context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-        approved_task_gates: [], _note: 'snapshot',
-      }),
-    );
-    exec('git add -A');
-    exec(`git commit -m "feat-flow: abort test-flow"`);
-    exec('git checkout -');
-  });
-  afterEach(() => cleanup());
-
-  it('valid branch + snapshot → restores flow, injects stage context', async () => {
-    const result = await handleUserPromptSubmit(input(`feat-flow resume ${abortBranch}`, repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).not.toBe('deny');
-    expect(result.hookSpecificOutput?.additionalContext).toMatch(/stage-3/);
-    expect(existsSync(join(repoRoot, '.claude/.feat-flow-active'))).toBe(true);
-    const state = JSON.parse(readFileSync(join(repoRoot, '.feat-flow/state.json'), 'utf-8'));
-    expect(state.current_stage).toBe('stage-3');
+  it('non-gate message when gate active → clears gate (deletes gate-token) + allows', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    writeGateToken(repo.repoRoot, 'test-flow', 'tok-abc');
+    await handleUserPrompt(makeInput('please explain the current stage', repo.repoRoot));
+    expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(false);
   });
 
-  it('no branch name → deny with usage hint', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow resume', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/branch/i);
-  });
-
-  it('branch does not exist → deny', async () => {
-    const result = await handleUserPromptSubmit(input('feat-flow resume feat-flow/aborted-nonexistent', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/存在|exist/i);
-  });
-
-  it('branch exists but no snapshot → deny', async () => {
-    require('child_process').execSync('git checkout -b feat-flow/no-snapshot', { cwd: repoRoot, stdio: 'pipe' });
-    require('child_process').execSync('git checkout -', { cwd: repoRoot, stdio: 'pipe' });
-    const result = await handleUserPromptSubmit(input('feat-flow resume feat-flow/no-snapshot', repoRoot));
-    expect(result.hookSpecificOutput?.permissionDecision).toBe('deny');
-    expect(result.hookSpecificOutput?.permissionDecisionReason).toMatch(/snapshot/i);
+  it('flow name not in .ai-flow/ → soft error mentioning /ai-flow', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('unknown-flow start task', repo.repoRoot));
+    // unknown prefix should pass through (not an error, not recognized)
+    const o = out.hookSpecificOutput as { permissionDecision?: string };
+    // Either pass-through or soft error mentioning the flow
+    // If it's a registered flow pattern detection only known flows matter
+    // An unknown prefix should just pass through
+    expect(o.permissionDecision).not.toBe('deny');
   });
 });

@@ -1,85 +1,50 @@
 import { execSync } from 'child_process';
-import { existsSync, copyFileSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import type { UserPromptInput, HookOutput, UserPromptOutput } from '../types.js';
-import { readState, hasActiveFlow, removeMarker, removeGateToken, paths, appendTransition } from '../state.js';
+import { readActiveState, deleteGateToken, appendTransition } from '../state.js';
+import type { CommandResult } from '../types.js';
 
-export async function handleAbort(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd } = input;
-
-  if (!hasActiveFlow(cwd)) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason: '没有活跃 flow 可以终止。\n运行 feat-flow start <需求描述> 开始新工作流。',
-    };
-    return { hookSpecificOutput: out };
+export async function handleAbort(repoRoot: string, flowName: string): Promise<CommandResult> {
+  const state = await readActiveState(repoRoot, flowName);
+  if (!state) {
+    return { action: 'deny', reason: 'No active flow to abort.' };
   }
 
-  const state = readState(cwd);
-  const rawFlowId = state?.flow_id ?? 'unknown';
-  // Validate flowId before use in shell — tampered state.json could inject metacharacters
-  const flowId = /^[\w/-]+$/.test(rawFlowId) ? rawFlowId : 'unknown-flow';
-  const rawSha = state?.base_sha ?? 'HEAD';
-  // Validate before shell interpolation — prevents injection via tampered state.json
-  const baseSha = /^[0-9a-f]{7,40}$/i.test(rawSha) || rawSha === 'HEAD' ? rawSha : 'HEAD';
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const branchName = `feat-flow/aborted-${timestamp}`;
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  const branchName = `${flowName}/aborted-${timestamp}`;
 
   const exec = (cmd: string) =>
-    execSync(cmd, { cwd, stdio: 'pipe' }).toString().trim();
-
-  let abortBranch = branchName;
+    execSync(cmd, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
 
   try {
-    // Copy transitions.log to docs before committing
-    const p = paths(cwd);
-    const docsDir = join(cwd, 'docs', 'feat-flows', flowId);
-    if (existsSync(p.transitionsLog) && existsSync(docsDir)) {
-      try {
-        copyFileSync(p.transitionsLog, join(docsDir, 'history.log'));
-      } catch { /* non-fatal */ }
-    }
+    exec(`git checkout -b "${branchName}"`);
 
-    // Create abort branch — must succeed before any destructive operation
-    exec(`git checkout -b ${branchName}`);
+    const snapshotDir = join(repoRoot, 'docs', flowName, state.flow_id);
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, 'state-snapshot.json'),
+      JSON.stringify(state, null, 2)
+    );
 
     exec('git add -A');
     try {
-      exec(`git commit -m "feat-flow: abort flow ${flowId}"`);
+      exec(`git commit -m "${flowName}: abort flow ${state.flow_id}"`);
     } catch {
-      // Nothing to commit — acceptable
+      // nothing to commit
     }
 
-    // Return to original branch BEFORE resetting (guard: if this fails, do not reset)
     exec('git checkout -');
-    // Only reset after confirmed back on original branch
-    exec(`git reset --hard ${baseSha}`);
-
-    abortBranch = branchName;
   } catch (err) {
-    // Partial failure — still clean up marker
-    appendTransition(cwd, `ABORT_ERROR ${String(err)}`);
+    await appendTransition(repoRoot, flowName, `ABORT_ERROR ${String(err)}`);
   }
 
-  // Clean up marker, token, and transitions log entry
-  removeMarker(cwd);
-  removeGateToken(cwd);
-  appendTransition(cwd, `FLOW_ABORTED flow_id=${flowId} branch=${abortBranch}`);
+  const activeJsonPath = join(repoRoot, '.ai-flow', flowName, 'state', 'active.json');
+  if (existsSync(activeJsonPath)) unlinkSync(activeJsonPath);
+  await deleteGateToken(repoRoot, flowName);
+  await appendTransition(repoRoot, flowName, `ABORTED branch=${branchName}`);
 
-  const ctx =
-    `✅ feat-flow 已终止\n\n` +
-    `flow_id:      ${flowId}\n` +
-    `abort branch: ${abortBranch}\n\n` +
-    `所有改动已保存到 ${abortBranch} 分支。\n` +
-    `如需恢复，执行：feat-flow resume ${abortBranch}`;
-
-  const out: UserPromptOutput = {
-    hookEventName: 'UserPromptSubmit',
-    additionalContext: ctx,
-  };
   return {
-    systemMessage: `✅ feat-flow 已终止，改动保存至 ${abortBranch}`,
-    hookSpecificOutput: out,
+    action: 'allow',
+    additionalContext: `Flow '${flowName}' aborted. Changes saved to branch: ${branchName}\nTo resume: ${flowName} resume ${branchName}`,
   };
 }

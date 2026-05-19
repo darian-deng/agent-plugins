@@ -1,130 +1,130 @@
-/**
- * SessionStart hook — state restoration across sessions.
- *
- * Responsibilities:
- *  - Pass through when no active marker
- *  - Detect new session_id (after /clear) → reset context warning
- *  - Validate HMAC; warn if mismatch
- *  - Inject current stage context + expected_next
- *  - If waiting_for_gate → inject gate reminder with token retrieval hint
- *  - Update model → context_size in state if model provided
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import {
-  createTestRepo,
-  writeMarker,
-  writeState,
-  writeGateToken,
-} from './fixtures/helpers.js';
+import { readFileSync } from 'fs';
+import { execSync } from 'child_process';
+import { handleSessionStart } from '../src/lib/session-handler.js';
+import { readActiveState } from '../src/lib/state.js';
+import { createFlowTestRepo, writeActiveState, writeGateToken, MINIMAL_CONFIG } from './fixtures/helpers.js';
 import type { SessionStartInput } from '../src/lib/types.js';
 
-import { handleSessionStart } from '../src/lib/session-handler.js';
+let cleanups: Array<() => void> = [];
 
-function input(repoRoot: string, overrides: Partial<SessionStartInput> = {}): SessionStartInput {
+afterEach(() => {
+  for (const c of cleanups) c();
+  cleanups = [];
+});
+
+function makeRepo() {
+  const repo = createFlowTestRepo('test-flow', MINIMAL_CONFIG);
+  cleanups.push(repo.cleanup);
+  return repo;
+}
+
+function makeInput(repoRoot: string, sessionId: string, opts?: Partial<SessionStartInput>): SessionStartInput {
   return {
     hook_event_name: 'SessionStart',
-    session_id: 'sess-new-001',
+    session_id: sessionId,
     cwd: repoRoot,
-    model: 'claude-sonnet-4-6',
-    ...overrides,
+    ...opts,
   };
 }
 
-// ─── no active flow ────────────────────────────────────────────────────────────
+describe('handleSessionStart', () => {
+  it('no active flow → null (no injection)', async () => {
+    const repo = makeRepo();
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-1'));
+    expect(out).toBeNull();
+  });
 
-describe('SessionStart: no active flow', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
+  it('active flow, no gate → injects flow summary and stage prompt content', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build feature',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('test-flow');
+    expect(out!.additionalContext).toContain('work');
+    expect(out!.additionalContext).toContain('Stage: work');
+  });
 
-  beforeEach(() => ({ repoRoot, cleanup } = createTestRepo()));
-  afterEach(() => cleanup());
+  it('active flow with gate → injects gate status', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    writeGateToken(repo.repoRoot, 'test-flow', 'tok-abc');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out!.additionalContext).toMatch(/gate|approve/i);
+  });
 
-  it('no marker → null output', async () => {
-    const result = await handleSessionStart(input(repoRoot));
-    expect(result).toBeNull();
+  it('new session → context_warning reset in state', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'old-session',
+      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_warning.warned).toBe(false);
+  });
+
+  it('same session → context_warning NOT reset', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'same-session',
+      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'same-session'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_warning.warned).toBe(true);
+  });
+
+  it('last_session_id updated in active.json after session start', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'old-sess',
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'new-sess-123'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.last_session_id).toBe('new-sess-123');
+  });
+
+  it('missing stage prompt file → injects summary without crash', async () => {
+    const repo = makeRepo();
+    execSync(`rm -f "${join(repo.flowDir, 'stages', 'work.md')}"`, { stdio: 'pipe' });
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('test-flow');
   });
 });
-
-// ─── state restoration ────────────────────────────────────────────────────────
-
-describe('SessionStart: state restoration', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, cleanup } = createTestRepo());
-    writeMarker(repoRoot, 'test-flow');
-  });
-  afterEach(() => cleanup());
-
-  it('injects current stage and expected_next', async () => {
-    writeState(repoRoot, {
-      current_stage: 'stage-3',
-      expected_next: 'dispatch architect subagents',
-      waiting_for_gate: false,
-      last_session_id: 'sess-old-001',
-    });
-    const result = await handleSessionStart(input(repoRoot));
-    expect(result?.hookSpecificOutput?.additionalContext).toMatch(/stage-3/);
-    expect(result?.hookSpecificOutput?.additionalContext).toMatch(/architect/);
-  });
-
-  it('waiting_for_gate=true → injects gate reminder with token hint', async () => {
-    writeState(repoRoot, {
-      current_stage: 'stage-1',
-      waiting_for_gate: true,
-      gate_type: 'stage',
-      last_session_id: 'sess-old-001',
-    });
-    writeGateToken(repoRoot, 'abc123def456');
-    const result = await handleSessionStart(input(repoRoot));
-    expect(result?.hookSpecificOutput?.additionalContext).toMatch(/feat-flow approve/);
-    expect(result?.hookSpecificOutput?.additionalContext).toMatch(/gate-token/);
-  });
-});
-
-// ─── new session_id detection ─────────────────────────────────────────────────
-
-describe('SessionStart: session change resets context warning', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, cleanup } = createTestRepo());
-    writeMarker(repoRoot, 'test-flow');
-  });
-  afterEach(() => cleanup());
-
-  it('new session_id → context_warning reset in state.json', async () => {
-    writeState(repoRoot, {
-      current_stage: 'stage-5',
-      last_session_id: 'sess-old-001',
-      context_warning: { warned: true, warned_at_pct: 42, warned_at: '2026-01-01T00:00:00Z' },
-    });
-    await handleSessionStart(input(repoRoot, { session_id: 'sess-new-999' }));
-    const state = JSON.parse(
-      require('fs').readFileSync(join(repoRoot, '.feat-flow/state.json'), 'utf-8'),
-    );
-    expect(state.context_warning.warned).toBe(false);
-    expect(state.context_warning.warned_at_pct).toBeNull();
-    expect(state.last_session_id).toBe('sess-new-999');
-  });
-
-  it('same session_id (reconnect) → context_warning NOT reset', async () => {
-    writeState(repoRoot, {
-      current_stage: 'stage-5',
-      last_session_id: 'sess-same-001',
-      context_warning: { warned: true, warned_at_pct: 42, warned_at: '2026-01-01T00:00:00Z' },
-    });
-    await handleSessionStart(input(repoRoot, { session_id: 'sess-same-001' }));
-    const state = JSON.parse(
-      require('fs').readFileSync(join(repoRoot, '.feat-flow/state.json'), 'utf-8'),
-    );
-    expect(state.context_warning.warned).toBe(true);
-  });
-});
-
-// HMAC validation removed — secret + HMAC deemed unnecessary.
-// Security is provided by token mechanism + PreToolUse write protection.

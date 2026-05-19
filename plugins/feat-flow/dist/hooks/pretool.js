@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
-import { handlePreToolUse } from '../lib/pretool-handler.js';
+import { handlePreTool } from '../lib/pretool-handler.js';
 const raw = (() => { try {
     return readFileSync(0, 'utf-8');
 }
@@ -14,11 +14,12 @@ catch {
     return {};
 } })();
 try {
-    const result = await handlePreToolUse(input);
-    if (result)
-        process.stdout.write(JSON.stringify(result));
+    const result = await handlePreTool(input);
+    if (result) {
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: result }));
+    }
 }
 catch (e) {
-    process.stderr.write(`[feat-flow pretool error] ${String(e)}\n`);
+    process.stderr.write(`[ai-flow pretool error] ${String(e)}\n`);
 }
 //# sourceMappingURL=pretool.js.map

@@ -15,10 +15,13 @@ catch {
 } })();
 try {
     const result = await handleSessionStart(input);
-    if (result)
-        process.stdout.write(JSON.stringify(result));
+    if (result) {
+        process.stdout.write(JSON.stringify({
+            hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: result.additionalContext }
+        }));
+    }
 }
 catch (e) {
-    process.stderr.write(`[feat-flow session error] ${String(e)}\n`);
+    process.stderr.write(`[ai-flow session error] ${String(e)}\n`);
 }
 //# sourceMappingURL=session.js.map

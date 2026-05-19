@@ -1,3 +1,7 @@
-import type { PostToolInput, HookOutput } from './types.js';
-export declare function handlePostToolUse(input: PostToolInput): Promise<HookOutput | null>;
+import type { PostToolInput } from './types.js';
+export declare function handlePostTool(input: PostToolInput & {
+    context_size_pct?: number;
+}): Promise<{
+    additionalContext: string;
+} | null>;
 //# sourceMappingURL=posttool-handler.d.ts.map

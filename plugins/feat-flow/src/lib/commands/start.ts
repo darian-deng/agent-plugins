@@ -1,93 +1,115 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import type { UserPromptInput, HookOutput, UserPromptOutput } from '../types.js';
-import { runPreflight, getBaseSha } from '../preflight.js';
-import { writeState, writeMarker, makeInitialState, appendTransition, paths } from '../state.js';
-import { contextSizeForModel, STAGES_DIR, HELPER_PATH } from '../config.js';
+import { execSync } from 'child_process';
+import { loadFlowConfig } from '../flow-config-loader.js';
+import { hasActiveFlow, writeActiveState, appendTransition, type ActiveState } from '../state.js';
+import { runScript } from '../script-executor.js';
+import type { CommandResult } from '../types.js';
 
-function slugify(text: string): string {
-  const result = text
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, '')   // strip non-ASCII (including CJK)
-    .replace(/\s+/g, '-')
-    .slice(0, 40)
-    .replace(/-+$/, '')
-    .replace(/^-+/, '');
-  return result || 'flow';     // fallback: pure CJK input → 'flow'
+const BLOCK_START_IF_ABOVE_PCT = 95;
+
+function generateFlowId(flowName: string): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${flowName}-${rand}`;
 }
 
-export async function handleStart(input: UserPromptInput): Promise<HookOutput> {
-  const { cwd, session_id, prompt } = input;
+function isWorkingTreeDirty(repoRoot: string): boolean {
+  try {
+    const out = execSync('git status --porcelain', { cwd: repoRoot, encoding: 'utf-8' });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
 
-  const requirement = prompt.replace(/^feat-flow\s+start\s*/i, '').trim();
+function getBaseSha(repoRoot: string): string {
+  try {
+    return execSync('git rev-parse HEAD', { cwd: repoRoot, encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
 
-  if (!requirement) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason:
-        '请提供需求描述。\n\n用法：feat-flow start <需求描述>\n例如：feat-flow start 搭建用户登录系统',
-    };
-    return { hookSpecificOutput: out };
+export async function handleStart(
+  repoRoot: string,
+  flowName: string,
+  requirement: string,
+  sessionId: string,
+  contextSizePct: number
+): Promise<CommandResult> {
+  if (!requirement.trim()) {
+    return { action: 'deny', reason: 'A requirement description is required. Usage: {flowName} start <requirement>' };
   }
 
-  const preflight = runPreflight(cwd);
-  if (!preflight.ok) {
-    const out: UserPromptOutput = {
-      hookEventName: 'UserPromptSubmit',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `feat-flow start 失败\n\n${preflight.errors.join('\n\n')}`,
+  if (contextSizePct >= BLOCK_START_IF_ABOVE_PCT) {
+    return {
+      action: 'deny',
+      reason: `Context is at ${contextSizePct}%. Run /clear before starting a new flow to free up context space.`,
     };
-    return { hookSpecificOutput: out };
   }
 
-  // Initialize
-  const date = new Date().toISOString().slice(0, 10);
-  const flowId = `${date}-${slugify(requirement)}`;
-  const baseSha = getBaseSha(cwd);
+  let config;
+  try {
+    config = await loadFlowConfig(repoRoot, flowName);
+  } catch (e: unknown) {
+    return { action: 'deny', reason: String(e) };
+  }
 
-  const p = paths(cwd);
-  mkdirSync(p.stateDir, { recursive: true });
+  const active = await hasActiveFlow(repoRoot);
+  if (active) {
+    return {
+      action: 'deny',
+      reason: `Flow '${active.flowName}' is already active. Run '${active.flowName} abort' before starting a new flow.`,
+    };
+  }
 
-  // Create flow docs dir
-  const flowDocsDir = join(cwd, 'docs', 'feat-flows', flowId);
-  mkdirSync(flowDocsDir, { recursive: true });
+  if (isWorkingTreeDirty(repoRoot)) {
+    return {
+      action: 'deny',
+      reason: 'Working tree has uncommitted changes. Run git stash or commit your changes before starting a flow.',
+    };
+  }
 
-  // Write state
-  const state = makeInitialState({
-    flowId,
-    requirement,
-    baseSha,
-    sessionId: session_id,
-    contextSize: contextSizeForModel('claude-sonnet-4-6'),
-  });
-  writeState(cwd, state);
-  writeMarker(cwd, flowId);
-  appendTransition(cwd, `FLOW_STARTED flow_id=${flowId} base_sha=${baseSha}`);
+  const preflightPath = join(repoRoot, '.ai-flow', flowName, 'preflight.sh');
+  if (existsSync(preflightPath)) {
+    const result = await runScript(`sh "${preflightPath}"`, repoRoot);
+    if (!result.ok) {
+      return {
+        action: 'deny',
+        reason: `Preflight check failed:\n${result.reason}`,
+      };
+    }
+  }
 
-  // Inject stage-1 document
-  const stage1Doc = join(STAGES_DIR, 'stage-1.md');
+  const flowId = generateFlowId(flowName);
+  const baseSha = getBaseSha(repoRoot);
+  const firstStage = config.stages[0]!;
+
+  const state: ActiveState = {
+    flow_id: flowId,
+    flow_name: flowName,
+    requirement: requirement.trim(),
+    current_stage: firstStage.id,
+    base_sha: baseSha,
+    started_at: new Date().toISOString(),
+    last_session_id: sessionId,
+    context_size: contextSizePct,
+    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+  };
+
+  await writeActiveState(repoRoot, flowName, state);
+  await appendTransition(repoRoot, flowName, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
+
+  const promptPath = join(repoRoot, '.ai-flow', flowName, firstStage.prompt);
   let stageContent = '';
-  if (existsSync(stage1Doc)) {
-    stageContent = '\n\n--- Stage 1 指令 ---\n' + readFileSync(stage1Doc, 'utf-8');
+  if (existsSync(promptPath)) {
+    stageContent = readFileSync(promptPath, 'utf-8');
   }
 
   const ctx =
-    `✅ feat-flow 已启动！\n\n` +
-    `flow_id:   ${flowId}\n` +
-    `base_sha:  ${baseSha}\n` +
-    `当前阶段:  stage-1 需求确认\n` +
-    `需求描述:  ${requirement}\n\n` +
-    `产出文件路径：docs/feat-flows/${flowId}/design.md\n` +
-    `如需了解工作流规则：${HELPER_PATH}` +
+    `Flow '${flowName}' started!\n\n` +
+    `flow_id: ${flowId}\nrequirement: ${requirement.trim()}\ncurrent_stage: ${firstStage.id}\n\n` +
     stageContent;
 
-  const out: UserPromptOutput = {
-    hookEventName: 'UserPromptSubmit',
-    additionalContext: ctx,
-  };
-  return {
-    systemMessage: `✅ feat-flow 已启动！flow_id: ${flowId} | 进入 stage-1 需求确认`,
-    hookSpecificOutput: out,
-  };
+  return { action: 'allow', additionalContext: ctx };
 }

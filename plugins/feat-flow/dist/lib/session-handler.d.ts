@@ -1,3 +1,5 @@
-import type { SessionStartInput, HookOutput } from './types.js';
-export declare function handleSessionStart(input: SessionStartInput): Promise<HookOutput | null>;
+import type { SessionStartInput } from './types.js';
+export declare function handleSessionStart(input: SessionStartInput): Promise<{
+    additionalContext: string;
+} | null>;
 //# sourceMappingURL=session-handler.d.ts.map

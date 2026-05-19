@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'fs';
-import { handlePostToolUse } from '../lib/posttool-handler.js';
+import { handlePostTool } from '../lib/posttool-handler.js';
 const raw = (() => { try {
     return readFileSync(0, 'utf-8');
 }
@@ -14,11 +14,14 @@ catch {
     return {};
 } })();
 try {
-    const result = await handlePostToolUse(input);
-    if (result)
-        process.stdout.write(JSON.stringify(result));
+    const result = await handlePostTool(input);
+    if (result) {
+        process.stdout.write(JSON.stringify({
+            hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: result.additionalContext }
+        }));
+    }
 }
 catch (e) {
-    process.stderr.write(`[feat-flow posttool error] ${String(e)}\n`);
+    process.stderr.write(`[ai-flow posttool error] ${String(e)}\n`);
 }
 //# sourceMappingURL=posttool.js.map

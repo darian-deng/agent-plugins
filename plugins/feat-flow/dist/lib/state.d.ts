@@ -1,30 +1,35 @@
-import type { FeatFlowState, ActiveMarker, InitRecord } from './types.js';
-export declare const paths: (repoRoot: string) => {
-    stateDir: string;
-    stateJson: string;
-    gateToken: string;
-    transitionsLog: string;
-    violationsLog: string;
-    marker: string;
-};
-export declare function isInitDone(cwd: string, dataDir?: string): boolean;
-export declare function writeInitRecord(cwd: string, record?: Partial<InitRecord>, dataDir?: string): void;
-export declare function readState(repoRoot: string): FeatFlowState | null;
-export declare function readMarker(repoRoot: string): ActiveMarker | null;
-export declare function hasActiveFlow(repoRoot: string): boolean;
-export declare function readGateToken(repoRoot: string): string | null;
-export declare function writeState(repoRoot: string, state: FeatFlowState): void;
-export declare function writeMarker(repoRoot: string, flowId: string): void;
-export declare function removeMarker(repoRoot: string): void;
-export declare function writeGateToken(repoRoot: string, token: string): void;
-export declare function removeGateToken(repoRoot: string): void;
-export declare function appendTransition(repoRoot: string, event: string): void;
-export declare function makeInitialState(opts: {
-    flowId: string;
+import type { FlowConfig } from './flow-schema.js';
+export interface ContextWarning {
+    warned: boolean;
+    warned_at_pct: number | null;
+    warned_at: string | null;
+}
+export interface ActiveState {
+    flow_id: string;
+    flow_name: string;
     requirement: string;
-    baseSha: string;
-    sessionId: string;
-    contextSize: number;
-}): FeatFlowState;
-export declare function advanceStage(state: FeatFlowState): FeatFlowState;
+    current_stage: string;
+    base_sha: string;
+    started_at: string;
+    last_session_id: string | null;
+    context_size: number;
+    context_warning: ContextWarning;
+}
+export declare function readActiveState(repoRoot: string, flowName: string): Promise<ActiveState | null>;
+export declare function writeActiveState(repoRoot: string, flowName: string, state: ActiveState): Promise<void>;
+export declare function hasActiveFlow(repoRoot: string): Promise<{
+    flowName: string;
+    state: ActiveState;
+} | null>;
+export declare function isGateActive(repoRoot: string, flowName: string): Promise<boolean>;
+export declare function writeGateToken(repoRoot: string, flowName: string, token: string): Promise<void>;
+export declare function deleteGateToken(repoRoot: string, flowName: string): Promise<void>;
+export declare function readGateToken(repoRoot: string, flowName: string): Promise<string | null>;
+export declare function appendTransition(repoRoot: string, flowName: string, message: string): Promise<void>;
+export declare function appendViolation(repoRoot: string, flowName: string, message: string): Promise<void>;
+export declare function nextStage(config: FlowConfig, currentStageId: string): string | null;
+export declare function signalPath(repoRoot: string, flowName: string): string;
+export declare function activeJsonPath(repoRoot: string, flowName: string): string;
+export declare function gateTokenPath(repoRoot: string, flowName: string): string;
+export declare function scriptsDir(repoRoot: string, flowName: string): string;
 //# sourceMappingURL=state.d.ts.map

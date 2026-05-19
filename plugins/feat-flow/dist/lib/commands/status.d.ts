@@ -1,3 +1,3 @@
-import type { UserPromptInput, HookOutput } from '../types.js';
-export declare function handleStatus(input: UserPromptInput): Promise<HookOutput>;
+import type { CommandResult } from '../types.js';
+export declare function handleStatus(repoRoot: string, flowName: string): Promise<CommandResult>;
 //# sourceMappingURL=status.d.ts.map

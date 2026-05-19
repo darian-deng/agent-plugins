@@ -1,173 +1,84 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync, appendFileSync, realpathSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { STATE_NOTE, NEXT_STAGE as NEXT } from './types.js';
-import { getPluginDataDir } from './config.js';
-// ─── Paths ─────────────────────────────────────────────────────────────────────
-export const paths = (repoRoot) => ({
-    stateDir: join(repoRoot, '.feat-flow'),
-    stateJson: join(repoRoot, '.feat-flow/state.json'),
-    gateToken: join(repoRoot, '.feat-flow/gate-token'),
-    transitionsLog: join(repoRoot, '.feat-flow/transitions.log'),
-    violationsLog: join(repoRoot, '.feat-flow/violations.log'),
-    marker: join(repoRoot, '.claude/.feat-flow-active'),
-});
-// ─── Init record (stored in CLAUDE_PLUGIN_DATA, not in project) ────────────────
-function realKey(p) {
+function statePath(repoRoot, flowName, file) {
+    return join(repoRoot, '.ai-flow', flowName, 'state', file);
+}
+function stateDir(repoRoot, flowName) {
+    return join(repoRoot, '.ai-flow', flowName, 'state');
+}
+export async function readActiveState(repoRoot, flowName) {
+    const path = statePath(repoRoot, flowName, 'active.json');
+    if (!existsSync(path))
+        return null;
     try {
-        return realpathSync(p);
-    }
-    catch {
-        return p;
-    }
-}
-function projectsFilePath(dataDir) {
-    return join(dataDir, 'projects.json');
-}
-function readProjects(dataDir) {
-    try {
-        return JSON.parse(readFileSync(projectsFilePath(dataDir), 'utf-8'));
-    }
-    catch {
-        return {};
-    }
-}
-export function isInitDone(cwd, dataDir) {
-    const dir = dataDir ?? getPluginDataDir();
-    const projects = readProjects(dir);
-    return realKey(cwd) in projects;
-}
-export function writeInitRecord(cwd, record = {}, dataDir) {
-    const dir = dataDir ?? getPluginDataDir();
-    mkdirSync(dir, { recursive: true });
-    const projects = readProjects(dir);
-    projects[realKey(cwd)] = {
-        initialized_at: new Date().toISOString(),
-        node_version: process.version,
-        git_remote: record.git_remote ?? '',
-        ...record,
-    };
-    writeFileSync(projectsFilePath(dir), JSON.stringify(projects, null, 2));
-}
-// ─── Read ───────────────────────────────────────────────────────────────────────
-export function readState(repoRoot) {
-    const p = paths(repoRoot);
-    try {
-        return JSON.parse(readFileSync(p.stateJson, 'utf-8'));
+        return JSON.parse(readFileSync(path, 'utf-8'));
     }
     catch {
         return null;
     }
 }
-export function readMarker(repoRoot) {
-    const p = paths(repoRoot);
-    try {
-        return JSON.parse(readFileSync(p.marker, 'utf-8'));
-    }
-    catch {
+export async function writeActiveState(repoRoot, flowName, state) {
+    mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
+    writeFileSync(statePath(repoRoot, flowName, 'active.json'), JSON.stringify(state, null, 2));
+}
+export async function hasActiveFlow(repoRoot) {
+    const aiFlowDir = join(repoRoot, '.ai-flow');
+    if (!existsSync(aiFlowDir))
         return null;
+    const entries = readdirSync(aiFlowDir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (!entry.isDirectory())
+            continue;
+        const state = await readActiveState(repoRoot, entry.name);
+        if (state)
+            return { flowName: entry.name, state };
     }
+    return null;
 }
-export function hasActiveFlow(repoRoot) {
-    return existsSync(paths(repoRoot).marker);
+export async function isGateActive(repoRoot, flowName) {
+    return existsSync(statePath(repoRoot, flowName, 'gate-token'));
 }
-export function readGateToken(repoRoot) {
-    try {
-        return readFileSync(paths(repoRoot).gateToken, 'utf-8').trim();
-    }
-    catch {
+export async function writeGateToken(repoRoot, flowName, token) {
+    mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
+    writeFileSync(statePath(repoRoot, flowName, 'gate-token'), token);
+}
+export async function deleteGateToken(repoRoot, flowName) {
+    const path = statePath(repoRoot, flowName, 'gate-token');
+    if (existsSync(path))
+        unlinkSync(path);
+}
+export async function readGateToken(repoRoot, flowName) {
+    const path = statePath(repoRoot, flowName, 'gate-token');
+    if (!existsSync(path))
         return null;
-    }
+    return readFileSync(path, 'utf-8').trim();
 }
-// ─── Write ──────────────────────────────────────────────────────────────────────
-export function writeState(repoRoot, state) {
-    const p = paths(repoRoot);
-    mkdirSync(p.stateDir, { recursive: true });
-    const toWrite = { ...state, _note: STATE_NOTE };
-    const tmp = p.stateJson + '.tmp';
-    writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
-    try {
-        renameSync(tmp, p.stateJson);
-    }
-    catch {
-        writeFileSync(p.stateJson, readFileSync(tmp));
-        try {
-            unlinkSync(tmp);
-        }
-        catch { /* ignore */ }
-    }
+export async function appendTransition(repoRoot, flowName, message) {
+    const path = statePath(repoRoot, flowName, 'transitions.log');
+    const timestamp = new Date().toISOString();
+    appendFileSync(path, `${timestamp} ${message}\n`);
 }
-export function writeMarker(repoRoot, flowId) {
-    const marker = { flow_id: flowId, started_at: new Date().toISOString() };
-    const markerPath = paths(repoRoot).marker;
-    mkdirSync(join(repoRoot, '.claude'), { recursive: true });
-    writeFileSync(markerPath, JSON.stringify(marker, null, 2));
+export async function appendViolation(repoRoot, flowName, message) {
+    const path = statePath(repoRoot, flowName, 'violations.log');
+    const timestamp = new Date().toISOString();
+    appendFileSync(path, `${timestamp} ${message}\n`);
 }
-export function removeMarker(repoRoot) {
-    try {
-        unlinkSync(paths(repoRoot).marker);
-    }
-    catch { /* ok */ }
+export function nextStage(config, currentStageId) {
+    const idx = config.stages.findIndex((s) => s.id === currentStageId);
+    if (idx === -1 || idx === config.stages.length - 1)
+        return null;
+    return config.stages[idx + 1].id;
 }
-export function writeGateToken(repoRoot, token) {
-    writeFileSync(paths(repoRoot).gateToken, token);
+export function signalPath(repoRoot, flowName) {
+    return statePath(repoRoot, flowName, 'signal');
 }
-export function removeGateToken(repoRoot) {
-    try {
-        unlinkSync(paths(repoRoot).gateToken);
-    }
-    catch { /* ok */ }
+export function activeJsonPath(repoRoot, flowName) {
+    return statePath(repoRoot, flowName, 'active.json');
 }
-export function appendTransition(repoRoot, event) {
-    const ts = new Date().toISOString();
-    try {
-        appendFileSync(paths(repoRoot).transitionsLog, `[${ts}] ${event}\n`);
-    }
-    catch { /* fail-open */ }
+export function gateTokenPath(repoRoot, flowName) {
+    return statePath(repoRoot, flowName, 'gate-token');
 }
-// ─── State helpers ─────────────────────────────────────────────────────────────
-export function makeInitialState(opts) {
-    const now = new Date().toISOString();
-    return {
-        _note: STATE_NOTE,
-        schema_version: '1.0',
-        flow_id: opts.flowId,
-        requirement: opts.requirement,
-        current_stage: 'stage-1',
-        base_sha: opts.baseSha,
-        started_at: now,
-        last_session_id: opts.sessionId,
-        context_size: opts.contextSize,
-        stage_progress: {
-            'stage-1': { entered_at: now, completed_at: null, gate_approved_at: null },
-        },
-        waiting_for_gate: false,
-        gate_type: null,
-        gate_context: null,
-        expected_next: 'read stage-1 document and begin requirements gathering',
-        context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-        approved_task_gates: [],
-    };
-}
-export function advanceStage(state) {
-    const next = NEXT[state.current_stage];
-    if (!next)
-        return state;
-    const now = new Date().toISOString();
-    const updated = { ...state };
-    updated.stage_progress = {
-        ...state.stage_progress,
-        [state.current_stage]: {
-            ...state.stage_progress[state.current_stage],
-            completed_at: now,
-            gate_approved_at: now,
-        },
-        [next]: { entered_at: now, completed_at: null, gate_approved_at: null },
-    };
-    updated.current_stage = next;
-    updated.waiting_for_gate = false;
-    updated.gate_type = null;
-    updated.gate_context = null;
-    updated.expected_next = `begin ${next}`;
-    return updated;
+export function scriptsDir(repoRoot, flowName) {
+    return join(repoRoot, '.ai-flow', flowName, 'scripts');
 }
 //# sourceMappingURL=state.js.map

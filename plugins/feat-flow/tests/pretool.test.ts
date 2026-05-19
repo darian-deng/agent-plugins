@@ -1,166 +1,250 @@
-/**
- * PreToolUse hook — control plane protection + stage-scoped path enforcement.
- *
- * Responsibilities:
- *  - Pass through when no active flow
- *  - Hard deny writes to .feat-flow/** (HMAC-protected state)
- *  - Hard deny writes to .claude/plugins/feat-flow/** (plugin files: hooks, stages, lib)
- *  - (legacy .claude/hooks/ no longer used in plugin-mode install)
- *  - Allow reads to .feat-flow/** (AI needs to read status files)
- *  - Stage-scoped path: only allow writes to expected output path per stage
- *  - stage-5 exception: allow writes anywhere (implementation stage)
- */
-
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import {
-  createTestRepo,
-  writeMarker,
-  writeState,
-} from './fixtures/helpers.js';
+import { writeFileSync, chmodSync, mkdirSync } from 'fs';
+import { execSync } from 'child_process';
+import { handlePreTool } from '../src/lib/pretool-handler.js';
+import { isGateActive, readActiveState } from '../src/lib/state.js';
+import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
 
-import { handlePreToolUse } from '../src/lib/pretool-handler.js';
+let cleanups: Array<() => void> = [];
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+afterEach(() => {
+  for (const c of cleanups) c();
+  cleanups = [];
+});
 
-function editInput(filePath: string, repoRoot: string, tool = 'Edit'): PreToolInput {
+function makeRepo(config = MINIMAL_CONFIG) {
+  const repo = createFlowTestRepo('test-flow', config);
+  cleanups.push(repo.cleanup);
+  return repo;
+}
+
+function makeInput(
+  repoRoot: string,
+  toolName: string,
+  toolInput: Record<string, unknown>
+): PreToolInput {
   return {
     hook_event_name: 'PreToolUse',
-    session_id: 'sess-001',
+    session_id: 'sess-1',
     cwd: repoRoot,
-    tool_name: tool,
-    tool_input: { file_path: filePath },
+    tool_name: toolName,
+    tool_input: toolInput,
   };
 }
 
-function isDenied(result: Awaited<ReturnType<typeof handlePreToolUse>>): boolean {
-  return result?.hookSpecificOutput?.permissionDecision === 'deny';
+function activateFlow(repoRoot: string, stage = 'work') {
+  writeActiveState(repoRoot, 'test-flow', {
+    flow_id: 'test-flow-abc',
+    flow_name: 'test-flow',
+    requirement: 'test',
+    current_stage: stage,
+    base_sha: 'abc',
+  });
 }
 
-// ─── no active flow ────────────────────────────────────────────────────────────
-
-describe('PreToolUse: no active flow', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
-
-  beforeEach(() => ({ repoRoot, cleanup } = createTestRepo()));
-  afterEach(() => cleanup());
-
-  it('any write → pass through (null)', async () => {
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, '.feat-flow/state.json'), repoRoot),
-    );
-    expect(result).toBeNull();
+describe('handlePreTool — no active flow', () => {
+  it('any write → null (pass through)', async () => {
+    const repo = makeRepo();
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: '/tmp/test.txt', content: 'x' }));
+    expect(out).toBeNull();
   });
 });
 
-// ─── control plane hard deny ──────────────────────────────────────────────────
-
-describe('PreToolUse: control plane protection', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, cleanup } = createTestRepo());
-    writeMarker(repoRoot, 'test-flow');
-    writeState(repoRoot, { current_stage: 'stage-1' });
+describe('handlePreTool — signal interception', () => {
+  it('no script, no gate → ALLOW write, advance stage', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
   });
-  afterEach(() => cleanup());
 
-  const controlPlanePaths = [
-    '.feat-flow/state.json',
-    '.feat-flow/secret',
-    '.feat-flow/gate-token',
-    '.feat-flow/transitions.log',
-    '.claude/plugins/feat-flow/src/hooks/userprompt.ts',
-    '.claude/plugins/feat-flow/src/hooks/new-script.ts',
-    '.claude/plugins/feat-flow/helper.md',
-    '.claude/plugins/feat-flow/stages/stage-1.md',
-    '.claude/plugins/feat-flow/hooks/hooks.json',
-  ];
+  it('script passes, no gate → ALLOW write, advance stage', async () => {
+    const repo = createFlowTestRepo('test-flow', SCRIPTED_CONFIG);
+    cleanups.push(repo.cleanup);
+    activateFlow(repo.repoRoot);
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts'), { recursive: true });
+    writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), 0o755);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+  });
 
-  for (const rel of controlPlanePaths) {
-    it(`Edit ${rel} → deny`, async () => {
-      const result = await handlePreToolUse(editInput(join(repoRoot, rel), repoRoot));
-      expect(isDenied(result)).toBe(true);
-      expect(result?.hookSpecificOutput?.permissionDecisionReason).toBeTruthy();
-    });
-
-    it(`Write ${rel} → deny`, async () => {
-      const result = await handlePreToolUse(editInput(join(repoRoot, rel), repoRoot, 'Write'));
-      expect(isDenied(result)).toBe(true);
-    });
-  }
-
-  it('Read .feat-flow/state.json → allow (AI may read state for context)', async () => {
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, '.feat-flow/state.json'), repoRoot, 'Read'),
+  it('script fails → DENY write, additionalContext includes failure reason', async () => {
+    const repo = createFlowTestRepo('test-flow', SCRIPTED_CONFIG);
+    cleanups.push(repo.cleanup);
+    activateFlow(repo.repoRoot);
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts'), { recursive: true });
+    writeFileSync(
+      join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'),
+      '#!/bin/sh\necho "validation failed: tests not passing"\nexit 1\n'
     );
-    expect(isDenied(result)).toBe(false);
+    chmodSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), 0o755);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/validation failed/i);
   });
 
-  it('Read .feat-flow/gate-token → deny (token must stay invisible to AI)', async () => {
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, '.feat-flow/gate-token'), repoRoot, 'Read'),
-    );
-    expect(isDenied(result)).toBe(true);
+  it('gate configured, no script → DENY write, gate-token created', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review'); // review stage has gate: true
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(true);
   });
 
-  it('Bash tool → pass through (no file_path check)', async () => {
-    const result = await handlePreToolUse({
-      hook_event_name: 'PreToolUse',
-      session_id: 'sess-001',
-      cwd: repoRoot,
-      tool_name: 'Bash',
-      tool_input: { command: 'ls' },
-    });
-    expect(isDenied(result)).toBe(false);
+  it('script passes + gate configured → DENY write, gate-token created', async () => {
+    const config = {
+      ...MINIMAL_CONFIG,
+      stages: [
+        {
+          id: 'work',
+          prompt: 'stages/work.md',
+          write_scope: 'unrestricted' as const,
+          completion: {
+            script: { command: 'bash scripts/check.sh' },
+            gate: true as const,
+          },
+        },
+        {
+          id: 'review',
+          prompt: 'stages/review.md',
+          write_scope: 'unrestricted' as const,
+          completion: {},
+        },
+      ],
+    };
+    const repo = createFlowTestRepo('test-flow', config);
+    cleanups.push(repo.cleanup);
+    activateFlow(repo.repoRoot, 'work');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts'), { recursive: true });
+    writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), 0o755);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(true);
+  });
+
+  it('signal write at last stage → ALLOW, complete flow', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review'); // last stage, no gate on signal-only completion
+    const config = {
+      ...MINIMAL_CONFIG,
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted' as const, completion: {} },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted' as const, completion: {} },
+      ],
+    };
+    // re-create with no gate on last stage
+    const repo2 = createFlowTestRepo('test-flow', config);
+    cleanups.push(repo2.cleanup);
+    activateFlow(repo2.repoRoot, 'review');
+    const signalPath = join(repo2.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo2.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+    const state = await readActiveState(repo2.repoRoot, 'test-flow');
+    expect(state).toBeNull();
   });
 });
 
-// ─── stage-scoped path enforcement ────────────────────────────────────────────
-
-describe('PreToolUse: stage-scoped path enforcement', () => {
-  let repoRoot: string;
-  let cleanup: () => void;
-
-  beforeEach(() => {
-    ({ repoRoot, cleanup } = createTestRepo());
-    writeMarker(repoRoot, 'test-flow');
-  });
-  afterEach(() => cleanup());
-
-  it('stage-1: write to docs/feat-flows/ → allow', async () => {
-    writeState(repoRoot, { current_stage: 'stage-1', flow_id: 'test-flow' });
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, 'docs/feat-flows/test-flow/design.md'), repoRoot),
-    );
-    expect(isDenied(result)).toBe(false);
+describe('handlePreTool — control plane protection', () => {
+  it('write to config.json → DENY + violation logged', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const configPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'config.json');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: configPath, content: '{}' }));
+    expect(out?.permissionDecision).toBe('deny');
   });
 
-  it('stage-1: write to src/ → deny (out of scope)', async () => {
-    writeState(repoRoot, { current_stage: 'stage-1', flow_id: 'test-flow' });
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, 'src/auth/login.ts'), repoRoot),
-    );
-    expect(isDenied(result)).toBe(true);
-    expect(result?.hookSpecificOutput?.permissionDecisionReason).toMatch(/stage-1/);
+  it('write to stages/*.md in flow dir → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const stagePath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'work.md');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: stagePath, content: 'x' }));
+    expect(out?.permissionDecision).toBe('deny');
   });
 
-  it('stage-5: write to src/ → allow (implementation stage)', async () => {
-    writeState(repoRoot, { current_stage: 'stage-5', flow_id: 'test-flow' });
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, 'src/auth/login.ts'), repoRoot),
-    );
-    expect(isDenied(result)).toBe(false);
+  it('write to state/active.json directly → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const path = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: path, content: '{}' }));
+    expect(out?.permissionDecision).toBe('deny');
   });
 
-  it('stage-5: write to docs/adr/ → allow (ADRs always allowed)', async () => {
-    writeState(repoRoot, { current_stage: 'stage-2', flow_id: 'test-flow' });
-    const result = await handlePreToolUse(
-      editInput(join(repoRoot, 'docs/adr/0014-new-decision.md'), repoRoot),
-    );
-    expect(isDenied(result)).toBe(false);
+  it('write to state/gate-token directly → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const path = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: path, content: 'x' }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('Bash command touching state/signal → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: `echo done > "${signalPath}"` }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+});
+
+describe('handlePreTool — write scope', () => {
+  it('write to docs path when scope=docs_only → ALLOW', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review'); // review has docs_only
+    const allowedPath = join(repo.repoRoot, 'docs', 'test-flow', 'test-flow-abc', 'design.md');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: allowedPath, content: 'x' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('write to src/ when scope=docs_only → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review');
+    const blockedPath = join(repo.repoRoot, 'src', 'index.ts');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: blockedPath, content: 'x' }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('write to any path when scope=unrestricted → ALLOW (subject to control plane)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work'); // work stage is unrestricted
+    const anyPath = join(repo.repoRoot, 'src', 'main.ts');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: anyPath, content: 'x' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+});
+
+describe('handlePreTool — read tools', () => {
+  it('Read of state/gate-token → DENY (AI must not see token)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const tokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: tokenPath }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('Read of other state files → ALLOW', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const activePath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: activePath }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('Bash cat state/gate-token → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const tokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: `cat "${tokenPath}"` }));
+    expect(out?.permissionDecision).toBe('deny');
   });
 });
