@@ -15,7 +15,8 @@ export async function handleResume(
   flowName: string,
   branch: string
 ): Promise<CommandResult> {
-  if (!branch.trim()) {
+  const trimmedBranch = branch.trim();
+  if (!trimmedBranch) {
     return {
       action: 'deny',
       reason: `Usage: ${flowName} resume <branch>\nExample: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`,
@@ -38,13 +39,13 @@ export async function handleResume(
     }
   }
 
-  const branchCheck = gitTry(['rev-parse', '--verify', branch]);
+  const branchCheck = gitTry(['rev-parse', '--verify', trimmedBranch]);
   if (!branchCheck) {
     return { action: 'deny', reason: `Branch "${branch}" does not exist.` };
   }
 
   // look for snapshot in docs/{flowName}/*/state-snapshot.json
-  const lsOutput = gitTry(['ls-tree', '-r', '--name-only', branch, '--', `docs/${flowName}/`]);
+  const lsOutput = gitTry(['ls-tree', '-r', '--name-only', trimmedBranch, '--', `docs/${flowName}/`]);
   const snapshotPath = lsOutput?.split('\n').find((f) => f.endsWith('state-snapshot.json'));
 
   if (!snapshotPath) {
@@ -54,7 +55,7 @@ export async function handleResume(
     };
   }
 
-  const snapshotContent = gitTry(['show', `${branch}:${snapshotPath}`]);
+  const snapshotContent = gitTry(['show', `${trimmedBranch}:${snapshotPath}`]);
   if (!snapshotContent) {
     return { action: 'deny', reason: `Could not read state-snapshot.json from branch "${branch}".` };
   }
@@ -82,7 +83,7 @@ export async function handleResume(
   };
 
   await writeActiveState(repoRoot, flowName, restored);
-  await appendTransition(repoRoot, flowName, `RESUMED from_branch=${branch} stage=${currentStage}`);
+  await appendTransition(repoRoot, flowName, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
 
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
@@ -92,7 +93,7 @@ export async function handleResume(
   }
 
   const ctx =
-    `Flow '${flowName}' resumed from branch: ${branch}\n` +
+    `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
     `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
     stageContent;
 
