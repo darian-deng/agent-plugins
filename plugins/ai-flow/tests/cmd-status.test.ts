@@ -42,7 +42,7 @@ describe('handleStatus', () => {
     expect(ctx).toContain('build the feature');
   });
 
-  it('active flow, gate active → shows gate hint and approve instruction', async () => {
+  it('active flow, gate active → shows approve instruction but NOT the token value', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -56,7 +56,10 @@ describe('handleStatus', () => {
     expect(result.action).toBe('allow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
     expect(ctx).toMatch(/gate|approve/i);
-    expect(ctx).toContain('tok-12345');
+    // Token value must NOT be in additionalContext (AI-visible) — security invariant
+    expect(ctx).not.toContain('tok-12345');
+    // But user should be told how to retrieve it via a bash command they run manually
+    expect(ctx).toContain('gate-token');
   });
 
   it('context warning state shown if warned: true', async () => {

@@ -100,6 +100,13 @@ schema 约束（必须满足）：
 - exit 0 表示验证通过
 - exit 非零并打印失败原因表示验证失败
 
+**重要**：脚本的工作目录（cwd）是 `.ai-flow/{flow-name}/`，而不是项目根目录。如果脚本需要在项目根目录执行命令（如 `npm test`、`npx eslint`），需要先切换目录：
+```sh
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT" || exit 1
+npm test
+```
+
 ### .gitignore
 
 确保项目根目录 `.gitignore` 包含 `.ai-flow/*/state/`。

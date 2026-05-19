@@ -98,6 +98,22 @@ describe('handleSessionStart', () => {
     expect(state!.context_warning.warned).toBe(true);
   });
 
+  it('last_session_id null (post-resume) → context_warning reset on new session', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: null,
+      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'brand-new-session'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_warning.warned).toBe(false);
+  });
+
   it('last_session_id updated in active.json after session start', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {

@@ -47,8 +47,8 @@ Whether a Gate is active is determined solely by `existsSync(gate-token path)`. 
 
 ## Commands
 
-**`ai-flow`**
-Engine-level command prefix. Only `ai-flow help` exists (lists available Flow Definitions in the project).
+**`{flow-name}` (bare, no subcommand)**
+Invoking a flow name with no subcommand routes to the help handler for that flow, listing its stages and description. There is no engine-level `ai-flow` command prefix; all commands are prefixed by the specific flow name defined in `.ai-flow/`.
 
 **`{flow-name} start <requirement>`**
 Begins a Flow Instance. Runs Preflight, checks for clean git state, checks no other Flow Instance is active.

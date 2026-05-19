@@ -46,7 +46,7 @@
 Gate 触发后：
 1. 引擎生成随机 token，仅通过系统弹窗显示给用户（不进入 AI 上下文）
 2. AI 必须停止，等待用户执行 `feat-flow approve <token>`
-3. 用户审批前，非审批命令会清除 Gate（让 AI 继续工作精化产出）
+3. 用户审批前，非审批命令会清除 Gate（让 AI 继续工作精化产出）——下次 AI 写 signal 时 Gate 会重新触发，不会永久绕过
 
 AI 不能读取 token（引擎阻止对 `state/gate-token` 的所有访问）。
 

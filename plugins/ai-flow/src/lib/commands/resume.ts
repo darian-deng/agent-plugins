@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
@@ -30,21 +30,21 @@ export async function handleResume(
     };
   }
 
-  const exec = (cmd: string): string | null => {
+  function gitTry(args: string[]): string | null {
     try {
-      return execSync(cmd, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
+      return execFileSync('git', args, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
     } catch {
       return null;
     }
-  };
+  }
 
-  const branchCheck = exec(`git rev-parse --verify "${branch}"`);
+  const branchCheck = gitTry(['rev-parse', '--verify', branch]);
   if (!branchCheck) {
     return { action: 'deny', reason: `Branch "${branch}" does not exist.` };
   }
 
   // look for snapshot in docs/{flowName}/*/state-snapshot.json
-  const lsOutput = exec(`git ls-tree -r --name-only "${branch}" -- docs/${flowName}/ 2>/dev/null`);
+  const lsOutput = gitTry(['ls-tree', '-r', '--name-only', branch, '--', `docs/${flowName}/`]);
   const snapshotPath = lsOutput?.split('\n').find((f) => f.endsWith('state-snapshot.json'));
 
   if (!snapshotPath) {
@@ -54,7 +54,7 @@ export async function handleResume(
     };
   }
 
-  const snapshotContent = exec(`git show "${branch}:${snapshotPath}"`);
+  const snapshotContent = gitTry(['show', `${branch}:${snapshotPath}`]);
   if (!snapshotContent) {
     return { action: 'deny', reason: `Could not read state-snapshot.json from branch "${branch}".` };
   }
