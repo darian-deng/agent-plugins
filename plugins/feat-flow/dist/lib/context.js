@@ -37,16 +37,21 @@ export function contextPct(sessionId, cwd, contextWindowSize) {
     const tokens = readTokenCount(sessionId, cwd);
     return Math.round((tokens / contextWindowSize) * 100);
 }
-const MODEL_CONTEXT = {
-    'claude-opus-4-7': 200_000,
-    'claude-sonnet-4-6': 1_000_000,
-    'claude-haiku-4-5': 200_000,
-    'claude-haiku-4-5-20251001': 200_000,
-};
 export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
+/**
+ * Parse context window size from model name.
+ * Handles suffix hints like [1m] or [200k] (e.g. "claude-sonnet-4-6[1m]").
+ * Falls back to DEFAULT_CONTEXT_WINDOW if unparseable.
+ */
 export function contextWindowForModel(model) {
     if (!model)
         return DEFAULT_CONTEXT_WINDOW;
-    return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_WINDOW;
+    const m = /\[(\d+(?:\.\d+)?)(k|m)\]/i.exec(model);
+    if (m) {
+        const n = parseFloat(m[1]);
+        const unit = m[2].toLowerCase();
+        return unit === 'm' ? Math.round(n * 1_000_000) : Math.round(n * 1_000);
+    }
+    return DEFAULT_CONTEXT_WINDOW;
 }
 //# sourceMappingURL=context.js.map

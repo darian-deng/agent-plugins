@@ -113,7 +113,7 @@ describe('handleSessionStart', () => {
     expect(state!.last_session_id).toBe('new-sess-123');
   });
 
-  it('model provided → context_size saved to state as window size (not %)', async () => {
+  it('startup + model with [1m] suffix → context_size saved as 1_000_000', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -123,12 +123,15 @@ describe('handleSessionStart', () => {
       base_sha: 'abc',
       context_size: 0,
     });
-    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', { model: 'claude-sonnet-4-6' }));
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', {
+      source: 'startup',
+      model: 'claude-sonnet-4-6[1m]',
+    }));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.context_size).toBe(1_000_000);
   });
 
-  it('unknown model → context_size defaults to 1M', async () => {
+  it('non-startup source → context_size not updated even if model provided', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -136,9 +139,27 @@ describe('handleSessionStart', () => {
       requirement: 'build',
       current_stage: 'work',
       base_sha: 'abc',
-      context_size: 0,
+      context_size: 42,
     });
-    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', { model: 'unknown-model-xyz' }));
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', {
+      source: 'clear',
+      model: 'claude-sonnet-4-6[1m]',
+    }));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_size).toBe(42); // unchanged
+  });
+
+  it('startup without model → context_size set to DEFAULT (1M)', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_size: 99,
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', { source: 'startup' }));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.context_size).toBe(1_000_000);
   });

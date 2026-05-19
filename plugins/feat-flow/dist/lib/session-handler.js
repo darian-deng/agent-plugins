@@ -13,7 +13,8 @@ export async function handleSessionStart(input) {
     const updated = {
         ...state,
         last_session_id: session_id,
-        context_size: contextWindowForModel(model),
+        // Only startup events carry a reliable model name; other sources (resume/clear/compact) do not.
+        ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
     };
     if (isNewSession) {
         updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
