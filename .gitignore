@@ -1,4 +1,5 @@
 node_modules/
+plugins/ai-flow/dist/
 .DS_Store
 *.log
 .env

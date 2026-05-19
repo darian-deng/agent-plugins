@@ -1,0 +1,46 @@
+name: Build ai-flow dist
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/ai-flow/src/**'
+      - 'plugins/ai-flow/tsconfig*.json'
+      - 'plugins/ai-flow/package.json'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: plugins/ai-flow/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: plugins/ai-flow
+
+      - name: Build
+        run: npm run build
+        working-directory: plugins/ai-flow
+
+      - name: Commit dist if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/ai-flow/dist/ --force
+          if git diff --cached --quiet; then
+            echo "dist/ unchanged, nothing to commit"
+          else
+            git commit -m "build(ai-flow): compile dist/ [auto]"
+            git push
+          fi

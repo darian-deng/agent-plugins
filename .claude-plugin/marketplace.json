@@ -35,8 +35,8 @@
       "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/eslint-lsp"
     },
     {
-      "name": "feat-flow",
-      "source": "./plugins/feat-flow",
+      "name": "ai-flow",
+      "source": "./plugins/ai-flow",
       "description": "Generic data-driven AI workflow engine with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
       "version": "1.0.0",
       "category": "development",
@@ -45,7 +45,7 @@
         "name": "Darian Deng",
         "email": "imdengxianyu@qq.com"
       },
-      "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/feat-flow"
+      "homepage": "https://github.com/darian-deng/agent-plugins/tree/main/plugins/ai-flow"
     }
   ]
 }

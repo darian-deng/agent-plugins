@@ -1,0 +1,9 @@
+{
+  "name": "ai-flow",
+  "version": "1.0.0",
+  "description": "Generic data-driven AI workflow engine with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
+  "author": {
+    "name": "Darian Deng",
+    "email": "imdengxianyu@qq.com"
+  }
+}

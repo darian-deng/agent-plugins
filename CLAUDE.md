@@ -6,40 +6,31 @@
 plugins/
   eslint-lsp/       # 纯 ESLint LSP server（无编译步骤）
   ts-eslint-lsp/    # TypeScript LSP 代理（无编译步骤）
-  feat-flow/        # AI 工作流控制系统（TypeScript，需编译）
+  ai-flow/          # AI 工作流控制系统（TypeScript，需编译）
 ```
 
-## feat-flow 开发规范
+## ai-flow 开发规范
 
-### 修改 TypeScript 源码后必须重新构建
+### dist/ 由 CI 生成，不提交到仓库
 
-feat-flow 的 hooks 运行时依赖 `dist/` 下的预编译 JS 文件（`node dist/hooks/xxx.js`）。
-**每次修改 `src/` 下的任何文件后，必须运行 build 并把 `dist/` 一起提交。**
+`plugins/ai-flow/dist/` 已加入 `.gitignore`。本地开发时 build 仅用于验证，不需要提交 `dist/`。
+Push 到 main 后，GitHub Actions (`build-ai-flow.yml`) 自动编译并 force-commit `dist/` 到 main。
 
 ```bash
-cd plugins/feat-flow
-npm run build          # 编译 src/ → dist/
-cd ../..
-git add plugins/feat-flow/dist/
-git commit -m "..."
+cd plugins/ai-flow
+npm run build   # 本地验证编译无误即可，不用 git add dist/
 ```
-
-### 为什么要提交 dist/
-
-Claude Code 执行插件 hooks 时 PATH 受限，`npx tsx` 不可靠。
-hooks.json 使用 `node dist/hooks/xxx.js`，`node` 在任何 Node.js 环境都在 PATH 里。
-`dist/` 通过 GitHub Actions 自动构建并 force-commit 到 main branch。
 
 ### 发布流程
 
 1. 修改 `src/` 代码
 2. 更新版本号（**必须**，否则 `/plugin update` 不会触发更新）：
-   - `plugins/feat-flow/package.json` → `"version"`
-   - `plugins/feat-flow/.claude-plugin/plugin.json` → `"version"`
-   - `.claude-plugin/marketplace.json` → feat-flow 条目的 `"version"`
-3. `npm run build` 验证无编译错误，同时把新版本号编进 dist/
-4. 提交 `src/` + `dist/` + 所有版本号变更
-5. push 到 main — CI 会重新验证 build 并更新 dist/
+   - `plugins/ai-flow/package.json` → `"version"`
+   - `plugins/ai-flow/.claude-plugin/plugin.json` → `"version"`
+   - `.claude-plugin/marketplace.json` → ai-flow 条目的 `"version"`
+3. `npm run build` 验证无编译错误
+4. 提交 `src/` + 版本号变更（**不提交 dist/**）
+5. push 到 main — CI 自动 build 并 commit dist/
 
 ### plugin.json 字段说明
 
@@ -50,17 +41,17 @@ hooks.json 使用 `node dist/hooks/xxx.js`，`node` 在任何 Node.js 环境都�
 所有命令在 Claude Code 里加 `!` 前缀直接跑 CLI，或用 `/plugin` 交互菜单：
 
 ```bash
-# 安装（--scope 缺省为 user，feat-flow 必须指定 project 或 local）
-claude plugin install feat-flow@darian-agent-plugins --scope project
-claude plugin install feat-flow@darian-agent-plugins --scope local
+# 安装（--scope 缺省为 user，ai-flow 必须指定 project 或 local）
+claude plugin install ai-flow@darian-agent-plugins --scope project
+claude plugin install ai-flow@darian-agent-plugins --scope local
 
 # 卸载（需和安装时的 scope 一致）
-claude plugin uninstall feat-flow@darian-agent-plugins --scope project
-claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+claude plugin uninstall ai-flow@darian-agent-plugins --scope project
+claude plugin uninstall ai-flow@darian-agent-plugins --scope local
 
 # 更新
-claude plugin update feat-flow@darian-agent-plugins --scope project
-claude plugin update feat-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope project
+claude plugin update ai-flow@darian-agent-plugins --scope local
 
 # 重载（修改 hooks/settings 后）
 /reload-plugins
@@ -69,7 +60,7 @@ claude plugin update feat-flow@darian-agent-plugins --scope local
 在 Claude Code 内执行时加 `!` 前缀：`! claude plugin install ...`
 
 scope 说明：
-- `user`   → `~/.claude/settings.json`，全局生效，**feat-flow 不支持**
+- `user`   → `~/.claude/settings.json`，全局生效，**ai-flow 不支持**
 - `project` → `.claude/settings.json`，随 git 共享给团队
 - `local`  → `.claude/settings.local.json`，gitignored，仅本人在此 repo 生效
 
