@@ -113,6 +113,36 @@ describe('handleSessionStart', () => {
     expect(state!.last_session_id).toBe('new-sess-123');
   });
 
+  it('model provided → context_size saved to state as window size (not %)', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_size: 0,
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', { model: 'claude-sonnet-4-6' }));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_size).toBe(1_000_000);
+  });
+
+  it('unknown model → context_size defaults to 1M', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_size: 0,
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-new', { model: 'unknown-model-xyz' }));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_size).toBe(1_000_000);
+  });
+
   it('missing stage prompt file → injects summary without crash', async () => {
     const repo = makeRepo();
     execSync(`rm -f "${join(repo.flowDir, 'stages', 'work.md')}"`, { stdio: 'pipe' });

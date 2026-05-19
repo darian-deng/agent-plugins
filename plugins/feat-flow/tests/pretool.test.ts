@@ -100,6 +100,19 @@ describe('handlePreTool — signal interception', () => {
     expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(true);
   });
 
+  it('gate created → systemMessage contains the token so user can approve', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review');
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('deny');
+    // systemMessage must exist and contain the actual token value
+    expect(out?.systemMessage).toBeTruthy();
+    const tokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
+    const token = existsSync(tokenPath) ? readFileSync(tokenPath, 'utf-8').trim() : '';
+    expect(out?.systemMessage).toContain(token);
+  });
+
   it('gate token is NOT logged in transitions.log (security: AI must not read token)', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'review');

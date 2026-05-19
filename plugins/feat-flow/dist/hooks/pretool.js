@@ -16,7 +16,13 @@ catch {
 try {
     const result = await handlePreTool(input);
     if (result) {
-        process.stdout.write(JSON.stringify({ hookSpecificOutput: result }));
+        const { systemMessage, ...decision } = result;
+        const out = {
+            hookSpecificOutput: { hookEventName: 'PreToolUse', ...decision },
+        };
+        if (systemMessage)
+            out['systemMessage'] = systemMessage;
+        process.stdout.write(JSON.stringify(out));
     }
 }
 catch (e) {

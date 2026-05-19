@@ -1,6 +1,6 @@
-import { join, relative, normalize } from 'path';
+import { join, relative } from 'path';
 import { randomBytes } from 'crypto';
-import type { PreToolInput, PreToolOutput } from './types.js';
+import type { PreToolInput } from './types.js';
 import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, nextStage, gateTokenPath, signalPath } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
@@ -8,30 +8,27 @@ import { runScript } from './script-executor.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
 
-function deny(reason: string): PreToolOutput {
-  return { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason };
+export interface PreToolResult {
+  permissionDecision: 'allow' | 'deny' | 'ask';
+  permissionDecisionReason?: string;
+  systemMessage?: string;
 }
 
-function allow(): PreToolOutput {
-  return { hookEventName: 'PreToolUse', permissionDecision: 'allow' };
+function deny(reason: string, systemMessage?: string): PreToolResult {
+  return { permissionDecision: 'deny', permissionDecisionReason: reason, ...(systemMessage && { systemMessage }) };
 }
 
-function isControlPlaneWrite(repoRoot: string, flowName: string, absPath: string): boolean {
-  const flowBase = join(repoRoot, '.ai-flow', flowName);
-  const rel = relative(repoRoot, absPath);
-  // config, stages, scripts, and most state files are protected
-  // signal is the one state file that IS writable (that's the trigger)
-  const sig = relative(repoRoot, signalPath(repoRoot, flowName));
-  if (normalize(rel) === normalize(sig)) return false;
-  return rel.startsWith(join('.ai-flow', flowName) + '/');
+function allow(): PreToolResult {
+  return { permissionDecision: 'allow' };
 }
+
 
 function resolvePath(repoRoot: string, filePath: string): string {
   if (filePath.startsWith('/')) return filePath;
   return join(repoRoot, filePath);
 }
 
-export async function handlePreTool(input: PreToolInput): Promise<PreToolOutput | null> {
+export async function handlePreTool(input: PreToolInput): Promise<PreToolResult | null> {
   const { cwd: repoRoot, tool_name, tool_input } = input;
 
   // Discover which flow is active
@@ -104,9 +101,9 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolOutput 
       await writeGateToken(repoRoot, activeFlowName, token);
       await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
       return deny(
-        `Gate checkpoint for stage '${state.current_stage}'. ` +
-        `The human must approve with: ${activeFlowName} approve <token>\n` +
-        `(The token was delivered to the user via system message.)`
+        `Gate checkpoint for stage '${state.current_stage}'. Waiting for human approval.\n` +
+        `(The approval token was sent to the user via system message.)`,
+        `Gate token for '${activeFlowName}' stage '${state.current_stage}':\n${token}\n\nTo approve: ${activeFlowName} approve ${token}`
       );
     }
 

@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { hasActiveFlow, writeActiveState, appendTransition, type ActiveState } from '../state.js';
 import { runScript } from '../script-executor.js';
+import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 import type { CommandResult } from '../types.js';
 
 const BLOCK_START_IF_ABOVE_PCT = 95;
@@ -41,10 +42,14 @@ export async function handleStart(
     return { action: 'deny', reason: `A requirement description is required. Usage: ${flowName} start <requirement>` };
   }
 
-  if (contextSizePct >= BLOCK_START_IF_ABOVE_PCT) {
+  // Use injected value (tests) or compute from transcript if not provided
+  const effectivePct = contextSizePct > 0
+    ? contextSizePct
+    : contextPct(sessionId, repoRoot, DEFAULT_CONTEXT_WINDOW);
+  if (effectivePct >= BLOCK_START_IF_ABOVE_PCT) {
     return {
       action: 'deny',
-      reason: `Context is at ${contextSizePct}%. Run /clear before starting a new flow to free up context space.`,
+      reason: `Context is at ${effectivePct}%. Run /clear before starting a new flow to free up context space.`,
     };
   }
 
@@ -93,7 +98,7 @@ export async function handleStart(
     base_sha: baseSha,
     started_at: new Date().toISOString(),
     last_session_id: sessionId,
-    context_size: contextSizePct,
+    context_size: DEFAULT_CONTEXT_WINDOW,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
   };
 

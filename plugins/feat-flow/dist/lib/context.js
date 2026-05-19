@@ -1,15 +1,10 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-/** Build transcript path from session_id and cwd */
 function transcriptPath(sessionId, cwd) {
     const encoded = cwd.replace(/\//g, '-');
     return join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
 }
-/**
- * Read the last assistant entry's token usage from the session JSONL transcript.
- * Returns total input tokens (including cache).
- */
 export function readTokenCount(sessionId, cwd) {
     const p = transcriptPath(sessionId, cwd);
     if (!existsSync(p))
@@ -36,10 +31,22 @@ export function readTokenCount(sessionId, cwd) {
         return 0;
     }
 }
-export function contextPct(sessionId, cwd, contextSize) {
-    if (contextSize <= 0)
+export function contextPct(sessionId, cwd, contextWindowSize) {
+    if (contextWindowSize <= 0)
         return 0;
     const tokens = readTokenCount(sessionId, cwd);
-    return Math.round((tokens / contextSize) * 100);
+    return Math.round((tokens / contextWindowSize) * 100);
+}
+const MODEL_CONTEXT = {
+    'claude-opus-4-7': 200_000,
+    'claude-sonnet-4-6': 1_000_000,
+    'claude-haiku-4-5': 200_000,
+    'claude-haiku-4-5-20251001': 200_000,
+};
+export const DEFAULT_CONTEXT_WINDOW = 1_000_000;
+export function contextWindowForModel(model) {
+    if (!model)
+        return DEFAULT_CONTEXT_WINDOW;
+    return MODEL_CONTEXT[model] ?? DEFAULT_CONTEXT_WINDOW;
 }
 //# sourceMappingURL=context.js.map

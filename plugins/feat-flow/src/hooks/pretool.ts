@@ -9,7 +9,12 @@ const input = (() => { try { return JSON.parse(raw) as PreToolInput; } catch { r
 try {
   const result = await handlePreTool(input);
   if (result) {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: result }));
+    const { systemMessage, ...decision } = result;
+    const out: Record<string, unknown> = {
+      hookSpecificOutput: { hookEventName: 'PreToolUse', ...decision },
+    };
+    if (systemMessage) out['systemMessage'] = systemMessage;
+    process.stdout.write(JSON.stringify(out));
   }
 } catch (e) {
   process.stderr.write(`[ai-flow pretool error] ${String(e)}\n`);

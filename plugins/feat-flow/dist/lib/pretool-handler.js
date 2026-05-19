@@ -1,25 +1,15 @@
-import { join, relative, normalize } from 'path';
+import { join, relative } from 'path';
 import { randomBytes } from 'crypto';
 import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, nextStage, gateTokenPath, signalPath } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
-function deny(reason) {
-    return { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason };
+function deny(reason, systemMessage) {
+    return { permissionDecision: 'deny', permissionDecisionReason: reason, ...(systemMessage && { systemMessage }) };
 }
 function allow() {
-    return { hookEventName: 'PreToolUse', permissionDecision: 'allow' };
-}
-function isControlPlaneWrite(repoRoot, flowName, absPath) {
-    const flowBase = join(repoRoot, '.ai-flow', flowName);
-    const rel = relative(repoRoot, absPath);
-    // config, stages, scripts, and most state files are protected
-    // signal is the one state file that IS writable (that's the trigger)
-    const sig = relative(repoRoot, signalPath(repoRoot, flowName));
-    if (normalize(rel) === normalize(sig))
-        return false;
-    return rel.startsWith(join('.ai-flow', flowName) + '/');
+    return { permissionDecision: 'allow' };
 }
 function resolvePath(repoRoot, filePath) {
     if (filePath.startsWith('/'))
@@ -104,9 +94,8 @@ export async function handlePreTool(input) {
             const token = randomBytes(16).toString('hex');
             await writeGateToken(repoRoot, activeFlowName, token);
             await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
-            return deny(`Gate checkpoint for stage '${state.current_stage}'. ` +
-                `The human must approve with: ${activeFlowName} approve <token>\n` +
-                `(The token was delivered to the user via system message.)`);
+            return deny(`Gate checkpoint for stage '${state.current_stage}'. Waiting for human approval.\n` +
+                `(The approval token was sent to the user via system message.)`, `Gate token for '${activeFlowName}' stage '${state.current_stage}':\n${token}\n\nTo approve: ${activeFlowName} approve ${token}`);
         }
         const next = nextStage(config, state.current_stage);
         if (!next) {

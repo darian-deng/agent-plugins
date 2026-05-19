@@ -1,15 +1,14 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput, SessionOutput } from './types.js';
-import { hasActiveFlow, readActiveState, writeActiveState, isGateActive } from './state.js';
+import { hasActiveFlow, writeActiveState, isGateActive } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
-
-const DEFAULT_WARN_AT_PCT = 70;
+import { contextWindowForModel } from './context.js';
 
 export async function handleSessionStart(
   input: SessionStartInput
 ): Promise<{ additionalContext: string } | null> {
-  const { cwd: repoRoot, session_id } = input;
+  const { cwd: repoRoot, session_id, model } = input;
 
   const active = await hasActiveFlow(repoRoot);
   if (!active) return null;
@@ -17,7 +16,11 @@ export async function handleSessionStart(
   const { flowName, state } = active;
   const isNewSession = state.last_session_id !== null && state.last_session_id !== session_id;
 
-  const updated = { ...state, last_session_id: session_id };
+  const updated = {
+    ...state,
+    last_session_id: session_id,
+    context_size: contextWindowForModel(model),
+  };
   if (isNewSession) {
     updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
   }
