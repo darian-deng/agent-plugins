@@ -19,7 +19,7 @@
 |------|---------|:-----------:|:------:|
 | [eslint-lsp](./plugins/eslint-lsp) | 纯 ESLint LSP server：实时推送诊断，捆绑 `@eslint/mcp` 支持 AI 主动 autofix。适合不需要 TypeScript 语言智能的场景 | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP 代理 + ESLint 诊断二合一：完整保留 go-to-def / hover / references 等 TypeScript 能力，同时实时推送 ESLint 违规。TypeScript 项目的首选 | ✅ LSP | ✅ — |
-| [feat-flow](./plugins/feat-flow) | AI 工作流控制系统：8 阶段结构化开发流程，含人工审批门（GATE）、跨 session 状态持久化、hooks 机械执行保障。适合中大型需求的高质量交付 | ✅ Plugin | ❌ |
+| [ai-flow](./plugins/ai-flow) | 通用数据驱动 AI 工作流引擎：用 `config.json` 定义任意阶段流程，含人工审批门（GATE）、Script Validator、跨 session 状态持久化、hooks 机械执行保障。适合需要结构化 AI 工作流的场景 | ✅ Plugin | ❌ |
 
 ### 安装（Claude Code）
 
@@ -38,9 +38,9 @@ claude plugin marketplace add darian-deng/agent-plugins
 claude plugin install eslint-lsp@darian-agent-plugins --scope user
 claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
 
-# feat-flow：必须指定 project 或 local scope（见下方说明）
-claude plugin install feat-flow@darian-agent-plugins --scope project  # 团队共用
-claude plugin install feat-flow@darian-agent-plugins --scope local    # 个人使用
+# ai-flow：必须指定 project 或 local scope（见下方说明）
+claude plugin install ai-flow@darian-agent-plugins --scope project  # 团队共用
+claude plugin install ai-flow@darian-agent-plugins --scope local    # 个人使用
 ```
 
 > ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
@@ -49,12 +49,12 @@ claude plugin install feat-flow@darian-agent-plugins --scope local    # 个人�
 
 ```bash
 # 更新（需指定安装时的 scope）
-claude plugin update feat-flow@darian-agent-plugins --scope project
-claude plugin update feat-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope project
+claude plugin update ai-flow@darian-agent-plugins --scope local
 
 # 卸载（需指定安装时的 scope）
-claude plugin uninstall feat-flow@darian-agent-plugins --scope project
-claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+claude plugin uninstall ai-flow@darian-agent-plugins --scope project
+claude plugin uninstall ai-flow@darian-agent-plugins --scope local
 ```
 
 **安装完成后重载**
@@ -65,9 +65,9 @@ claude plugin uninstall feat-flow@darian-agent-plugins --scope local
 
 ---
 
-### feat-flow 的 scope 选择
+### ai-flow 的 scope 选择
 
-feat-flow 管理的是**项目级工作流状态**（阶段进度、审批记录、分支快照），因此它的很多行为需要针对不同项目分别配置，**不支持 user scope（全局安装）**。
+ai-flow 管理的是**项目级工作流状态**（阶段进度、审批记录、分支快照），因此它的很多行为需要针对不同项目分别配置，**不支持 user scope（全局安装）**。
 
 | Scope | 适用场景 | 配置文件 |
 |-------|---------|---------|
@@ -126,7 +126,7 @@ on in their IDEs.
 |--------|-------------|:-----------:|:------:|
 | [eslint-lsp](./plugins/eslint-lsp) | Standalone ESLint LSP server: real-time push diagnostics, bundled with `@eslint/mcp` for AI-callable autofix. Use when you don't need TypeScript language intelligence | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP proxy + ESLint diagnostics in one server: preserves full TypeScript intelligence (go-to-def, hover, references) while simultaneously pushing ESLint violations. The standard choice for TypeScript projects | ✅ LSP | ✅ — |
-| [feat-flow](./plugins/feat-flow) | AI workflow control system: 8-stage structured development pipeline with human-approval gates, cross-session state persistence, and mechanically-enforced hooks. Designed for high-quality delivery of medium-to-large requirements | ✅ Plugin | ❌ |
+| [ai-flow](./plugins/ai-flow) | Generic data-driven AI workflow engine: define any stage pipeline via `config.json`, with human-approval gates, Script Validators, cross-session state persistence, and mechanically-enforced hooks | ✅ Plugin | ❌ |
 
 ### Installation (Claude Code)
 
@@ -145,9 +145,9 @@ claude plugin marketplace add darian-deng/agent-plugins
 claude plugin install eslint-lsp@darian-agent-plugins --scope user
 claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
 
-# feat-flow: must use project or local scope (see below)
-claude plugin install feat-flow@darian-agent-plugins --scope project  # team use
-claude plugin install feat-flow@darian-agent-plugins --scope local    # personal use
+# ai-flow: must use project or local scope (see below)
+claude plugin install ai-flow@darian-agent-plugins --scope project  # team use
+claude plugin install ai-flow@darian-agent-plugins --scope local    # personal use
 ```
 
 > ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` — both claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
@@ -156,12 +156,12 @@ claude plugin install feat-flow@darian-agent-plugins --scope local    # personal
 
 ```bash
 # Update (specify the scope used at install time)
-claude plugin update feat-flow@darian-agent-plugins --scope project
-claude plugin update feat-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope project
+claude plugin update ai-flow@darian-agent-plugins --scope local
 
 # Uninstall (specify the scope used at install time)
-claude plugin uninstall feat-flow@darian-agent-plugins --scope project
-claude plugin uninstall feat-flow@darian-agent-plugins --scope local
+claude plugin uninstall ai-flow@darian-agent-plugins --scope project
+claude plugin uninstall ai-flow@darian-agent-plugins --scope local
 ```
 
 **Reload after install**
@@ -172,9 +172,9 @@ claude plugin uninstall feat-flow@darian-agent-plugins --scope local
 
 ---
 
-### feat-flow scope selection
+### ai-flow scope selection
 
-feat-flow manages **per-project workflow state** — stage progress, approval records, branch snapshots. Because its behavior is intentionally project-specific, **user scope (global install) is not supported**.
+ai-flow manages **per-project workflow state** — stage progress, approval records, branch snapshots. Because its behavior is intentionally project-specific, **user scope (global install) is not supported**.
 
 | Scope | When to use | Config file |
 |-------|------------|-------------|
