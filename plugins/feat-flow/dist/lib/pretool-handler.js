@@ -103,7 +103,7 @@ export async function handlePreTool(input) {
         if (stageCfg.completion.gate) {
             const token = randomBytes(16).toString('hex');
             await writeGateToken(repoRoot, activeFlowName, token);
-            await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage} token=${token}`);
+            await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
             return deny(`Gate checkpoint for stage '${state.current_stage}'. ` +
                 `The human must approve with: ${activeFlowName} approve <token>\n` +
                 `(The token was delivered to the user via system message.)`);

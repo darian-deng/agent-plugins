@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { writeFileSync, chmodSync, mkdirSync } from 'fs';
+import { writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { isGateActive, readActiveState } from '../src/lib/state.js';
@@ -98,6 +98,21 @@ describe('handlePreTool — signal interception', () => {
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('deny');
     expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(true);
+  });
+
+  it('gate token is NOT logged in transitions.log (security: AI must not read token)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'review');
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+
+    const logPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'transitions.log');
+    const logContent = existsSync(logPath) ? readFileSync(logPath, 'utf-8') : '';
+    // The gate-token value must not appear in the log
+    const tokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
+    const token = existsSync(tokenPath) ? readFileSync(tokenPath, 'utf-8').trim() : '';
+    expect(token).toBeTruthy(); // gate token was created
+    expect(logContent).not.toContain(token); // but not in the log
   });
 
   it('script passes + gate configured → DENY write, gate-token created', async () => {

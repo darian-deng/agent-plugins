@@ -38,7 +38,7 @@ export async function handleStart(
   contextSizePct: number
 ): Promise<CommandResult> {
   if (!requirement.trim()) {
-    return { action: 'deny', reason: 'A requirement description is required. Usage: {flowName} start <requirement>' };
+    return { action: 'deny', reason: `A requirement description is required. Usage: ${flowName} start <requirement>` };
   }
 
   if (contextSizePct >= BLOCK_START_IF_ABOVE_PCT) {

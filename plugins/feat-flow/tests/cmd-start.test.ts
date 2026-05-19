@@ -31,7 +31,11 @@ describe('handleStart', () => {
     const repo = makeRepo();
     const result = await handleStart(repo.repoRoot, 'test-flow', '  ', 'sess-1', 0);
     expect(result.action).toBe('deny');
-    expect((result as { action: 'deny'; reason: string }).reason).toMatch(/requirement/i);
+    const reason = (result as { action: 'deny'; reason: string }).reason;
+    expect(reason).toMatch(/requirement/i);
+    // The actual flow name must appear, not the literal placeholder '{flowName}'
+    expect(reason).toContain('test-flow');
+    expect(reason).not.toContain('{flowName}');
   });
 
   it('any flow already active → error mentioning abort', async () => {
