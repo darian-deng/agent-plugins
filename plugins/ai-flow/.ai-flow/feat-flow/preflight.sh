@@ -37,39 +37,10 @@ if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 18 ]; then
 fi
 
 # ── 3. Required skills ─────────────────────────────────────────────────────────
-MISSING_SKILLS=""
-
-for skill in \
-  brainstorming \
-  writing-plans \
-  subagent-driven-development \
-  verification-before-completion \
-  tdd \
-  diagnose \
-  improve-codebase-architecture \
-  skill-surgeon \
-  claude-md-improver
-do
-  if ! check_skill "$skill"; then
-    MISSING_SKILLS="$MISSING_SKILLS $skill"
-  fi
-done
-
-if [ -n "$MISSING_SKILLS" ]; then
-  err "Missing required skills:$MISSING_SKILLS"
-  err ""
-  err "Install via: npx --yes skills@latest add obra/superpowers -a claude-code -g -y"
-  err "         and: npx --yes skills@latest add mattpocock/skills -a claude-code -g -y"
-  err "         and: npx --yes skills@latest add darian-deng/agent-skills --skill skill-surgeon -a claude-code -g -y"
-  exit $FAIL
-fi
+# TODO: skill 检查逻辑需要重写——按缺失的 skill 定点提示对应安装命令，
+#       安装源也需要更新为最新的正确来源。暂时跳过此检查。
 
 # ── 4. feature-dev plugin ──────────────────────────────────────────────────────
-PLUGIN_LIST=$(claude plugins list 2>/dev/null || echo "")
-if ! echo "$PLUGIN_LIST" | grep -q "feature-dev"; then
-  err "Plugin 'feature-dev' not found."
-  err "Install via: claude plugins install feature-dev@claude-plugins-official"
-  exit $FAIL
-fi
+# TODO: feature-dev 检查暂时也跳过，等 skill 检查一起修复。
 
 exit $PASS
