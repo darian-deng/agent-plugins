@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdtempSync, mkdirSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { handleHelp } from '../src/lib/commands/help.js';
@@ -13,38 +13,22 @@ afterEach(() => {
   cleanups = [];
 });
 
-describe('handleHelp', () => {
-  it("no .ai-flow/ directory → shows 'no flows configured, use /ai-flow'", async () => {
+describe('handleHelp — no flowName (generic listing)', () => {
+  it("no .ai-flow/ → shows 'no flows' with skill hints", async () => {
     const root = mkdtempSync(join(tmpdir(), 'ai-flow-help-test-'));
     cleanups.push(() => execSync(`rm -rf "${root}"`));
     const result = await handleHelp(root);
     expect(result.action).toBe('allow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
-    expect(ctx).toMatch(/no flows configured|\/ai-flow/i);
+    expect(ctx).toMatch(/no flows configured/i);
+    expect(ctx).toMatch(/\/ai-flow:add|\/ai-flow:create/i);
   });
 
-  it('one flow configured → shows flow name, description, stage list', async () => {
-    const repo = createFlowTestRepo('test-flow', {
-      ...MINIMAL_CONFIG,
-      description: 'A test workflow',
-    });
-    cleanups.push(repo.cleanup);
-    const result = await handleHelp(repo.repoRoot);
-    expect(result.action).toBe('allow');
-    const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
-    expect(ctx).toContain('test-flow');
-    expect(ctx).toContain('A test workflow');
-    expect(ctx).toContain('work');
-    expect(ctx).toContain('review');
-  });
-
-  it('multiple flows → shows all flows', async () => {
+  it('multiple flows → lists all with descriptions', async () => {
     const repo = createFlowTestRepo('flow-a', MINIMAL_CONFIG);
     cleanups.push(repo.cleanup);
-    // Add a second flow to same repo
-    const { mkdirSync: mkdir, writeFileSync: write } = await import('fs');
-    mkdir(join(repo.repoRoot, '.ai-flow', 'flow-b'), { recursive: true });
-    write(
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'flow-b'), { recursive: true });
+    writeFileSync(
       join(repo.repoRoot, '.ai-flow', 'flow-b', 'config.json'),
       JSON.stringify({ ...MINIMAL_CONFIG, name: 'flow-b' })
     );
@@ -53,24 +37,40 @@ describe('handleHelp', () => {
     expect(ctx).toContain('flow-a');
     expect(ctx).toContain('flow-b');
   });
+});
 
-  it('reads from config.json, not hardcoded', async () => {
-    const repo = createFlowTestRepo('dynamic-flow', {
-      schema_version: '1.0',
-      name: 'dynamic-flow',
-      description: 'My dynamic flow',
-      stages: [
-        { id: 'alpha', prompt: 'stages/alpha.md', write_scope: 'unrestricted', completion: {} },
-        { id: 'beta', prompt: 'stages/beta.md', write_scope: 'unrestricted', completion: {} },
-        { id: 'gamma', prompt: 'stages/gamma.md', write_scope: 'unrestricted', completion: {} },
-      ],
+describe('handleHelp — with flowName (flow-specific)', () => {
+  it('flow has helper.md → injects helper.md content for interactive AI conversation', async () => {
+    const repo = createFlowTestRepo('test-flow', MINIMAL_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeFileSync(
+      join(repo.repoRoot, '.ai-flow', 'test-flow', 'helper.md'),
+      '# test-flow\n\nThis flow does X.\n\n## Commands\n\ntest-flow start <req>'
+    );
+    const result = await handleHelp(repo.repoRoot, 'test-flow');
+    const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
+    expect(ctx).toContain('test-flow');
+    expect(ctx).toContain('This flow does X.');
+  });
+
+  it('flow has no helper.md → falls back to stage list from config', async () => {
+    const repo = createFlowTestRepo('test-flow', {
+      ...MINIMAL_CONFIG,
+      description: 'A test workflow',
     });
     cleanups.push(repo.cleanup);
-    const result = await handleHelp(repo.repoRoot);
+    const result = await handleHelp(repo.repoRoot, 'test-flow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
-    expect(ctx).toContain('alpha');
-    expect(ctx).toContain('beta');
-    expect(ctx).toContain('gamma');
-    expect(ctx).toContain('My dynamic flow');
+    expect(ctx).toContain('test-flow');
+    expect(ctx).toContain('work');
+    expect(ctx).toContain('review');
+  });
+
+  it('unknown flowName → suggests add or create', async () => {
+    const repo = createFlowTestRepo('test-flow', MINIMAL_CONFIG);
+    cleanups.push(repo.cleanup);
+    const result = await handleHelp(repo.repoRoot, 'nonexistent-flow');
+    const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
+    expect(ctx).toMatch(/\/ai-flow:add|\/ai-flow:create/i);
   });
 });

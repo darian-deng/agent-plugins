@@ -61,7 +61,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
       await deleteGateToken(repoRoot, flowName);
     }
     if (!subCmd) {
-      return resultToHookOutput(await handleHelp(repoRoot));
+      return resultToHookOutput(await handleHelp(repoRoot, flowName));
     }
     return makeOutput(
       `Unknown command '${subCmd}' for flow '${flowName}'.\nValid commands: ${VALID_COMMANDS.join(', ')}`,
@@ -89,7 +89,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
       result = await handleStatus(repoRoot, flowName);
       break;
     case 'help':
-      result = await handleHelp(repoRoot);
+      result = await handleHelp(repoRoot, flowName);
       break;
   }
 

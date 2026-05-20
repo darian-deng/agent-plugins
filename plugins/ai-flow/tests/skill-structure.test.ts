@@ -7,39 +7,28 @@ import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
-const SKILL_DIR = join(PLUGIN_ROOT, 'skills', 'ai-flow');
-const SKILL_MD = join(SKILL_DIR, 'SKILL.md');
+const SKILLS_DIR = join(PLUGIN_ROOT, 'skills');
 const PREFLIGHT = join(PLUGIN_ROOT, '.ai-flow', 'feat-flow', 'preflight.sh');
 
-describe('ai-flow skill — structure', () => {
-  it('SKILL.md exists', () => {
-    expect(existsSync(SKILL_MD)).toBe(true);
+function checkSkill(name: string) {
+  const skillMd = join(SKILLS_DIR, name, 'SKILL.md');
+
+  it(`skills/${name}/SKILL.md exists`, () => {
+    expect(existsSync(skillMd)).toBe(true);
   });
 
-  it('SKILL.md has name and description in frontmatter', () => {
-    const content = readFileSync(SKILL_MD, 'utf-8');
+  it(`skills/${name}/SKILL.md has name and description in frontmatter`, () => {
+    const content = readFileSync(skillMd, 'utf-8');
     expect(content).toMatch(/^---/);
     expect(content).toMatch(/\bname:/);
     expect(content).toMatch(/\bdescription:/);
   });
+}
 
-  it('all references/ files mentioned in SKILL.md actually exist', () => {
-    const content = readFileSync(SKILL_MD, 'utf-8');
-    const refs = [...content.matchAll(/references\/[\w-]+\.md/g)].map(m => m[0]);
-    expect(refs.length).toBeGreaterThan(0);
-    for (const ref of refs) {
-      expect(existsSync(join(SKILL_DIR, ref)), `Missing: ${ref}`).toBe(true);
-    }
-  });
-
-  it('each reference file is non-empty and starts with a heading', () => {
-    const refs = ['install-feat-flow.md', 'create-flow.md', 'modify-flow.md'];
-    for (const ref of refs) {
-      const content = readFileSync(join(SKILL_DIR, 'references', ref), 'utf-8');
-      expect(content.length, `${ref} should not be empty`).toBeGreaterThan(100);
-      expect(content.startsWith('#'), `${ref} should start with a heading`).toBe(true);
-    }
-  });
+describe('ai-flow skills — structure', () => {
+  checkSkill('add');
+  checkSkill('create');
+  checkSkill('update');
 });
 
 describe('feat-flow preflight.sh — integration', () => {
@@ -73,7 +62,6 @@ describe('feat-flow preflight.sh — integration', () => {
 
   it('fails with missing skills when HOME has no .claude/skills', () => {
     const fakeHome = makeFakeHome();
-    // Provide a mock claude but no skills
     const binDir = join(fakeHome, 'bin');
     mkdirSync(binDir);
     writeFileSync(join(binDir, 'claude'), '#!/bin/sh\necho "feature-dev@claude-plugins-official"\n');
