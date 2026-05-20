@@ -35,11 +35,14 @@ chmod +x ".ai-flow/{chosen-name}/preflight.sh" 2>/dev/null || true
 
 ### 4. 确保 .gitignore 包含状态目录
 
-检查项目根目录的 `.gitignore`，没有则追加：
+检查项目根目录的 `.gitignore`，没有则追加（用 `printf` 确保换行符正确，不会与上一行粘连）：
 
+```bash
+grep -qxF '.ai-flow/*/state/' .gitignore 2>/dev/null || printf '\n.ai-flow/*/state/\n' >> .gitignore
 ```
-.ai-flow/*/state/
-```
+
+- `-x` 匹配整行，避免误判前缀相似的条目
+- `printf '\n...\n'` 保证无论原文件是否以换行结尾，追加的内容都独占一行
 
 ### 5. 确认完成
 

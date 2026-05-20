@@ -44,6 +44,15 @@ describe('handleUserPrompt — routing', () => {
     expect(state).not.toBeNull();
   });
 
+  it('test-flow start with multiline requirement → routes to start handler', async () => {
+    const repo = makeRepo();
+    const multiline = 'test-flow start build feature X\nThis is a detailed description\nwith multiple lines of context';
+    const out = await handleUserPrompt(makeInput(multiline, repo.repoRoot));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).not.toBeNull();
+    expect(state!.requirement).toContain('build feature X');
+  });
+
   it('test-flow approve → routes to approve handler', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {

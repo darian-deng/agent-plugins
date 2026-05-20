@@ -5,4 +5,5 @@ plugins/ai-flow/dist/
 .env
 .specstory
 .cursorindexingignore
-.vscode
+.vscode/
+.ai-flow/*/state/

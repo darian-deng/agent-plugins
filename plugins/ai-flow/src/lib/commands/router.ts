@@ -11,7 +11,7 @@ export function parseFlowCommand(
 ): { flowName: string; subCmd: string; args: string } | null {
   const trimmed = prompt.trim();
   for (const flowName of knownFlows) {
-    const pattern = new RegExp(`^${escapeRegex(flowName)}(?:\\s+(\\S+)(.*))?$`, 'i');
+    const pattern = new RegExp(`^${escapeRegex(flowName)}(?:\\s+(\\S+)([\\s\\S]*))?$`, 'i');
     const m = pattern.exec(trimmed);
     if (m) {
       return {
