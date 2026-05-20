@@ -1,10 +1,11 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { readActiveState, writeActiveState, appendTransition, } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
 export async function handleResume(repoRoot, flowName, branch) {
-    if (!branch.trim()) {
+    const trimmedBranch = branch.trim();
+    if (!trimmedBranch) {
         return {
             action: 'deny',
             reason: `Usage: ${flowName} resume <branch>\nExample: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`,
@@ -17,20 +18,20 @@ export async function handleResume(repoRoot, flowName, branch) {
             reason: `Flow '${existing.flow_name}' is already active. Run '${existing.flow_name} abort' before resuming.`,
         };
     }
-    const exec = (cmd) => {
+    function gitTry(args) {
         try {
-            return execSync(cmd, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
+            return execFileSync('git', args, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
         }
         catch {
             return null;
         }
-    };
-    const branchCheck = exec(`git rev-parse --verify "${branch}"`);
+    }
+    const branchCheck = gitTry(['rev-parse', '--verify', trimmedBranch]);
     if (!branchCheck) {
         return { action: 'deny', reason: `Branch "${branch}" does not exist.` };
     }
     // look for snapshot in docs/{flowName}/*/state-snapshot.json
-    const lsOutput = exec(`git ls-tree -r --name-only "${branch}" -- docs/${flowName}/ 2>/dev/null`);
+    const lsOutput = gitTry(['ls-tree', '-r', '--name-only', trimmedBranch, '--', `docs/${flowName}/`]);
     const snapshotPath = lsOutput?.split('\n').find((f) => f.endsWith('state-snapshot.json'));
     if (!snapshotPath) {
         return {
@@ -38,7 +39,7 @@ export async function handleResume(repoRoot, flowName, branch) {
             reason: `No state-snapshot.json found in branch "${branch}". This may not be a valid abort branch.`,
         };
     }
-    const snapshotContent = exec(`git show "${branch}:${snapshotPath}"`);
+    const snapshotContent = gitTry(['show', `${trimmedBranch}:${snapshotPath}`]);
     if (!snapshotContent) {
         return { action: 'deny', reason: `Could not read state-snapshot.json from branch "${branch}".` };
     }
@@ -63,14 +64,14 @@ export async function handleResume(repoRoot, flowName, branch) {
         context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     };
     await writeActiveState(repoRoot, flowName, restored);
-    await appendTransition(repoRoot, flowName, `RESUMED from_branch=${branch} stage=${currentStage}`);
+    await appendTransition(repoRoot, flowName, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
     const stageCfg = getStageConfig(config, currentStage);
     const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
     let stageContent = '';
     if (existsSync(promptPath)) {
         stageContent = readFileSync(promptPath, 'utf-8');
     }
-    const ctx = `Flow '${flowName}' resumed from branch: ${branch}\n` +
+    const ctx = `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
         `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
         stageContent;
     return { action: 'allow', additionalContext: ctx };

@@ -1,6 +1,6 @@
 import { discoverFlows } from './flow-config-loader.js';
 import { isGateActive, deleteGateToken } from './state.js';
-import { parseFlowCommand, VALID_COMMANDS } from './commands/router.js';
+import { parseFlowCommand, VALID_COMMANDS, escapeRegex } from './commands/router.js';
 import { handleStart } from './commands/start.js';
 import { handleApprove } from './commands/approve.js';
 import { handleAbort } from './commands/abort.js';
@@ -61,7 +61,7 @@ export async function handleUserPrompt(input) {
     let result;
     switch (subCmd) {
         case 'start': {
-            const requirement = args || prompt.replace(new RegExp(`^${flowName}\\s+start\\s*`, 'i'), '').trim();
+            const requirement = args || prompt.replace(new RegExp(`^${escapeRegex(flowName)}\\s+start\\s*`, 'i'), '').trim();
             result = await handleStart(repoRoot, flowName, requirement, session_id, 0);
             break;
         }

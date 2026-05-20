@@ -1,4 +1,4 @@
-import { readActiveState, isGateActive, readGateToken } from '../state.js';
+import { readActiveState, isGateActive } from '../state.js';
 export async function handleStatus(repoRoot, flowName) {
     const state = await readActiveState(repoRoot, flowName);
     if (!state) {
@@ -12,10 +12,9 @@ export async function handleStatus(repoRoot, flowName) {
     ];
     const gateActive = await isGateActive(repoRoot, flowName);
     if (gateActive) {
-        const token = await readGateToken(repoRoot, flowName);
         lines.push('', `Gate pending — run '${flowName} approve <token>'`);
-        if (token)
-            lines.push(`Token: ${token}`);
+        lines.push(`The token was delivered via system message. If you dismissed it, retrieve it with:`);
+        lines.push(`  ! cat .ai-flow/${flowName}/state/gate-token`);
     }
     if (state.context_warning.warned) {
         lines.push('', `Context warning: ${state.context_warning.warned_at_pct}% used`);

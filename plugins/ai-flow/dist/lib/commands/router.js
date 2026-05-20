@@ -1,8 +1,11 @@
 export const VALID_COMMANDS = ['start', 'approve', 'abort', 'resume', 'status', 'help'];
+export function escapeRegex(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 export function parseFlowCommand(prompt, knownFlows) {
     const trimmed = prompt.trim();
     for (const flowName of knownFlows) {
-        const pattern = new RegExp(`^${flowName}(?:\\s+(\\S+)(.*))?$`, 'i');
+        const pattern = new RegExp(`^${escapeRegex(flowName)}(?:\\s+(\\S+)(.*))?$`, 'i');
         const m = pattern.exec(trimmed);
         if (m) {
             return {

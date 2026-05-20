@@ -1,7 +1,10 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { readActiveState, deleteGateToken, appendTransition } from '../state.js';
+function git(args, cwd) {
+    return execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' }).trim();
+}
 export async function handleAbort(repoRoot, flowName) {
     const state = await readActiveState(repoRoot, flowName);
     if (!state) {
@@ -9,20 +12,19 @@ export async function handleAbort(repoRoot, flowName) {
     }
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
     const branchName = `${flowName}/aborted-${timestamp}`;
-    const exec = (cmd) => execSync(cmd, { cwd: repoRoot, stdio: 'pipe', encoding: 'utf-8' }).trim();
     try {
-        exec(`git checkout -b "${branchName}"`);
+        git(['checkout', '-b', branchName], repoRoot);
         const snapshotDir = join(repoRoot, 'docs', flowName, state.flow_id);
         mkdirSync(snapshotDir, { recursive: true });
         writeFileSync(join(snapshotDir, 'state-snapshot.json'), JSON.stringify(state, null, 2));
-        exec('git add -A');
+        git(['add', '-A'], repoRoot);
         try {
-            exec(`git commit -m "${flowName}: abort flow ${state.flow_id}"`);
+            git(['commit', '-m', `${flowName}: abort flow ${state.flow_id}`], repoRoot);
         }
         catch {
             // nothing to commit
         }
-        exec('git checkout -');
+        git(['checkout', '-'], repoRoot);
     }
     catch (err) {
         await appendTransition(repoRoot, flowName, `ABORT_ERROR ${String(err)}`);

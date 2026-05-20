@@ -9,7 +9,9 @@ export async function handleSessionStart(input) {
     if (!active)
         return null;
     const { flowName, state } = active;
-    const isNewSession = state.last_session_id !== null && state.last_session_id !== session_id;
+    // Reset context_warning whenever session changes, including when last_session_id is null
+    // (which happens after resume). null means "unknown previous session" — treat as new.
+    const isNewSession = state.last_session_id !== session_id;
     const updated = {
         ...state,
         last_session_id: session_id,
