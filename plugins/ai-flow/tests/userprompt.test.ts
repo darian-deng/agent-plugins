@@ -53,6 +53,23 @@ describe('handleUserPrompt — routing', () => {
     expect(state!.requirement).toContain('build feature X');
   });
 
+  it('test-flow start with CJK args and no space after subcommand → routes to start handler', async () => {
+    const repo = makeRepo();
+    const prompt = 'test-flow start我要构建这个功能，具体需求如下\n详细描述在这里';
+    await handleUserPrompt(makeInput(prompt, repo.repoRoot));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).not.toBeNull();
+    expect(state!.requirement).toContain('我要构建这个功能');
+  });
+
+  it('statuscheck (unknown command with known prefix) → not routed as status', async () => {
+    const repo = makeRepo();
+    const out = await handleUserPrompt(makeInput('test-flow statuscheck', repo.repoRoot));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; additionalContext?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+    expect(o.additionalContext).toMatch(/unknown|valid/i);
+  });
+
   it('test-flow approve → routes to approve handler', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {

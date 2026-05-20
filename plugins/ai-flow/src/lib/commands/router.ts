@@ -11,15 +11,35 @@ export function parseFlowCommand(
 ): { flowName: string; subCmd: string; args: string } | null {
   const trimmed = prompt.trim();
   for (const flowName of knownFlows) {
-    const pattern = new RegExp(`^${escapeRegex(flowName)}(?:\\s+(\\S+)([\\s\\S]*))?$`, 'i');
-    const m = pattern.exec(trimmed);
-    if (m) {
+    // Flow name must appear at start, followed by whitespace or end-of-string
+    if (!new RegExp(`^${escapeRegex(flowName)}(?:\\s|$)`, 'i').test(trimmed)) continue;
+
+    const rest = trimmed.slice(flowName.length).trimStart();
+    if (!rest) {
+      return { flowName, subCmd: '', args: '' };
+    }
+
+    // Known commands: boundary after cmd is end-of-string, whitespace, or non-ASCII (CJK with no space)
+    const validCmdsPattern = VALID_COMMANDS.map(escapeRegex).join('|');
+    const knownMatch = new RegExp(
+      `^(${validCmdsPattern})(?=$|\\s|[^\\x00-\\x7F])([\\s\\S]*)$`,
+      'i',
+    ).exec(rest);
+    if (knownMatch) {
       return {
         flowName,
-        subCmd: (m[1] ?? '').toLowerCase(),
-        args: (m[2] ?? '').trim(),
+        subCmd: (knownMatch[1] ?? '').toLowerCase(),
+        args: (knownMatch[2] ?? '').trimStart(),
       };
     }
+
+    // Unknown command: first whitespace-delimited token
+    const unknownMatch = /^(\S+)([\s\S]*)$/.exec(rest);
+    return {
+      flowName,
+      subCmd: (unknownMatch?.[1] ?? '').toLowerCase(),
+      args: (unknownMatch?.[2] ?? '').trim(),
+    };
   }
   return null;
 }
