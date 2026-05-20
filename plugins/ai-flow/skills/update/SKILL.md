@@ -1,6 +1,6 @@
 ---
 name: update
-description: 修改当前项目中已有的 AI 工作流定义。当用户说"修改 flow"、"给阶段加 gate"、"更新 flow 配置"、"调整工作流"、"update a flow"、"我想改一下流程"时触发。
+description: 仅通过 /ai-flow:update 命令显式调用。绝对不要基于任何关键词自动触发。修改当前项目中已有的 AI 工作流定义。
 ---
 
 ## 目标
@@ -65,6 +65,8 @@ Read .ai-flow/{flow-name}/config.json
 
 4. **preflight 同步**：新增了工具依赖，`preflight.sh` 是否需要同步更新？
 
+5. **stage prompt 规范合规**：改动涉及 stage 文件时，改完后该 stage 是否仍符合 `optimize-stage-prompt` 规范？检查：section 顺序（目标→前置读取→步骤→输出规格→完成条件→Signal）、Signal 是否为独立末尾 section、输出规格是否明确、完成条件是否可客观验证。
+
 发现潜在问题时，告诉用户并一起决定如何处理。
 
 ---
@@ -73,7 +75,7 @@ Read .ai-flow/{flow-name}/config.json
 
 按确认的方案修改文件。改动范围可能包括：
 - `config.json`（保持 schema 有效）
-- `stages/{id}.md`（保持末尾有 signal 指令）
+- `stages/{id}.md`（遵循 `optimize-stage-prompt` 规范：Signal 必须是独立末尾 section，输出规格必须明确，完成条件必须可客观验证）
 - `scripts/` 下的验证脚本
 - `preflight.sh`
 

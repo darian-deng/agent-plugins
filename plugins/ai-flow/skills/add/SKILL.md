@@ -1,6 +1,6 @@
 ---
 name: add
-description: 将 ai-flow 插件内置的流程模板安装到当前项目。当用户说"安装内置流程"、"我想用插件里的流程模板"、"add a built-in flow"、"把 feat-flow 加到项目"，或想使用 ai-flow 提供的现成工作流时触发。
+description: 仅通过 /ai-flow:add 命令显式调用。绝对不要基于任何关键词自动触发。将 ai-flow 插件内置的流程模板安装到当前项目。
 ---
 
 ## 目标
