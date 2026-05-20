@@ -41,28 +41,20 @@ npm run build   # 本地验证编译无误即可，不用 git add dist/
 所有命令在 Claude Code 里加 `!` 前缀直接跑 CLI，或用 `/plugin` 交互菜单：
 
 ```bash
-# 安装（--scope 缺省为 user，ai-flow 必须指定 project 或 local）
-claude plugin install ai-flow@darian-agent-plugins --scope project
-claude plugin install ai-flow@darian-agent-plugins --scope local
+# 安装（user scope，全局生效）
+claude plugin install ai-flow@darian-agent-plugins --scope user
 
-# 卸载（需和安装时的 scope 一致）
-claude plugin uninstall ai-flow@darian-agent-plugins --scope project
-claude plugin uninstall ai-flow@darian-agent-plugins --scope local
+# 卸载
+claude plugin uninstall ai-flow@darian-agent-plugins --scope user
 
 # 更新
-claude plugin update ai-flow@darian-agent-plugins --scope project
-claude plugin update ai-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope user
 
 # 重载（修改 hooks/settings 后）
 /reload-plugins
 ```
 
 在 Claude Code 内执行时加 `!` 前缀：`! claude plugin install ...`
-
-scope 说明：
-- `user`   → `~/.claude/settings.json`，全局生效，**ai-flow 不支持**
-- `project` → `.claude/settings.json`，随 git 共享给团队
-- `local`  → `.claude/settings.local.json`，gitignored，仅本人在此 repo 生效
 
 ## marketplace 更新说明
 

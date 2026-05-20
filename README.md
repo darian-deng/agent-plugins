@@ -38,9 +38,8 @@ claude plugin marketplace add darian-deng/agent-plugins
 claude plugin install eslint-lsp@darian-agent-plugins --scope user
 claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
 
-# ai-flow：必须指定 project 或 local scope（见下方说明）
-claude plugin install ai-flow@darian-agent-plugins --scope project  # 团队共用
-claude plugin install ai-flow@darian-agent-plugins --scope local    # 个人使用
+# ai-flow：全局安装，所有项目可用
+claude plugin install ai-flow@darian-agent-plugins --scope user
 ```
 
 > ⚠️ 安装 `ts-eslint-lsp` 后，必须先禁用官方的 `typescript-lsp@claude-plugins-official`，否则两者会因扩展名路由冲突导致只有一个生效。详见 [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md)。
@@ -48,13 +47,8 @@ claude plugin install ai-flow@darian-agent-plugins --scope local    # 个人使�
 **更新 / 卸载**
 
 ```bash
-# 更新（需指定安装时的 scope）
-claude plugin update ai-flow@darian-agent-plugins --scope project
-claude plugin update ai-flow@darian-agent-plugins --scope local
-
-# 卸载（需指定安装时的 scope）
-claude plugin uninstall ai-flow@darian-agent-plugins --scope project
-claude plugin uninstall ai-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope user
+claude plugin uninstall ai-flow@darian-agent-plugins --scope user
 ```
 
 **安装完成后重载**
@@ -64,15 +58,6 @@ claude plugin uninstall ai-flow@darian-agent-plugins --scope local
 ```
 
 ---
-
-### ai-flow 的 scope 选择
-
-ai-flow 管理的是**项目级工作流状态**（阶段进度、审批记录、分支快照），因此它的很多行为需要针对不同项目分别配置，**不支持 user scope（全局安装）**。
-
-| Scope | 适用场景 | 配置文件 |
-|-------|---------|---------|
-| `project` | 团队协作，所有成员共用同一套工作流配置 | `.claude/settings.json`（提交到 git） |
-| `local` | 个人使用，不影响其他协作者 | `.claude/settings.local.json`（gitignore） |
 
 ### 故障排查
 
@@ -145,9 +130,8 @@ claude plugin marketplace add darian-deng/agent-plugins
 claude plugin install eslint-lsp@darian-agent-plugins --scope user
 claude plugin install ts-eslint-lsp@darian-agent-plugins --scope user
 
-# ai-flow: must use project or local scope (see below)
-claude plugin install ai-flow@darian-agent-plugins --scope project  # team use
-claude plugin install ai-flow@darian-agent-plugins --scope local    # personal use
+# ai-flow: global install, works across all projects
+claude plugin install ai-flow@darian-agent-plugins --scope user
 ```
 
 > ⚠️ After installing `ts-eslint-lsp`, you must disable `typescript-lsp@claude-plugins-official` — both claim the same file extensions and only one can be active at a time. See the [ts-eslint-lsp README](./plugins/ts-eslint-lsp/README.md) for details.
@@ -155,13 +139,8 @@ claude plugin install ai-flow@darian-agent-plugins --scope local    # personal u
 **Update / Uninstall**
 
 ```bash
-# Update (specify the scope used at install time)
-claude plugin update ai-flow@darian-agent-plugins --scope project
-claude plugin update ai-flow@darian-agent-plugins --scope local
-
-# Uninstall (specify the scope used at install time)
-claude plugin uninstall ai-flow@darian-agent-plugins --scope project
-claude plugin uninstall ai-flow@darian-agent-plugins --scope local
+claude plugin update ai-flow@darian-agent-plugins --scope user
+claude plugin uninstall ai-flow@darian-agent-plugins --scope user
 ```
 
 **Reload after install**
@@ -171,15 +150,6 @@ claude plugin uninstall ai-flow@darian-agent-plugins --scope local
 ```
 
 ---
-
-### ai-flow scope selection
-
-ai-flow manages **per-project workflow state** — stage progress, approval records, branch snapshots. Because its behavior is intentionally project-specific, **user scope (global install) is not supported**.
-
-| Scope | When to use | Config file |
-|-------|------------|-------------|
-| `project` | Team use — all collaborators share the same workflow config | `.claude/settings.json` (committed to git) |
-| `local` | Personal use — does not affect other collaborators | `.claude/settings.local.json` (gitignored) |
 
 ### Troubleshooting
 
