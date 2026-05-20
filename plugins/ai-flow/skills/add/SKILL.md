@@ -9,10 +9,16 @@ description: 将 ai-flow 插件内置的流程模板安装到当前项目。当�
 
 ## 步骤
 
-### 1. 发现可用的内置流程
+### 1. 定位插件根目录
+
+`$CLAUDE_PLUGIN_ROOT` 仅在 hook 执行时有效，Claude 的 Bash 工具里它是空的。需要主动找到已安装的最新版本：
 
 ```bash
-ls "$CLAUDE_PLUGIN_ROOT/.ai-flow/"
+# 按版本号降序取第一个（最新版本）
+PLUGIN_ROOT=$(ls -d ~/.claude/plugins/cache/darian-agent-plugins/ai-flow/*/ 2>/dev/null \
+  | sort -t/ -k9 -V -r | head -1 | sed 's:/$::')
+echo "Plugin root: $PLUGIN_ROOT"
+ls "$PLUGIN_ROOT/.ai-flow/"
 ```
 
 列出插件内置的所有流程目录。展示给用户，让他们选择想安装哪个。
@@ -27,9 +33,11 @@ ls .ai-flow/{chosen-name}/config.json 2>/dev/null
 
 ### 3. 复制流程文件
 
+使用第 1 步得到的 `$PLUGIN_ROOT`：
+
 ```bash
 mkdir -p ".ai-flow/{chosen-name}"
-cp -r "$CLAUDE_PLUGIN_ROOT/.ai-flow/{chosen-name}/." ".ai-flow/{chosen-name}/"
+cp -r "$PLUGIN_ROOT/.ai-flow/{chosen-name}/." ".ai-flow/{chosen-name}/"
 chmod +x ".ai-flow/{chosen-name}/preflight.sh" 2>/dev/null || true
 ```
 
