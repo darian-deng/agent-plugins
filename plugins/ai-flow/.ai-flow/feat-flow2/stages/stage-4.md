@@ -20,7 +20,16 @@
 
 ## 入场动作
 
-**Step 0：Stage 4 起点 commit + 记录 BASE_SHA_CODE**
+**Step 0：工作树状态检查（防 mid-task crash 残留）**
+
+```sh
+git status --porcelain
+```
+
+- 输出为空（仅含 docs/feat-flows/ 改动） → 正常，进 Step 1
+- 输出非空且含代码文件改动 → **停下问开发者**：「检测到工作树有未 commit 改动。这是上次 Stage 4 mid-task crash 残留吗？还是预期的中间状态？请确认如何处理。」
+
+**Step 1：Stage 4 起点 commit + 记录 BASE_SHA_CODE**
 
 ```sh
 git add docs/feat-flows/<flow_id>/
@@ -30,9 +39,17 @@ git rev-parse HEAD > .ai-flow/feat-flow2/state/base_sha_code
 
 这个 commit 把 stage 1-3 累积的 docs 一次性提交。`base_sha_code` 文件供 Stage 5 用作 diff 起点（只看代码改动，不看 docs）。
 
-**Step 1：ADR scan**
+**Step 2：ADR scan**
 
 `ls docs/adr/` + 筛与本 flow 涉及模块相关的 ADR 路径列表，作为后续 implementer Context 注入。
+
+**Step 3：初始化 task-reports.md**
+
+```sh
+touch docs/feat-flows/<flow_id>/task-reports.md
+```
+
+后续每个 task 完成后，主 session 把该 task 的 task report 追加到此文件——这是跨 /clear 保留 task 级元信息的唯一手段（详见下文「task-reports.md 持久化」）。
 
 ## 主循环：调用 SDD
 
@@ -69,6 +86,45 @@ git rev-parse HEAD > .ai-flow/feat-flow2/state/base_sha_code
 - `NEW_TERMS_OR_PATTERNS`：本 task 引入的术语候选（如 "LRUEvictionPolicy"），建议进 rules
 - `ADR_CANDIDATES`：跨文件性质的决策候选（建议 Stage 6 评 ADR）
 - `COMMENT_DELETIONS`：删除注释 ≥3 行的位置 + 理由
+- `UPSTREAM_REVISION`（如适用）：本 task 期间自查发现前置 stage 问题——按 `references/upstream-revision-protocol.md` 标 L1/L2/L3 + 描述 + 处理
+
+## task-reports.md 持久化（每 task 完成后必做）
+
+implementer subagent 返回 DONE / DONE_WITH_CONCERNS 后，**主 session 必须立即**把该 task report 追加到 `docs/feat-flows/<flow_id>/task-reports.md`。
+
+格式：
+
+```markdown
+## Task N: <task title>
+
+**Status**: DONE | DONE_WITH_CONCERNS
+**Commit**: <commit-sha>
+**Date**: YYYY-MM-DD
+
+### INLINE_COMMENTS_ADDED
+（位置列表）
+
+### NEW_TERMS_OR_PATTERNS
+（候选术语列表，每条含建议）
+
+### ADR_CANDIDATES
+（跨文件决策候选列表，每条含理由）
+
+### COMMENT_DELETIONS
+（删除位置 + 理由）
+
+### UPSTREAM_REVISION
+（如有：L?, 描述, 处理）
+
+### Concerns
+（如 DONE_WITH_CONCERNS 时填）
+
+---
+```
+
+**为什么必须落盘**：
+- `NEW_TERMS_OR_PATTERNS` / `ADR_CANDIDATES` 等是后续 task 和 Stage 6 的输入。task report 在主 session 内存里，/clear 后会丢——必须落盘才能跨 /clear 存活
+- Stage 4 入场重建 Pending vocabulary 时从 `task-reports.md` 读，不依赖主 session 对话历史
 
 ## NEEDS_CONTEXT 处理（严于 SDD 默认）
 
@@ -84,22 +140,36 @@ implementer 报 NEEDS_CONTEXT 时主 session：
 
 按 SDD 规则尝试一次（补 context / 换模型 / 拆 task / plan 错 → escalate）。第 2 次同一 task BLOCKED → 停下问开发者。
 
-## Pending vocabulary 注入
+## Pending vocabulary 注入（每次 dispatch 前）
 
-主 session 在 dispatch 第 N 个 task 时，把已完成 task 的 NEW_TERMS_OR_PATTERNS 段**合并**起来，作为 Curated Sources 的「Pending vocabulary（未正式入 rules）」注入下一个 implementer。这样后续 task 能看到前面 task 沉淀的新术语，避免命名漂移。
+主 session 在 dispatch 第 N 个 task 时：
+
+1. 读 `docs/feat-flows/<flow_id>/task-reports.md`（**从文件读，不依赖对话历史**——确保 /clear 后仍能重建）
+2. 合并所有已完成 task 的 `NEW_TERMS_OR_PATTERNS` 段
+3. 作为 Curated Sources 的「Pending vocabulary（未正式入 rules）」注入下一个 implementer
+
+这样后续 task 能看到前面 task 沉淀的新术语，避免命名漂移。
+
+## 自查前置 stage 问题（运行时随时可能触发）
+
+implementer 或主 session 在 Stage 4 期间自查发现前置 stage 漏写 / 错了 → 走 `references/upstream-revision-protocol.md`：
+- L1（推翻决策） / L2（漏写补全） → 停下问开发者
+- L3（小修） → inline 修文档，task report 加 `UPSTREAM_REVISION` 注记
+- L2 修 design.md / architecture.md 后 → 评估已完成 task 是否需要 fix-up task（追加到 plan.md 末尾）
 
 ## 输出规格
 
 - plan.md 中所有 task 标 `[x]`
 - 每 task 对应一个 commit
 - `.ai-flow/feat-flow2/state/base_sha_code` 文件存在
-- task report 的 ADR_CANDIDATES / NEW_TERMS_OR_PATTERNS / COMMENT_DELETIONS 累积到主 session（Stage 6 用）
+- `docs/feat-flows/<flow_id>/task-reports.md` 累积所有 task report（**落盘文件，Stage 6 从此读 ADR_CANDIDATES / NEW_TERMS_OR_PATTERNS**）
 
 ## 完成条件
 
 - plan.md 所有 task 标 `[x]`
 - `base_sha_code` 文件存在
 - 全部 task 都有对应 commit
+- `task-reports.md` 含全部 task report（每条 task 一段）
 - SDD final reviewer pass（SDD 自带最后审查）
 
 ## Signal

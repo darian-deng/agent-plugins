@@ -22,6 +22,7 @@
 | **comment vs ADR placement** | 局部决策用代码注释，跨文件才写 ADR——避免 ADR 目录污染 |
 | **Bootstrap from zero** | 首次跑就建知识基础设施（docs/adr/、CLAUDE.md），不等用户手动建 |
 | **3 轮互审协议** | reviewer ↔ author 互审最多 3 轮，分歧 escalate 开发者——避免 perform agreement 也避免无限循环 |
+| **前置 stage 问题三级处理** | 中后期 stage 发现前置文档漏 / 错时，按 L1（大方向 abort）/ L2（漏写补全 + 回改）/ L3（小修 inline）分级处理，禁止 AI 自判 L3 后默默改（详见 `references/upstream-revision-protocol.md`） |
 
 ## 命令速查
 

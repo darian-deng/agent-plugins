@@ -36,7 +36,9 @@
    - 依赖顺序
    - 覆盖完整性（design.md AC 是否都被 plan task 覆盖）
 
-冲突处理：见 `references/dissent-protocol.md`。
+冲突处理：
+- 用户提异议 → `references/dissent-protocol.md`
+- AI **自查**发现 design.md / architecture.md 漏写 / 错了 → `references/upstream-revision-protocol.md`（L1 abort / L2 暂停回改 / L3 inline 修）
 
 ## 输出规格
 

@@ -18,7 +18,10 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + Stage 1 ADR scan 结果 + 累积 NEW_TERMS_OR_PATTERNS / ADR_CANDIDATES
+- `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + Stage 1 ADR scan 结果 + ADR 候选（grill-me 即时草拟的）
+- `docs/feat-flows/<flow_id>/architecture.md`
+- `docs/feat-flows/<flow_id>/plan.md`
+- `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**，含 `ADR_CANDIDATES` / `NEW_TERMS_OR_PATTERNS` / `COMMENT_DELETIONS` / `UPSTREAM_REVISION` 等关键元信息
 - `docs/feat-flows/<flow_id>/review.md` — 互审结论 + 待开发者决策项
 - `docs/feat-flows/<flow_id>/` 全部工件（评估归档用）
 
@@ -32,7 +35,12 @@
 
 ### A2. ADR 候选评估（四闸门）
 
-对 design.md 决策记录 + Stage 4 收集的 ADR_CANDIDATES 每条决策：
+候选来源（合并去重）：
+1. `design.md` 决策记录中所有决策（Stage 1 对齐的）
+2. `design.md`「ADR 候选」节（Stage 1 grill-me 即时草拟的）
+3. **`task-reports.md` 中每个 task 的 `ADR_CANDIDATES` 段**（Stage 4 实施过程发现的跨文件决策）
+
+对每条候选决策跑下面四闸门：
 
 ```
 gate-1 (term-anchor)：
@@ -72,7 +80,7 @@ gate-3 (冲突 + supersede 检测)：
 
 ### A4. NEW_TERMS_OR_PATTERNS 收集 + 跨目录冲突检测
 
-- 从 Stage 4 累积的 task report NEW_TERMS_OR_PATTERNS 收集
+- 从 `task-reports.md` 每个 task 的 `NEW_TERMS_OR_PATTERNS` 段收集（不依赖主 session 对话历史）
 - 评估哪些进 rules：「未来 ≥2 task 会重复 + 没 rule 时 AI 默认走错」
 - monorepo 跨目录检查：`grep -r "<term>" rules/` 命中多处时提示用户
 

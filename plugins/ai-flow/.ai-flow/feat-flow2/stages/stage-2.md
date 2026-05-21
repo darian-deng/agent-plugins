@@ -29,7 +29,9 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 2. 取回结构化蓝图后，主 session 审视与 design.md 一致性：
    - 蓝图是否覆盖 design.md 每个决策？
    - 蓝图是否引入了 design.md 「不在范围内」的内容？
-   - 蓝图是否与 design.md 冲突？冲突时按用户反对意见处理协议处理（见 `references/dissent-protocol.md`）
+   - 蓝图是否与 design.md 冲突？
+     - 若用户提出异议 → `references/dissent-protocol.md`
+     - 若 AI（主 session 或 architect subagent）**自查**发现 design.md 漏写 / 错了 → `references/upstream-revision-protocol.md`（L1 abort / L2 暂停回改 / L3 inline 修）
 
 3. 追加到 `docs/feat-flows/<flow_id>/architecture.md`（新文件）
 

@@ -89,6 +89,26 @@ reviewer 给最终理由。主 agent 仍不认同 → review.md 标「需开发�
 
 **3 轮后任何剩余分歧 → 停下来等开发者，不再循环。**
 
+### 自查前置 stage 问题（Stage 5 期间随时可能触发）
+
+reviewer 或主 session 在 Stage 5 期间自查发现前置 stage 漏写 / 错了 → 走 `references/upstream-revision-protocol.md`：
+- L1（推翻决策）→ 停下问开发者，建议 abort
+- L2（漏写补全）→ 暂停 Stage 5，回更新前置文档，让用户确认，再回 Stage 5 继续
+- L3（小修）→ inline 修文档，review.md 加注记
+
+注：reviewer 挑战 design.md 已记录决策的「架构级冲突」处理（见前文轮 1）是本协议的特例。
+
+### /clear 后的恢复
+
+互审中途 /clear（reviewer subagent agent ID session-scoped 会丢失）→ 新 session 重启 Stage 5：
+
+1. 已 commit 的修复 → reviewer 看到当前 HEAD 不会再 flag
+2. review.md 累积的「已解决 / 已反驳 / 分歧」段保留——新 reviewer 启动时把现有 review.md 作为「上次审查的状态」一并传入
+3. 用 fresh reviewer 接力（**不是同一个 reviewer subagent**），从轮 1 重审，依靠 review.md 的累积上下文避免重复劳动
+4. 已记录的 pushback 反证 → 新 reviewer 直接评估反证是否成立，不重新提相同 issue
+
+**前提**：每轮处理后必须**立即**写 review.md（accept / pushback / 分歧三类都即时落盘），不允许积累在主 session 内存。
+
 ### review.md 结构
 
 ```markdown
