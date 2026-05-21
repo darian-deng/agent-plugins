@@ -27,6 +27,7 @@ function checkSkill(name: string) {
 
 describe('ai-flow skills — structure', () => {
   checkSkill('add');
+  checkSkill('adr');
   checkSkill('create');
   checkSkill('update');
 });
@@ -77,20 +78,26 @@ describe('feat-flow preflight.sh — integration', () => {
   it('passes when all prerequisites are mocked', () => {
     const fakeHome = makeFakeHome();
 
+    // 新 feat-flow preflight 需要的 4 个用户 skill
     const skills = [
-      'brainstorming', 'writing-plans', 'subagent-driven-development',
-      'verification-before-completion', 'tdd', 'diagnose',
-      'improve-codebase-architecture', 'skill-surgeon', 'claude-md-improver',
+      'grill-me', 'writing-plans', 'subagent-driven-development', 'receiving-code-review',
     ];
     for (const skill of skills) {
       mkdirSync(join(fakeHome, '.claude', 'skills', skill), { recursive: true });
       writeFileSync(join(fakeHome, '.claude', 'skills', skill, 'SKILL.md'), '# mock');
     }
 
+    // Mock claude CLI
     const binDir = join(fakeHome, 'bin');
     mkdirSync(binDir);
-    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\necho "feature-dev@claude-plugins-official"\n');
+    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\necho "mocked claude CLI"\n');
     chmodSync(join(binDir, 'claude'), 0o755);
+
+    // 新 preflight 用 `find $HOME/.claude/plugins/cache -name <plugin>` 检测插件
+    // 在 fakeHome 下建空目录占位即可（find -name 匹配目录名）
+    for (const plugin of ['feature-dev', 'claude-md-management']) {
+      mkdirSync(join(fakeHome, '.claude', 'plugins', 'cache', 'mock-marketplace', plugin), { recursive: true });
+    }
 
     const result = execSync(
       `HOME="${fakeHome}" PATH="${binDir}:$PATH" sh "${PREFLIGHT}" 2>&1; echo "EXIT:$?"`,

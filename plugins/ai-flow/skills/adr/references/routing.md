@@ -63,6 +63,6 @@
 
 以下场景**不允许路由到任何子能力**：
 
-- 用户问"该不该写 ADR？" → 不属于本 skill 职责，回应：「本 skill 只管理 ADR，不判断是否该写。该判断是 feat-flow2 Stage 6 或用户自决。」
+- 用户问"该不该写 ADR？" → 不属于本 skill 职责，回应：「本 skill 只管理 ADR，不判断是否该写。该判断是 feat-flow Stage 6 或用户自决。」
 - 用户问"项目有哪些技术决策？" → 模糊；反问：「想列出已有 ADR（list）还是搜索特定内容（grep）？」
 - 用户要求删除 ADR → ADR 不应删除（应 supersede 或标 deprecated）。回应：「ADR 不删除以保留追溯。请用 supersede 创建新 ADR 替代，或如确实弃用，明确把旧 ADR 状态改为 Deprecated。」

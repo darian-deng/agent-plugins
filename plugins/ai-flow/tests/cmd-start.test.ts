@@ -99,11 +99,12 @@ describe('handleStart', () => {
     expect(state!.base_sha).toBe(head);
   });
 
-  it('flow_id format matches expected regex', async () => {
+  it('flow_id format matches expected regex (<date>-<rand4>)', async () => {
     const repo = makeRepo();
     await handleStart(repo.repoRoot, 'test-flow', 'do task', 'sess-1', 0);
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.flow_id).toMatch(/^test-flow-[a-z0-9]+$/);
+    // Engine generates flow_id as <YYYY-MM-DD>-<rand4>, e.g., "2026-05-21-x7k3"
+    expect(state!.flow_id).toMatch(/^\d{4}-\d{2}-\d{2}-[a-z0-9]{4}$/);
   });
 
   it('additionalContext includes first stage prompt content', async () => {

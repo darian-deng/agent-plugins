@@ -140,8 +140,8 @@ description: 仅通过 /ai-flow:adr 命令显式调用。绝对不要基于任�
 - 结构正确性（编号、模板、链接、表格）
 
 **本 skill 不做的事**：
-- **判断「应不应该写 ADR」**——那是 feat-flow2 Stage 6 的职责（三闸门 + comment vs ADR placement）。本 skill 假设调用方已经决定要写
+- **判断「应不应该写 ADR」**——那是 feat-flow Stage 6 的职责（三闸门 + comment vs ADR placement）。本 skill 假设调用方已经决定要写
 - **判断「这个决策有没有 trade-off」**——同上
 - **跨 ADR 的语义冲突检测**——本 skill 只检查 supersede 显式声明，不主动 grep 找隐性矛盾（那个 cost-benefit 失衡）
 
-**当被作为 feat-flow2 Stage 6 子组件调用时**：调用方已经过过滤，传给本 skill 的请求是「确定要做的操作」，本 skill 只负责机械执行 + 保结构正确。
+**当被作为 feat-flow Stage 6 子组件调用时**：调用方已经过过滤，传给本 skill 的请求是「确定要做的操作」，本 skill 只负责机械执行 + 保结构正确。

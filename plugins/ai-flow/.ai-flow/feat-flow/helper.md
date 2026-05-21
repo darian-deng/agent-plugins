@@ -1,97 +1,110 @@
-# feat-flow 参考手册
+# feat-flow
 
-> 供 AI 在 flow 执行期间查阅。遇到流程问题时直接读取此文件，不要依赖记忆。
+## 这是什么
 
----
+**为中大型功能需求优化的 AI-coding 工作流**。基于 Claude Code 的 ai-flow 引擎实现，覆盖从需求确认到知识沉淀的 6 个阶段。
 
-## feat-flow 是什么
+## 核心使命
 
-8 阶段软件功能开发工作流。确保需求→设计→实施→验证→审查的每一步可追溯、可恢复。
+按重要性排序：
 
-运行在 ai-flow 引擎上：阶段定义在 `.ai-flow/feat-flow/config.json`，状态存储在 `.ai-flow/feat-flow/state/`。
+1. **保障需求的交付质量高**：通过结构化决策、3 轮互审、TDD 实施、可验证 AC 等机制，让每次交付都经得起审视
+2. **团队能按一套规范落地和实践**：固定的 6 stage 流水线 + 文档结构 + 工具调用约定，让不同人在不同需求上产出一致质量
+3. **context 长期保持净正向**：通过 ADR 治理、CLAUDE.md drift 修复、注释保鲜等机制，确保项目越大 AI coding 越好，而非越差
 
----
+## 设计哲学（贯穿所有 stage）
+
+| 原则 | 含义 |
+|------|------|
+| **Clear-Safe Persistence** | 任一 stage 后 /clear 不破坏下游。所有跨 stage 信息必须落盘文件 |
+| **ADR Consultation Protocol** | 每个 stage 入场扫 docs/adr/ 注入相关 ADR，避免 AI 重新提议已被否决的方案 |
+| **Pending vocabulary** | Stage 4 task 间术语传递，避免命名漂移 |
+| **comment vs ADR placement** | 局部决策用代码注释，跨文件才写 ADR——避免 ADR 目录污染 |
+| **Bootstrap from zero** | 首次跑就建知识基础设施（docs/adr/、CLAUDE.md），不等用户手动建 |
+| **3 轮互审协议** | reviewer ↔ author 互审最多 3 轮，分歧 escalate 开发者——避免 perform agreement 也避免无限循环 |
+| **前置 stage 问题三级处理** | 中后期 stage 发现前置文档漏 / 错时，按 L1（大方向 abort）/ L2（漏写补全 + 回改）/ L3（小修 inline）分级处理，禁止 AI 自判 L3 后默默改（详见 `references/upstream-revision-protocol.md`） |
 
 ## 命令速查
 
-| 命令 | 说明 |
-|------|------|
-| `feat-flow start <需求描述>` | 开启新工作流实例（需要干净的 git 工作区） |
-| `feat-flow approve <token>` | 审批当前 Gate 检查点 |
-| `feat-flow abort` | 终止工作流，改动保存到 `feat-flow/aborted-<时间戳>` 分支 |
-| `feat-flow resume <branch>` | 从中止的分支恢复 |
-| `feat-flow status` | 查看当前阶段和 Gate 状态 |
+```sh
+feat-flow start <自然语言需求描述>   # 启动新 flow，引擎生成 flow_id (<日期>-<rand4>)
+feat-flow approve <token>           # 通过当前 Gate
+feat-flow abort                     # 中止当前 flow（创建快照到 docs/feat-flow/<flow_id>/）
+feat-flow resume                    # 在新 session 中恢复 flow
+feat-flow status                    # 查看当前 stage 和状态
+feat-flow help                      # 查看本文档
+```
 
----
+## 6 Stage 流水线
 
-## 阶段流转
-
-| 阶段 | 名称 | Gate | 完成条件 |
-|------|------|:----:|---------|
-| stage-1 | 需求确认 | ✅ | design.md 含需求/约束/验收标准，≥200字 |
-| stage-2 | 代码探索 | — | design.md 含探索摘要/影响范围 |
-| stage-3 | 方案选型 | ✅ | design.md 含方案选型，≥500字 |
-| stage-4 | 实施计划 | ✅ | plan.md 含 Tasks，有至少一个任务 |
-| stage-5 | 代码实施 | — | plan.md 所有任务标为 [x] |
-| stage-6 | 全量验证 | ✅ | 三个验证文件存在且无错误 |
-| stage-7 | 代码审查 | ✅ | review.md 存在，含审查范围和问题处理 |
-| stage-8 | 知识沉淀 | — | design.md 含 Stage 8 评估章节 |
-
-**阶段推进的唯一方式**：向 `.ai-flow/feat-flow/state/signal` 写入任意内容。
-
----
-
-## Gate 机制
-
-Gate 触发后：
-1. 引擎生成随机 token，仅通过系统弹窗显示给用户（不进入 AI 上下文）
-2. AI 必须停止，等待用户执行 `feat-flow approve <token>`
-3. 用户审批前，非审批命令会清除 Gate（让 AI 继续工作精化产出）——下次 AI 写 signal 时 Gate 会重新触发，不会永久绕过
-
-AI 不能读取 token（引擎阻止对 `state/gate-token` 的所有访问）。
-
----
-
-## 受保护路径（PreToolUse hook 机械拦截）
-
-| 路径 | 为什么 |
-|------|--------|
-| `.ai-flow/feat-flow/config.json` | 流程定义，运行时只读 |
-| `.ai-flow/feat-flow/stages/` | 阶段提示词，运行时只读 |
-| `.ai-flow/feat-flow/scripts/` | 验证脚本，只能由用户手动替换 |
-| `.ai-flow/feat-flow/state/active.json` | 引擎状态，只能由引擎写入 |
-| `.ai-flow/feat-flow/state/gate-token` | Gate 凭证，AI 不可见不可写 |
-
-`state/signal` 是唯一允许 AI 写入的 state 文件（完成信号）。
-
----
+| ID | 名称 | Gate | 关键工具 |
+|----|------|------|---------|
+| stage-1 | 需求确认（含 UI / 项目命令 / TDD bootstrap / ADR scan） | ✅ | grill-me + figma MCP + feature-dev:code-explorer + tavily/general-purpose |
+| stage-2 | 实施蓝图 | ✅ | feature-dev:code-architect |
+| stage-3 | 实施计划 | ✅ | superpowers:writing-plans |
+| stage-4 | 代码实施 | ❌（无 Gate） | superpowers:subagent-driven-development |
+| stage-5 | 质量门（验证 + 3 轮互审，合并） | ✅ | feature-dev:code-reviewer + receiving-code-review |
+| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（写入分级用户确认） | /ai-flow:adr + claude-md-management |
 
 ## 产出文件路径
 
-所有产出在 `docs/feat-flows/<flow_id>/`（`<flow_id>` 由 `feat-flow start` 时自动生成）：
+```
+docs/feat-flows/<flow_id>/
+├── design.md                # 需求 / 决策记录 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
+├── architecture.md          # 模块定位 / 接口 / 数据流 / build 顺序（Stage 2）
+├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
+└── review.md                # 互审结论 + 待开发者决策（Stage 5）
 
-| 文件 | 阶段 |
-|------|------|
-| `design.md` | stage-1 创建，stage-2/3/8 追加 |
-| `plan.md` | stage-4 创建，stage-5 更新 |
-| `verification/lint.txt` | stage-6 |
-| `verification/typecheck.txt` | stage-6 |
-| `verification/test.txt` | stage-6 |
-| `review.md` | stage-7 |
+.ai-flow/feat-flow/state/
+├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
+├── base_sha_code            # Stage 4 起点 commit SHA（用于 Stage 5 diff）
+├── signal                   # AI → 引擎 完成信号（用 Write 工具写）
+└── transitions.log          # 引擎记录 stage 切换历史
 
----
+docs/adr/                    # Stage 6 写入；首次跑会 bootstrap
+docs/feat-flows/archive/     # Stage 6 归档历史 flow 工件
+<deepest-common-ancestor>/CLAUDE.md  # Stage 6 写入（monorepo 兼容路径解析）
+```
 
-## 流程卡住了怎么办
+## 环境要求
 
-1. `feat-flow status` — 查看当前阶段和是否有挂起的 Gate
-2. 查看 `docs/feat-flows/<flow_id>/` 下的产出文件 — 了解已完成工作
-3. 如需中止：`feat-flow abort` — 所有改动保存到新 git 分支，不丢失工作
-4. **不要使用 `/rewind`** — 会导致 state 与对话历史不同步
+### 必需 skills
 
----
+用 `ls ~/.claude/skills/` 检查：
+- `grill-me` — Stage 1 问询
+- `writing-plans` — Stage 3 计划
+- `subagent-driven-development` — Stage 4 实施
+- `receiving-code-review` — Stage 5 处理反馈
 
-## Context Window 管理
+### 必需 plugins
 
-随时可以 `/clear`：产出文件持久化在 git，flow 状态持久化在 `.ai-flow/feat-flow/state/active.json`，清空对话不丢失任何进度。
+- `feature-dev` — 提供 code-explorer / code-architect / code-reviewer subagent
+- `claude-md-management` — 提供 revise-claude-md / claude-md-improver
 
-SessionStart hook 会在新 session 开始时自动注入当前阶段上下文。
+### ai-flow 本身（已自带）
+
+- `adr` skill（`/ai-flow:adr`）
+- `create` / `update` / `add` / `optimize-stage-prompt` skill
+
+### 可选但推荐
+
+- `improve-codebase-architecture` — Stage 6 rules 体积闸门触发时调用
+- `tavily-search` / `tavily-extract` — Stage 1 外部技术调研
+- figma MCP — Stage 1 UI 设计读取
+
+### 系统
+
+- Node.js ≥ 18
+- git
+- claude CLI（feat-flow 仅在 Claude Code 内运行）
+
+## 已知偏离 upstream
+
+详见 `docs/feat-flows/feat-flow-design/design.md` 第九节。简要：
+
+- SDD 默认 implementer-prompt 改为 Curated Sources 模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）
+- NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答）
+
+## 异常恢复
+
+`/clear` 后或新 session 进入：引擎自动注入 flow_id / current_stage / requirement + 重读 stage prompt（见 `session-handler.ts`）。多-task stage 通过 plan.md 的 `[x]` 标记自然恢复进度。

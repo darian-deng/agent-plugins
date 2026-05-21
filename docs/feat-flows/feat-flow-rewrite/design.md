@@ -1,6 +1,6 @@
-# feat-flow2 设计沉淀
+# feat-flow 设计沉淀
 
-> 本文档是 feat-flow2 重设计的完整规格 + 待办清单。下一个 session 应在 worktree 中以本文档为唯一输入推进实现。
+> 本文档是 feat-flow 重设计的完整规格 + 待办清单。下一个 session 应在 worktree 中以本文档为唯一输入推进实现。
 > 起草日期：2026-05-21
 
 ---
@@ -9,7 +9,7 @@
 
 ### 定位
 
-**feat-flow2 是一条覆盖中大型功能需求（10+ task / 数天工作量）从需求确认到知识沉淀的 AI-coding 工作流**。基于 Claude Code 的 ai-flow 引擎实现。
+**feat-flow 是一条覆盖中大型功能需求（10+ task / 数天工作量）从需求确认到知识沉淀的 AI-coding 工作流**。基于 Claude Code 的 ai-flow 引擎实现。
 
 不适合：
 - 改一行文案 / locale 文件
@@ -20,9 +20,9 @@
 
 让一个项目在持续被 AI 辅助开发的过程中，**context 长期保持净正向**——不随 codebase 规模扩大而让 AI coding 劣化。
 
-### 与 feat-flow 的差异
+### 重写前后的差异
 
-feat-flow（8 stage）→ feat-flow2（6 stage）。主要修正：
+原 feat-flow（8 stage）→ 重写后 feat-flow（6 stage）。主要修正：
 - Stage 1 集成 grill-me + UI 子协议 + 项目命令探测 + TDD bootstrap 决策
 - Stage 5 + Stage 6 合并为「质量门」（消除验证-审查套娃）
 - 引入 ADR Consultation Protocol（跨 stage）
@@ -49,7 +49,7 @@ feat-flow（8 stage）→ feat-flow2（6 stage）。主要修正：
 
 ### 2. 中大需求专用，简单需求不走
 
-凭工程判断走简单路径还是 feat-flow2，**判定从严**。
+凭工程判断走简单路径还是 feat-flow，**判定从严**。
 
 ### 3. 不允许"为通过而改测试"
 
@@ -131,7 +131,7 @@ feat-flow（8 stage）→ feat-flow2（6 stage）。主要修正：
    - 提取：单元测试 / 集成测试 / Lint / Typecheck 命令
    - 写到 design.md「项目命令」节
    - 检测不到 → 明确询问用户，**禁止凭推测填**
-   - **不查 pre-commit hook**（项目级基建，不归 feat-flow2 管）
+   - **不查 pre-commit hook**（项目级基建，不归 feat-flow 管）
 
 4. **TDD bootstrap 检测**：
    - 查项目是否有测试框架 + 测试目录
@@ -251,7 +251,7 @@ feat-flow（8 stage）→ feat-flow2（6 stage）。主要修正：
 - 自审 5 项 checklist 通过
 
 #### Signal
-完成所有产出后或用户明确表达"OK 进下一阶段"，用 Write 工具向 `.ai-flow/feat-flow2/state/signal` 写入。
+完成所有产出后或用户明确表达"OK 进下一阶段"，用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入。
 
 ---
 
@@ -287,7 +287,7 @@ feat-flow（8 stage）→ feat-flow2（6 stage）。主要修正：
 7. Bootstrap 完整性：若 design.md TDD 决策为「建立」，architecture 是否包含 bootstrap 步骤（依赖安装 + 配置 + 第一个 smoke test）？bootstrap task 是否明确标"不走 TDD"？
 
 任一项有问题 → 直接回复指出，我会改后再 signal。
-全部 OK → 运行 feat-flow2 approve <token> 进 Stage 3。
+全部 OK → 运行 feat-flow approve <token> 进 Stage 3。
 ```
 
 #### Signal
@@ -330,7 +330,7 @@ plan.md 通过自审后写。
 ```sh
 git add docs/feat-flows/<flow_id>/
 git commit -m "docs: <feature> stage1-3 outputs"
-git rev-parse HEAD > .ai-flow/feat-flow2/state/base_sha_code
+git rev-parse HEAD > .ai-flow/feat-flow/state/base_sha_code
 ```
 
 **Step 1：ADR scan**
@@ -404,7 +404,7 @@ implementer 报 NEEDS_CONTEXT 时主 session：
 
 #### Stage 4 完成判定
 - plan.md 所有 task 标 [x]
-- `.ai-flow/feat-flow2/state/base_sha_code` 文件存在
+- `.ai-flow/feat-flow/state/base_sha_code` 文件存在
 - 全部 task 都有对应 commit
 
 #### Signal
@@ -657,7 +657,7 @@ gate-3（冲突 + supersede 检测）：
 → skill 路由到 new
 ```
 
-**feat-flow2 stage 调用**：
+**feat-flow stage 调用**：
 ```
 （Stage 6 prompt 中）调用 adr-management skill 起草新 ADR：内容是 <从 design.md 决策记录提取>
 → skill 路由到 new
@@ -824,7 +824,7 @@ gate-3（冲突 + supersede 检测）：
 ### 偏离 1：SDD 默认 implementer-prompt Context 模式
 
 **SDD 默认**：主 session 粘贴 task 全文 + 主 session 构造 architectural context  
-**feat-flow2 改为**：主 session 给 task 文本 + 给 Curated Sources（design.md / architecture.md / plan.md / 相关 ADR / Pending vocabulary），subagent 按需读
+**feat-flow 改为**：主 session 给 task 文本 + 给 Curated Sources（design.md / architecture.md / plan.md / 相关 ADR / Pending vocabulary），subagent 按需读
 
 **理由**：
 - 我们有 3 个精华工件，SDD 假设的"1 工件 + 原始代码库"拓扑不成立
@@ -838,7 +838,7 @@ gate-3（冲突 + supersede 检测）：
 ### 偏离 2：NEEDS_CONTEXT 不允许主 session 凭推测补答
 
 **SDD 默认**：主 session 处理 NEEDS_CONTEXT（可补 context、可换模型）  
-**feat-flow2 改为**：第 1 次 NEEDS_CONTEXT → 主 session 检查问题答案是否在 docs 里，在 → 改 prompt 重 dispatch 一次；不在 → 直接 escalate 开发者
+**feat-flow 改为**：第 1 次 NEEDS_CONTEXT → 主 session 检查问题答案是否在 docs 里，在 → 改 prompt 重 dispatch 一次；不在 → 直接 escalate 开发者
 
 **理由**：主 session 信息源 = docs。subagent 读完还问 = docs 缺，主 session 也编不出。
 
@@ -847,7 +847,7 @@ gate-3（冲突 + supersede 检测）：
 ### 偏离 3：mattpocock tdd 不在 SDD 内使用
 
 **参考文档原方案**：用 0-foundation.mdc override 强制 SDD 内 implementer 用 mattpocock tdd  
-**feat-flow2 改为**：不做 override，SDD 内用其自带的 superpowers test-driven-development
+**feat-flow 改为**：不做 override，SDD 内用其自带的 superpowers test-driven-development
 
 **理由**：mattpocock tdd Workflow 1 要求"Confirm with user"，fresh subagent 无用户通道，本质冲突。
 
@@ -863,7 +863,7 @@ gate-3（冲突 + supersede 检测）：
 1. 用 `/skill-creator` 在主 session 起手对话产 skill 骨架
 2. 完整实现 7 个子能力（new / supersede / index / list / grep / bootstrap + 智能路由）
 3. 加到 plugins/ai-flow/.claude-plugin/plugin.json 的 skill 列表
-4. 在 plugins/ai-flow/.ai-flow/feat-flow2/preflight.sh 加 adr-management 安装检测  
+4. 在 plugins/ai-flow/.ai-flow/feat-flow/preflight.sh 加 adr-management 安装检测  
 **Acceptance**：
 - 能用 `/ai-flow:adr` 调用并自动路由
 - 创建 ADR 自动分配编号 + 更新索引
@@ -880,8 +880,8 @@ gate-3（冲突 + supersede 检测）：
 **工具**：`/skill-surgeon`  
 **Acceptance**：第五步含 Clear-Safe 检查
 
-### Task #5：重新生成 feat-flow2 全套文件
-**目标**：删 plugins/ai-flow/.ai-flow/feat-flow2/ 旧文件，按本文档规格生成新文件  
+### Task #5：重新生成 feat-flow 全套文件
+**目标**：删 plugins/ai-flow/.ai-flow/feat-flow/ 旧文件，按本文档规格生成新文件  
 **清单**：
 - config.json（6 stages，docs_paths 改为 `docs/feat-flows/`）
 - stages/stage-1.md ~ stage-6.md（按本文档第四节每 stage 详细规格）
@@ -890,13 +890,13 @@ gate-3（冲突 + supersede 检测）：
 - scripts/（如有 Script Validator 需求）  
 **Acceptance**：
 - claude plugin validate 通过
-- feat-flow2 start <某个测试需求> 能起跑且 Stage 1 prompt 注入正常
+- feat-flow start <某个测试需求> 能起跑且 Stage 1 prompt 注入正常
 
 ### Task #6：版本号 bump + commit + push
 - plugins/ai-flow/package.json: 0.12.0 → 0.13.0
 - plugins/ai-flow/.claude-plugin/plugin.json: 0.12.0 → 0.13.0
 - .claude-plugin/marketplace.json: ai-flow 条目 0.12.0 → 0.13.0
-- commit 信息：`feat(ai-flow): redesign feat-flow2 with 6-stage knowledge-stewardship architecture`
+- commit 信息：`feat(ai-flow): redesign feat-flow with 6-stage knowledge-stewardship architecture`
 - push 到 main 触发 CI build dist/
 
 ---
@@ -910,14 +910,14 @@ Task #3 (create skill) ─┐
 Task #4 (update skill) ─┤  ← 可并行
 Task #2 (adr-management)┘
    ↓ 全部完成后
-Task #5 (feat-flow2 文件)
+Task #5 (feat-flow 文件)
    ↓
 Task #6 (版本 bump + commit)
 ```
 
 并行可能性：
 - Task #2, #3, #4 互相独立，可并行进展（但 skill-creator / skill-surgeon 一次只能 invoke 一个 skill 流程，实操是串行）
-- Task #5 必须等 #2 #3 #4 完成（feat-flow2 prompt 会引用 adr-management 调用方式）
+- Task #5 必须等 #2 #3 #4 完成（feat-flow prompt 会引用 adr-management 调用方式）
 
 ---
 
@@ -927,11 +927,11 @@ Task #6 (版本 bump + commit)
 
 1. **为什么 6 stage 而不是 8**：原 feat-flow 的 Stage 5（验证）和 Stage 6（审查）会套娃修复，合并避免；UI 对齐合进 Stage 1 因为它与功能性决策耦合强
 
-2. **为什么不写死 lint 命令**：feat-flow2 要做到任意项目通用，不能假设 npm / pnpm / cargo
+2. **为什么不写死 lint 命令**：feat-flow 要做到任意项目通用，不能假设 npm / pnpm / cargo
 
 3. **为什么 adr-management 是独立 skill 而非 stage 内嵌**：ADR 管理有结构性需求（编号 / 索引 / supersede 链接），AI 自由发挥会写出不一致的格式
 
-4. **为什么 Stage 4 不跑 lint**：lint 是 pre-commit 兜底职责，feat-flow2 不替项目做基建工作
+4. **为什么 Stage 4 不跑 lint**：lint 是 pre-commit 兜底职责，feat-flow 不替项目做基建工作
 
 5. **为什么 implementer 用 Curated Sources 模式**：我们有 3 个精华工件（不是 SDD 假设的 1 工件 + 原始代码库），主 session 反复构造 context 浪费 + 易漏
 
@@ -941,7 +941,7 @@ Task #6 (版本 bump + commit)
 
 8. **为什么 Stage 6 评估写入分离**：避免用户一次性 yes 全过笼统化沉淀
 
-9. **为什么 bootstrap from zero**：feat-flow2 是项目知识管家，从第一次跑就建基础设施才有连续性，不能"等用户先手动建"
+9. **为什么 bootstrap from zero**：feat-flow 是项目知识管家，从第一次跑就建基础设施才有连续性，不能"等用户先手动建"
 
 ---
 

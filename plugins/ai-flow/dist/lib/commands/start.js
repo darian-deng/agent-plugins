@@ -6,9 +6,10 @@ import { hasActiveFlow, writeActiveState, appendTransition } from '../state.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 const BLOCK_START_IF_ABOVE_PCT = 95;
-function generateFlowId(flowName) {
-    const rand = Math.random().toString(36).slice(2, 8);
-    return `${flowName}-${rand}`;
+function generateFlowId() {
+    const date = new Date().toISOString().slice(0, 10);
+    const rand = Math.random().toString(36).slice(2, 6);
+    return `${date}-${rand}`;
 }
 function isWorkingTreeDirty(repoRoot) {
     try {
@@ -71,7 +72,7 @@ export async function handleStart(repoRoot, flowName, requirement, sessionId, co
             };
         }
     }
-    const flowId = generateFlowId(flowName);
+    const flowId = generateFlowId();
     const baseSha = getBaseSha(repoRoot);
     const firstStage = config.stages[0];
     const state = {
