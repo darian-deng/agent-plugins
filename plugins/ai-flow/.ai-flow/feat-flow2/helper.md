@@ -103,14 +103,7 @@ docs/feat-flows/archive/     # Stage 6 归档历史 flow 工件
 
 - SDD 默认 implementer-prompt 改为 Curated Sources 模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）
 - NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答）
-- mattpocock tdd 不在 SDD 内使用（与 fresh subagent 无用户通道冲突），由 SDD 自带的 superpowers test-driven-development 接管
 
 ## 异常恢复
 
 `/clear` 后或新 session 进入：引擎自动注入 flow_id / current_stage / requirement + 重读 stage prompt（见 `session-handler.ts`）。多-task stage 通过 plan.md 的 `[x]` 标记自然恢复进度。
-
-需要回滚到更早 stage：双击 Esc 触发 Claude Code 内置 checkpoint，或重新 `feat-flow2 abort` + `feat-flow2 start`。
-
-## 详细设计参考
-
-完整设计沉淀：`docs/feat-flows/feat-flow2-design/design.md`（12 节，约 1000 行）。

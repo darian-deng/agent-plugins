@@ -43,7 +43,7 @@
 
 **问询纪律**：
 - 每 Q 与用户对齐后**立即增量更新 design.md**，不批量
-- 涉及外部技术选型 / 最新 API → dispatch `general-purpose` 或 `tavily-search` subagent 调研，禁止凭模型既有知识给推荐
+- 涉及外部技术选型 / 最新 API → dispatch 独立调研 subagent（Claude Code 内置的 `general-purpose` 类型，或调用 `tavily-search` 等专门 Web 调研 skill），禁止凭模型既有知识给推荐
 - 涉及代码细节 → 主 session 直接 grep / read
 - load-bearing 决策被拒 / 反复对线时 → 当场提议 ADR 草稿写到 design.md「ADR 候选」节
 
@@ -72,9 +72,9 @@
 
 ## 输出规格
 
-文件 → `docs/feat-flows/<日期>-<需求 slug>/design.md`
+文件 → `docs/feat-flows/<flow_id>/design.md`
 
-flow_id 由引擎在 start 时生成（`<日期>-<rand4>`），AI 看到 context 顶部注入的实际值；docs 文件夹用此 flow_id。
+`flow_id` 是引擎在 start 时生成的唯一标识，AI 看到 context 顶部注入的实际值（形如 `2026-05-21-x7k3`）。直接用此值作为 docs 文件夹名，**不要自己重新拼日期或加描述性后缀**。
 
 design.md 骨架：
 

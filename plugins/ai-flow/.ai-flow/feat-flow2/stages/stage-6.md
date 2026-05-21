@@ -124,14 +124,22 @@ gate-3 (冲突 + supersede 检测)：
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
 **动作**：用 Write 工具向 `.ai-flow/feat-flow2/state/signal` 写入任意内容。
 
-完成后向用户报告：
+完成后向用户报告（**精确区分已 commit / 暂存待提交**）：
 
 ```
 feat-flow2 流程完成。
 
 📋 本次核心改动：[3-5 条主要变更]
-🧪 建议人工测试：[2-3 个关键场景]
+🧪 建议人工测试：[条件性——若 design.md AC 中有 [manual] 项，列对应场景；全部 [auto] 则跳过此行]
 📚 知识沉淀：[新建 N 个 ADR / 更新 CLAUDE.md / rules / 归档 X 工件]
 
-所有变更已暂存（git add），未 commit。用 git diff 查看，按团队流程手动 commit + push。
+代码与修复（Stage 4-5）：已 commit
+  → 用 `git log <BASE_SHA_CODE>..HEAD` 看 commit 列表
+  → 用 `git show <commit>` 单看某 task
+
+知识沉淀（Stage 6）：用 git add 暂存，未 commit
+  → 用 `git diff --cached` 看本 stage 写入了什么
+  → 审阅后按团队流程手动 commit + push
 ```
+
+注：`BASE_SHA_CODE` 在 `.ai-flow/feat-flow2/state/base_sha_code` 文件中。
