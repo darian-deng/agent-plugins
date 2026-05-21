@@ -48,7 +48,8 @@ fi
 ok "git $(git --version | awk '{print $3}')"
 
 # ── 4. 必需 user-installed skills ──────────────────────────────────────────────
-REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review"
+# optimize-claude-context + adr-manage 来自 darian-deng/agent-skills 仓库（Stage 6 强依赖）
+REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review optimize-claude-context adr-manage"
 MISSING_SKILLS=""
 
 for skill in $REQUIRED_SKILLS; do
@@ -61,7 +62,13 @@ done
 
 if [ -n "$MISSING_SKILLS" ]; then
   err "Missing required skills:$MISSING_SKILLS"
-  err "Install via: npx skills add <skill-name> -g"
+  err ""
+  err "通用 skill 安装：npx skills add <skill-name> -g"
+  err ""
+  err "optimize-claude-context / adr-manage 来自 darian-deng/agent-skills 仓库："
+  err "  git clone https://github.com/darian-deng/agent-skills.git /tmp/agent-skills"
+  err "  cp -r /tmp/agent-skills/skills/optimize-claude-context ~/.claude/skills/"
+  err "  cp -r /tmp/agent-skills/skills/adr-manage ~/.claude/skills/"
   exit $FAIL
 fi
 
@@ -72,16 +79,6 @@ else
   err "feature-dev plugin not detected in plugin cache."
   err "Install via: claude plugin install feature-dev@claude-plugins-official --scope user"
   err "feat-flow will fail at Stage 1, 2, and 5 without this plugin."
-  exit $FAIL
-fi
-
-# ── 6. claude-md-management plugin ─────────────────────────────────────────────
-if check_plugin "claude-md-management"; then
-  ok "plugin: claude-md-management"
-else
-  err "claude-md-management plugin not detected in plugin cache."
-  err "Install via: claude plugin install claude-md-management@claude-plugins-official --scope user"
-  err "feat-flow will fail at Stage 6 without this plugin."
   exit $FAIL
 fi
 

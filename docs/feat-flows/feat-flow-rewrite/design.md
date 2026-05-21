@@ -5,6 +5,20 @@
 
 ---
 
+## ⚠️ 冻结后的变更记录（实现完成后回写）
+
+本文档主体是设计冻结时的快照。落地实现后做了以下重要调整——主体未改，差异列在此处供未来读者对照：
+
+1. **内置 adr skill 改为外部 adr-manage**：原计划在 `plugins/ai-flow/skills/adr-management/` 内置 ADR 管理 skill（详见本文档第六节）。实际落地时，已开源到独立仓库 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills) 作为通用 user-level skill。feat-flow 改为强依赖外部 `adr-manage` skill，preflight 检查 `$HOME/.claude/skills/adr-manage/`。**本文档第六节描述的内置 skill 已废弃**，但模板格式 / 编号约定等设计原则在外部 skill 中保留。
+
+2. **claude-md-management 替换为 optimize-claude-context**：原 Stage 6 用 `claude-md-management:revise-claude-md` 处理 CLAUDE.md drift。实际落地时改为强依赖 [optimize-claude-context](https://github.com/darian-deng/agent-skills/blob/main/skills/optimize-claude-context/SKILL.md) skill——它覆盖更全面（CLAUDE.md + .claude/rules/ + .claude/skills/ + lean 原则），是 Stage 6 的 CLAUDE.md / rules 处理统一入口。preflight 完全不再检查 claude-md-management plugin。
+
+3. **强依赖立场**：上述两个 skill（adr-manage / optimize-claude-context）现在是 feat-flow 的硬依赖（preflight 缺失即 fail）。设计立场：feat-flow 要靠这些 skill 才能跑出"context 长期净正向"承诺，用作可选 fallback 会丧失质量保障。用户若不同意可在自己项目本地修改 `.ai-flow/feat-flow/`。
+
+---
+
+---
+
 ## 一、项目概要
 
 ### 定位

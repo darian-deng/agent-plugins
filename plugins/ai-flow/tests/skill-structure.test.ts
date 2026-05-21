@@ -27,7 +27,6 @@ function checkSkill(name: string) {
 
 describe('ai-flow skills — structure', () => {
   checkSkill('add');
-  checkSkill('adr');
   checkSkill('create');
   checkSkill('update');
 });
@@ -78,9 +77,10 @@ describe('feat-flow preflight.sh — integration', () => {
   it('passes when all prerequisites are mocked', () => {
     const fakeHome = makeFakeHome();
 
-    // 新 feat-flow preflight 需要的 4 个用户 skill
+    // 新 feat-flow preflight 需要的 6 个用户 skill（含来自 darian-deng/agent-skills 的 2 个）
     const skills = [
       'grill-me', 'writing-plans', 'subagent-driven-development', 'receiving-code-review',
+      'optimize-claude-context', 'adr-manage',
     ];
     for (const skill of skills) {
       mkdirSync(join(fakeHome, '.claude', 'skills', skill), { recursive: true });
@@ -95,9 +95,7 @@ describe('feat-flow preflight.sh — integration', () => {
 
     // 新 preflight 用 `find $HOME/.claude/plugins/cache -name <plugin>` 检测插件
     // 在 fakeHome 下建空目录占位即可（find -name 匹配目录名）
-    for (const plugin of ['feature-dev', 'claude-md-management']) {
-      mkdirSync(join(fakeHome, '.claude', 'plugins', 'cache', 'mock-marketplace', plugin), { recursive: true });
-    }
+    mkdirSync(join(fakeHome, '.claude', 'plugins', 'cache', 'mock-marketplace', 'feature-dev'), { recursive: true });
 
     const result = execSync(
       `HOME="${fakeHome}" PATH="${binDir}:$PATH" sh "${PREFLIGHT}" 2>&1; echo "EXIT:$?"`,

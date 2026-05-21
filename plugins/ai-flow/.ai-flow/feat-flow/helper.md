@@ -44,7 +44,7 @@ feat-flow help                      # 查看本文档
 | stage-3 | 实施计划 | ✅ | superpowers:writing-plans |
 | stage-4 | 代码实施 | ❌（无 Gate） | superpowers:subagent-driven-development |
 | stage-5 | 质量门（验证 + 3 轮互审，合并） | ✅ | feature-dev:code-reviewer + receiving-code-review |
-| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（写入分级用户确认） | /ai-flow:adr + claude-md-management |
+| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（写入分级用户确认） | adr-manage + optimize-claude-context |
 
 ## 产出文件路径
 
@@ -75,20 +75,19 @@ docs/feat-flows/archive/     # Stage 6 归档历史 flow 工件
 - `writing-plans` — Stage 3 计划
 - `subagent-driven-development` — Stage 4 实施
 - `receiving-code-review` — Stage 5 处理反馈
+- `optimize-claude-context` — Stage 6 治理 CLAUDE.md + .claude/rules/ + .claude/skills/（来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
+- `adr-manage` — Stage 6 管理 ADR（new / supersede / index / bootstrap，来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
 
 ### 必需 plugins
 
 - `feature-dev` — 提供 code-explorer / code-architect / code-reviewer subagent
-- `claude-md-management` — 提供 revise-claude-md / claude-md-improver
 
 ### ai-flow 本身（已自带）
 
-- `adr` skill（`/ai-flow:adr`）
 - `create` / `update` / `add` / `optimize-stage-prompt` skill
 
 ### 可选但推荐
 
-- `improve-codebase-architecture` — Stage 6 rules 体积闸门触发时调用
 - `tavily-search` / `tavily-extract` — Stage 1 外部技术调研
 - figma MCP — Stage 1 UI 设计读取
 
