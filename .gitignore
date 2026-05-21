@@ -7,3 +7,4 @@ plugins/ai-flow/dist/
 .cursorindexingignore
 .vscode/
 .ai-flow/*/state/
+.worktrees/
