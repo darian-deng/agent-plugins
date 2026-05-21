@@ -85,14 +85,4 @@ else
   exit $FAIL
 fi
 
-# ── 7. 可选 skills（warn 不 fail）──────────────────────────────────────────────
-OPTIONAL_SKILLS="improve-codebase-architecture tavily-search tavily-extract"
-for skill in $OPTIONAL_SKILLS; do
-  if check_skill "$skill"; then
-    ok "skill: $skill (optional)"
-  else
-    warn "skill: $skill not installed (optional — Stage 1/6 部分能力受限但 flow 仍可跑)"
-  fi
-done
-
 exit $PASS
