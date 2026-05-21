@@ -67,6 +67,18 @@ Read .ai-flow/{flow-name}/config.json
 
 5. **stage prompt 规范合规**：改动涉及 stage 文件时，改完后该 stage 是否仍符合 `optimize-stage-prompt` 规范？检查：section 顺序（目标→前置读取→步骤→输出规格→完成条件→Signal）、Signal 是否为独立末尾 section、输出规格是否明确、完成条件是否可客观验证。
 
+6. **Clear-Safe 检查**：改动是否破坏「任一 stage / task 后 /clear，后续仍可执行」的承诺？
+
+   测试方法：
+   - 模拟在改动涉及的 stage 末尾 /clear
+   - 检查下一 stage 所需信息是否全部在落盘的产出文件里
+   - 不在 → 改动必须包含「补落盘」机制，或调整边界
+
+   常见违反场景：
+   - 新加 stage 依赖前 stage 的 subagent 探索细节（subagent context 已销毁，不可恢复）
+   - 调整 stage 顺序后，新位置的前置依赖产出还没生成
+   - 合并 stage 后，原来分两次 gate 审的内容压成一次 gate，但产出未对应合并 → 用户审批面失焦
+
 发现潜在问题时，告诉用户并一起决定如何处理。
 
 ---

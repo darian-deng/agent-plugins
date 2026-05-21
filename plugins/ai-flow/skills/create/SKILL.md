@@ -48,6 +48,42 @@ Preflight 检查：{工具/依赖列表，或"无"}
 
 ---
 
+## 核心原则：Clear-Safe Persistence
+
+ai-flow 对用户的承诺：**任一 stage 完成后 /clear，或多-task stage 的任一 task 完成后 /clear，下游工作不受影响。**
+
+设计 stage 边界时必须把这条原则当成硬性约束。理由：subagent 的 context 临时存在，dispatch 完即销毁；主 session 的对话历史 /clear 会清空。**只有文件能跨 /clear 存活。**
+
+### /clear 测试
+
+对每个 stage 边界（及多-task stage 的 task 边界），问：
+
+> 此刻 /clear，下游所需信息是否完全在已落盘的产出文件里？
+
+必答"是"。否则两种修法：把缺失信息补到产出文件，或重新设计 stage 边界。
+
+### 常见违反模式
+
+❌ **错误**：Stage A 用 code-explorer subagent 探索代码，返回 200 行详细报告，主 session 综合后只写 30 行摘要到 design.md → /clear 后 Stage B 拿不到细节，要么走样、要么重做探索
+
+✅ **正确**：让 code-explorer 直接产出结构化报告到 `docs/.../exploration-report.md`，design.md 只引用关键路径 → /clear 后 Stage B 可读两份文件
+
+❌ **错误**：多-task stage 的 task N 实施时发现新信息，写在主 session 对话里没进 task 产出 → Task N+1 /clear 后丢失发现
+
+✅ **正确**：task 产出必须含「本 task 期间新发现」section，写入对应产出文件（如 plan.md task 行下挂注）
+
+### Stage 拆分决策三问
+
+判断「某项工作是否值得独立成 stage」时三问：
+
+1. **产出能否完整落盘？** 不能 → 不能拆，必须并入相邻 stage
+2. **是否依赖前一 stage 之外的额外探索？** 是 → 倾向拆（独立 stage 有自己干净的探索）；否 → 倾向合（避免重复探索）
+3. **Gate 审批对象是否与前一 stage 不同？** 是 → 倾向拆（gate 聚焦）；否 → 倾向合
+
+三问都偏"拆" → 拆；任一偏"合" → 合。
+
+---
+
 ## 第二点五阶段：全局连贯性校验
 
 用户确认提案后，**在生成任何文件之前**，先做一次内部推演，发现问题则告知用户共同决定，没有问题则静默通过：
@@ -78,6 +114,12 @@ Schema 约束：
 ```markdown
 # Stage N：{阶段名}
 
+> {flow-name} 第 N/M 步 · [流程总览](../helper.md)
+> 后续：Stage N+1（{名} · Gate / 无 Gate）— 末步时改为「本 stage 是流程末步」
+> 当前 stage 目的：{一句话}
+>
+> **元规则**：{commit 政策——如「禁止 git commit。改动用 git add 暂存」或「本 stage 允许 commit，message 格式: <prefix>: <subject>」}
+
 ## 目标
 {1-3 句话，说明此阶段产出什么、为什么}
 
@@ -99,10 +141,45 @@ Schema 约束：
 {可客观检验的状态——不能是「AI 认为完成时」}
 
 ## Signal
-向 `.ai-flow/{flow-name}/state/signal` 写入任意内容。{有 Gate 时追加：等待用户审批后进入 Stage N+1。}
+**触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
+**动作**：用 Write 工具向 `.ai-flow/{flow-name}/state/signal` 写入任意内容（Bash 写入会被引擎拒绝，必须用 Write）。
 ```
 
 单个 stage 文件 token 目标 ≤ 800（约 600 字）。
+
+#### 多 Task Stage 的拆解指南
+
+若 stage 含多个独立 task（如「逐 task 实施代码」），stage prompt 必须要求 AI **维护一个 task 列表文件**（约定俗成是 `plan.md`），每个 task 含 AC（可验收条件），完成一个就把 `[ ]` 改为 `[x]`。
+
+这样设计的目的是让 task 进度跨 /clear 存活——AI 重新进入 stage 时通过读文件恢复进度，不依赖主 session 对话历史。
+
+Task 粒度建议 **2-5 分钟 AI 工作量**——太粗 → subagent 出错风险高且归因困难；太细 → 协调成本爆炸。
+
+#### 用户反对意见处理协议（含 Gate 的 stage 通用）
+
+stage prompt 中应包含此协议，避免 AI 在用户提异议时反射性接受。可复用模板：
+
+```
+用户对 AI 产出有异议时不允许反射性接受。按下列流程：
+
+步骤 1：识别异议类型
+- A. 用户指出 AI 没考虑到的事实约束
+- B. 用户给不同偏好但没说理由
+- C. 用户的反对与 design.md 已有决策冲突
+- D. 用户的反对推翻了前置 stage 已对齐的结论
+
+步骤 2：严谨评估
+- A → 接受，并检查 design.md 是否需要同步更新
+- B → 不接受。要求用户给真实考量（如时间约束 / 历史经验 / 已知风险）。「感觉更好」类无信息量回应不接受
+- C → 与用户逐项过现有决策。改前置决策必须先更新 design.md 含新理由
+- D → 同 C
+
+步骤 3：上游影响检查
+任何被驳回的 AI 结论 → 完成本 stage 修订前必须检查 design.md 是否需更新
+不允许出现「本 stage 产物反映新决策，design.md 还停留旧决策」的分裂状态
+```
+
+根据 stage 性质裁剪文案，但 4 步框架保留。
 
 ### `.ai-flow/{flow-name}/helper.md`
 
