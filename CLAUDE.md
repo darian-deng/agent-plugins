@@ -79,3 +79,7 @@ claude plugin update ai-flow@darian-agent-plugins --scope user
 ```
 
 才能拉取最新 manifest。
+
+
+## stage 文档更新
+任何的 stage 文档更新，必须调用 /ai-flow:update 去更新

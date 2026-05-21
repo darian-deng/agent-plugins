@@ -9,9 +9,10 @@ import type { CommandResult } from '../types.js';
 
 const BLOCK_START_IF_ABOVE_PCT = 95;
 
-function generateFlowId(flowName: string): string {
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `${flowName}-${rand}`;
+function generateFlowId(): string {
+  const date = new Date().toISOString().slice(0, 10);
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${date}-${rand}`;
 }
 
 function isWorkingTreeDirty(repoRoot: string): boolean {
@@ -86,7 +87,7 @@ export async function handleStart(
     }
   }
 
-  const flowId = generateFlowId(flowName);
+  const flowId = generateFlowId();
   const baseSha = getBaseSha(repoRoot);
   const firstStage = config.stages[0]!;
 
