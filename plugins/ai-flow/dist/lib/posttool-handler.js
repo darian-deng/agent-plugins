@@ -2,8 +2,6 @@ import { hasActiveFlow, writeActiveState } from './state.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
 import { loadFlowConfig } from './flow-config-loader.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
-// Defaults for flows without a context config block. Per-flow values in config.json take precedence.
-// Changed from 70/10 → 50/5: warn earlier and more frequently on all flows by default.
 const DEFAULT_WARN_AT_PCT = 50;
 const DEFAULT_REWARN_DELTA_PCT = 5;
 export async function handlePostTool(input) {
