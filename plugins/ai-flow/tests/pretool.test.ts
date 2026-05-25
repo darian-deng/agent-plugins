@@ -4,7 +4,7 @@ import { writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'f
 import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { isGateActive, readActiveState } from '../src/lib/state.js';
-import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -248,6 +248,97 @@ describe('handlePreTool — write scope', () => {
     const anyPath = join(repo.repoRoot, 'src', 'main.ts');
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: anyPath, content: 'x' }));
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+});
+
+describe('handlePreTool — context block enforcement', () => {
+  it('context_blocked=true + write tool → DENY with /clear message', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: '/tmp/foo.ts', content: 'x' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/clear/i);
+    expect(out?.permissionDecisionReason).toContain('65%');
+  });
+
+  it('context_blocked=true + Edit tool → DENY', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 70, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', { file_path: '/tmp/foo.ts', old_string: 'a', new_string: 'b' }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('context_blocked=true + Read tool → ALLOW (read tools not blocked)', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 70, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: '/tmp/foo.ts' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('context_blocked=false + write tool → normal processing (not denied by block)', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: false,
+    });
+    const anyPath = join(repo.repoRoot, 'src', 'main.ts');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: anyPath, content: 'x' }));
+    // Should NOT be denied by context block (may be allowed or denied for other reasons)
+    const reason = out?.permissionDecisionReason ?? '';
+    expect(reason).not.toMatch(/context blocked/i);
+  });
+
+  // Design intent: signal writes are also blocked when context_blocked=true.
+  // User must /clear first — after which context_blocked resets to false — then signal.
+  // This prevents stage advancement with an already-exhausted context window.
+  it('context_blocked=true + signal Write → DENY (stage advancement blocked too)', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+    });
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: '' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/context blocked/i);
   });
 });
 

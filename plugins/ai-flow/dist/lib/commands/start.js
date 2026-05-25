@@ -85,6 +85,7 @@ export async function handleStart(repoRoot, flowName, requirement, sessionId, co
         last_session_id: sessionId,
         context_size: DEFAULT_CONTEXT_WINDOW,
         context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+        context_blocked: false,
     };
     await writeActiveState(repoRoot, flowName, state);
     await appendTransition(repoRoot, flowName, `STARTED flow_id=${flowId} stage=${firstStage.id}`);

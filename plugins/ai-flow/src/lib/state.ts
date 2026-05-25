@@ -18,6 +18,7 @@ export interface ActiveState {
   last_session_id: string | null;
   context_size: number;
   context_warning: ContextWarning;
+  context_blocked: boolean;
 }
 
 function statePath(repoRoot: string, flowName: string, file: string): string {

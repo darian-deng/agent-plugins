@@ -20,6 +20,7 @@ export async function handleSessionStart(input) {
     };
     if (isNewSession) {
         updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
+        updated.context_blocked = false;
     }
     await writeActiveState(repoRoot, flowName, updated);
     const config = await loadFlowConfig(repoRoot, flowName);

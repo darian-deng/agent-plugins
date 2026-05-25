@@ -62,6 +62,7 @@ export async function handleResume(repoRoot, flowName, branch) {
         last_session_id: null,
         context_size: 0,
         context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+        context_blocked: false,
     };
     await writeActiveState(repoRoot, flowName, restored);
     await appendTransition(repoRoot, flowName, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);

@@ -43,6 +43,12 @@ export async function handlePreTool(input) {
     if (!activeFlowName || !state)
         return null;
     const config = await loadFlowConfig(repoRoot, activeFlowName);
+    // ─── Context block enforcement ────────────────────────────────────────────────
+    if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
+        const blockedPct = state.context_warning.warned_at_pct;
+        const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : '';
+        return deny(`Context blocked${pctInfo}. Run /clear to continue — state is persisted and progress won't be lost.`);
+    }
     // ─── Bash interception ────────────────────────────────────────────────────────
     if (tool_name === 'Bash') {
         const command = String(tool_input['command'] ?? '');

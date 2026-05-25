@@ -180,6 +180,40 @@ describe('handleSessionStart', () => {
     expect(state!.context_size).toBe(1_000_000);
   });
 
+  it('new session → context_blocked reset to false in state', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'old-session',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z' },
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_blocked).toBe(false);
+  });
+
+  it('same session → context_blocked NOT reset', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'same-session',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z' },
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'same-session'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_blocked).toBe(true);
+  });
+
   it('missing stage prompt file → injects summary without crash', async () => {
     const repo = makeRepo();
     execSync(`rm -f "${join(repo.flowDir, 'stages', 'work.md')}"`, { stdio: 'pipe' });

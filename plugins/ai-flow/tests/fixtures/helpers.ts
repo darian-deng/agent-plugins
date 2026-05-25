@@ -66,6 +66,7 @@ export function writeActiveState(
     last_session_id: null,
     context_size: 0,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    context_blocked: false,
     started_at: new Date().toISOString(),
     ...state,
   };
@@ -102,6 +103,7 @@ export interface ActiveState {
   last_session_id: string | null;
   context_size: number;
   context_warning: ContextWarning;
+  context_blocked: boolean;
 }
 
 export interface ContextWarning {
@@ -131,6 +133,26 @@ export const GATED_CONFIG: FlowConfig = {
   stages: [
     { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: { gate: true } },
     { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: { gate: true } },
+  ],
+};
+
+export const BLOCKING_CONFIG: FlowConfig = {
+  schema_version: '1.0',
+  name: 'test-flow',
+  context: {
+    warn_at_pct: 30,
+    rewarn_delta_pct: 5,
+    block_at_pct: 60,
+  },
+  stages: [
+    { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: {} },
+    {
+      id: 'review',
+      prompt: 'stages/review.md',
+      write_scope: 'docs_only',
+      docs_paths: ['docs/test-flow/{flow_id}/'],
+      completion: { gate: true },
+    },
   ],
 };
 
