@@ -53,7 +53,9 @@ docs/feat-flows/<flow_id>/
 ├── design.md                # 需求 / 决策记录 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
 ├── architecture.md          # 模块定位 / 接口 / 数据流 / build 顺序（Stage 2）
 ├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
-└── review.md                # 互审结论 + 待开发者决策（Stage 5）
+├── task-reports.md          # Stage 4 每 task 的元信息累积（NEW_TERMS / ADR_CANDIDATES 等）
+├── review.md                # 互审结论 + 待开发者决策（Stage 5）
+└── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取后归档）
 
 .ai-flow/feat-flow/state/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
@@ -62,7 +64,7 @@ docs/feat-flows/<flow_id>/
 └── transitions.log          # 引擎记录 stage 切换历史
 
 docs/adr/                    # Stage 6 写入；首次跑会 bootstrap
-docs/feat-flows/archive/     # Stage 6 归档历史 flow 工件
+docs/feat-flows/archive/<flow_id>/  # Stage 6 归档历史 flow 工件（含 context-delta.md）
 <deepest-common-ancestor>/CLAUDE.md  # Stage 6 写入（monorepo 兼容路径解析）
 ```
 

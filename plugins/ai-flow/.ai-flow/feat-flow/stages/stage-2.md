@@ -54,6 +54,36 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 全部 OK → 运行 feat-flow approve <token> 进 Stage 3。
 ```
 
+## Context Delta Capture（Gate 通过后执行）
+
+用户审批通过后，写入 `docs/feat-flows/<flow_id>/context-delta.md`（创建新文件）。
+
+**范围 1：architecture.md 引入的模式**
+
+对 architecture.md 建立的每个约定逐一判断：
+- 新建文件/目录约定 + glob 可确定 → path rule 候选（附推荐 glob）
+- 跨文件行为规则（scope 可确定为 root 或具体 package-path）→ CLAUDE.md 候选
+- 架构选型（有 alternative，跨多文件影响，难以反转）→ ADR 候选
+
+**范围 2：回顾 design.md 决策记录**
+
+仅扫 `**决策**:` 字段已填写（非 TBD）的条目。已在 design.md `ADR 候选` 节列入的条目**跳过**（不重复）。剩余条目用同一分类框架判断。
+
+写入格式（三类均为空时各节写 `(none identified)`，不跳过写入）：
+
+```markdown
+## Stage 2 — <flow_id>
+
+### CLAUDE.md candidates
+- "<规则文本>" — scope: root | <package-path> — source: <来源节>
+
+### Path rule candidates
+- glob: "<pattern>" | "<规则文本>" — source: <来源节>
+
+### ADR candidates
+- "<决策摘要：为什么 X 而非 Y>" — source: <来源节>
+```
+
 ## 输出规格
 
 文件 → `docs/feat-flows/<flow_id>/architecture.md`
@@ -84,6 +114,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 - `architecture.md` 存在且 5 节齐全
 - 与 design.md 无未解冲突
 - 用户审批 7 点已主动呈现
+- `context-delta.md` 已创建且包含 `## Stage 2` 节
 
 ## Signal
 

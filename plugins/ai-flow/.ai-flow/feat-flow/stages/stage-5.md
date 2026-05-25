@@ -141,6 +141,26 @@ BASE_SHA_CODE: <SHA>
 - review.md 存在且完整
 - 所有「已解决」类问题已修复 + commit
 - 「待开发者决策」类问题由开发者拍板后已应用
+- `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `(none identified)`）
+
+## Context Delta Capture（完成条件满足后执行）
+
+检视 review.md 已解决项。三条件**全部满足**才写入：
+
+1. 修复方式是修改**代码行为模式**（而非修局部 bug）
+2. 属于**项目专有约定**（非语言/框架通用 best practice）
+3. 通过 linter / formatter / hook 配置**无法机械化执行**
+
+满足条目追加到 `docs/feat-flows/<flow_id>/context-delta.md`。
+
+**不论是否有候选，都必须追加 `## Stage 5` 节**（无候选时写 `(none identified)`）。此节是 S6 验证 S5 已执行的唯一标记。
+
+```markdown
+## Stage 5 — <flow_id>
+
+### CLAUDE.md/rules candidates
+- "<规则文本>" — source: review.md §<已解决项描述>
+```
 
 ## Signal
 

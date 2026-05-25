@@ -33,11 +33,20 @@
 - 计算「最深公共祖先目录」
 - CLAUDE.md / rules 写入对象 = **该目录**的 CLAUDE.md（不是 root，除非根才是公共祖先）
 
-### A2. ADR 候选评估（四闸门）
+### A2. Context Delta 验证
+
+读取 `docs/feat-flows/<flow_id>/context-delta.md`，验证写入完整性：
+
+- `## Stage 2` 节存在 → 继续
+- `## Stage 2` 节缺失 → **abort**：返回 Stage 2 执行 Context Delta Capture，写入后重新触发 S6（无需重走 Gate，直接续 Phase A）
+- `## Stage 5` 节存在 → 继续
+- `## Stage 5` 节缺失 → **abort**：返回 Stage 5 执行 Context Delta Capture（即使无候选也必须写此节），写入后重新触发 S6
+
+### A3. ADR 候选评估（四闸门）
 
 候选来源（合并去重）：
-1. `design.md` 决策记录中所有决策（Stage 1 对齐的）
-2. `design.md`「ADR 候选」节（Stage 1 grill-me 即时草拟的）
+1. `design.md`「ADR 候选」节（Stage 1 grill-me 即时草拟的）
+2. `context-delta.md` `## Stage 2` 节的 ADR candidates
 3. **`task-reports.md` 中每个 task 的 `ADR_CANDIDATES` 段**（Stage 4 实施过程发现的跨文件决策）
 
 对每条候选决策跑下面四闸门：
@@ -70,36 +79,29 @@ gate-3 (冲突 + supersede 检测)：
     → 列给用户判断是否冲突（仅提示不自动判定）
 ```
 
-### A3. CLAUDE.md / rules / skills 评估（统一交给 optimize-claude-context skill）
+### A4. CLAUDE.md / path rule 候选整理
 
-`optimize-claude-context` skill 是 Stage 6 处理 CLAUDE.md + .claude/rules/ + .claude/skills/ 的**强依赖**。它统一处理：
-- CLAUDE.md 体积控制（≤150 行 lean 原则）
-- rules/ 文件 path-scoped 治理
-- skills/ 语义触发管理
+读取 `context-delta.md` `## Stage 2` 和 `## Stage 5` 节的 CLAUDE.md candidates 和 Path rule candidates：
 
-调用方式（自然语言意图）：
+- CLAUDE.md candidates → 进 Phase B Tier-A（逐项展示 diff，yes/no）
+- Path rule candidates → 进 Phase B Tier-B（批量确认带 diff）
 
-- `test -f <写入根目录>/CLAUDE.md`
-- **存在** → 调用 `optimize-claude-context` skill，描述意图：「审计本次 flow 改动对 CLAUDE.md / rules 的影响。本次新增内容：<列 task-reports.md 的 NEW_TERMS_OR_PATTERNS>。请给出 audit 报告（仅扫不写）。」
-- **不存在**：
-  - 本次 flow 有 rule 候选 → 调用 `optimize-claude-context` skill：「项目还没 CLAUDE.md，本次 flow 需新增以下规则候选：<列出>。请按 lean 原则初始化 CLAUDE.md / rules（待用户确认）。」
-  - 本次无候选 → 跳过
+Routing 已在 S2/S5 确定，无需重新路由决策。
 
-### A4. NEW_TERMS_OR_PATTERNS 处理（合并到 A3）
+### A5. NEW_TERMS_OR_PATTERNS 评估
 
-- 从 `task-reports.md` 每个 task 的 `NEW_TERMS_OR_PATTERNS` 段收集
-- 作为输入传给 A3 的 `optimize-claude-context` skill（由它决定哪些进 CLAUDE.md / 哪些进 rules / 哪些丢弃）
-- 不在 Stage 6 prompt 内做"该不该入 rules"判断——交给 optimize-claude-context 的 lean 原则统一裁决
+从 `task-reports.md` 收集所有 `NEW_TERMS_OR_PATTERNS` 段。对每条调用 `optimize-claude-context` 的 `handle-one-directive` 命令（manual mode），传入该术语的自然语言描述，handle-one-directive 跑 Step 0-3 产出路由提案（CLAUDE.md / path-rule:\<glob\> / skill / deprecated）。
 
-### A5. rules 体积反向闸门
+去重：与 A4 候选语义重叠的条目合并，以 context-delta.md 来源措辞为准（S2/S5 分类时 routing 上下文更完整）。
 
-`optimize-claude-context` 自带 lean 原则（"每行都在与有限 context budget 竞争"），自然处理体积控制。本 stage 不需要额外的 300 行闸门——若 optimize-claude-context 报告 rules 体积过大需要 refactor，主 session 在 Phase B 呈现给用户决定是否当 task 跑。
+产出：路由提案清单，进 Phase B 确认。
 
 ### A6. 工件归档评估
 
 - 列 `docs/feat-flows/<flow_id>/` 工件
 - 含 supersede 候选的 design.md → 保留作历史依据
 - 普通 plan.md / review.md → 建议移到 `docs/feat-flows/archive/<flow_id>/`
+- `context-delta.md` → 归档到 `docs/feat-flows/archive/<flow_id>/context-delta.md`（作为规则引入决策溯源文档）
 
 ## Phase B：分级用户确认
 
@@ -120,17 +122,21 @@ gate-3 (冲突 + supersede 检测)：
 按用户确认结果应用：
 
 - **新 ADR** → 调用 `adr-manage` skill（自然语言意图："新建 ADR，内容是 <填决策内容>"），skill 自动分配编号 + Nygard 模板 + 更新索引
-- **CLAUDE.md / rules / skills** → 调用 `optimize-claude-context` skill（自然语言意图："按确认的清单更新 CLAUDE.md / rules / skills，内容：<列已确认条目>"）
+- **CLAUDE.md / path rule 写入** → 对每条已确认条目，调用 `optimize-claude-context` 的 `handle-one-directive` 命令（**feat-flow mode**，从 Step 1 开始，跳过 Step 0），传入 directive 文本 + 预分类的 scope + target layer：
+  - Steps 1-3 仍会执行（linter check、现有 directive 冲突检查、routing）；Step 3 路由结论应与 context-delta.md / A5 预分类一致，若不一致以 handle-one-directive 路由结果为准
+  - A4 来源（context-delta.md）和 A5 来源均适用此模式
 - **Supersede ADR** → 调用 `adr-manage` skill（自然语言意图："supersede ADR-NNNN，新决策是 <内容>"），skill 自动双向链接
 - **归档** → `git mv docs/feat-flows/<flow_id>/plan.md docs/feat-flows/archive/<flow_id>/plan.md` 等
+- **context-delta.md 归档** → `git mv docs/feat-flows/<flow_id>/context-delta.md docs/feat-flows/archive/<flow_id>/context-delta.md`
 
 所有写入用 `git add` 暂存，**不 commit**（用户最后自决提交）。
 
 ## 完成条件
 
-- Phase A 6 项全跑完
+- Phase A 6 项全跑完（含 A2 context-delta.md 完整性验证通过）
 - Phase B 用户对所有候选明确响应
 - Phase C 已写入所有 yes 项（git add 暂存）
+- context-delta.md 已归档到 `docs/feat-flows/archive/<flow_id>/`（git add 暂存）
 - design.md 末尾追加「Stage 6 沉淀记录」：列每条候选 + 用户决定 + 实际操作
 
 ## Signal
