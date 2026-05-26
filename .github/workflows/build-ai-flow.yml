@@ -6,7 +6,7 @@ on:
     paths:
       - 'plugins/ai-flow/src/**'
       - 'plugins/ai-flow/tsconfig*.json'
-      - 'plugins/ai-flow/package.json'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -33,14 +33,37 @@ jobs:
         run: npm run build
         working-directory: plugins/ai-flow
 
-      - name: Commit dist if changed
+      - name: Bump version and commit dist
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Read and bump patch version (run from repo root)
+          CURRENT=$(node -p "require('./plugins/ai-flow/package.json').version")
+          NEXT=$(node -p "const [ma,mi,pa]='$CURRENT'.split('.').map(Number); \`\${ma}.\${mi}.\${pa+1}\`")
+
+          # Update version in all three files (all paths from repo root)
+          node -e "
+            const fs=require('fs');
+            for(const f of ['plugins/ai-flow/package.json','plugins/ai-flow/.claude-plugin/plugin.json']){
+              const d=JSON.parse(fs.readFileSync(f,'utf8'));
+              d.version='$NEXT';
+              fs.writeFileSync(f,JSON.stringify(d,null,2)+'\n');
+            }
+            const m=JSON.parse(fs.readFileSync('.claude-plugin/marketplace.json','utf8'));
+            const e=m.plugins.find(p=>p.name==='ai-flow');
+            if(e) e.version='$NEXT';
+            fs.writeFileSync('.claude-plugin/marketplace.json',JSON.stringify(m,null,2)+'\n');
+          "
+
           git add plugins/ai-flow/dist/ --force
+          git add plugins/ai-flow/package.json
+          git add plugins/ai-flow/.claude-plugin/plugin.json
+          git add .claude-plugin/marketplace.json
+
           if git diff --cached --quiet; then
-            echo "dist/ unchanged, nothing to commit"
+            echo "dist/ unchanged, skipping commit"
           else
-            git commit -m "build(ai-flow): compile dist/ [auto]"
+            git commit -m "build(ai-flow): compile dist/ and bump to $NEXT [auto]"
             git push
           fi
