@@ -19,7 +19,7 @@
 | **Clear-Safe Persistence** | 任一 stage 后 /clear 不破坏下游。所有跨 stage 信息必须落盘文件 |
 | **ADR Consultation Protocol** | 每个 stage 入场扫 docs/adr/ 注入相关 ADR，避免 AI 重新提议已被否决的方案 |
 | **Pending vocabulary** | Stage 4 task 间术语传递，避免命名漂移 |
-| **comment vs ADR placement** | 局部决策用代码注释，跨文件才写 ADR——避免 ADR 目录污染 |
+| **comment vs context placement** | 优先用代码注释（file header / block / inline）；只有超出当前文件、未来新代码必须遵循、有被放弃的替代方案、或可复用多步流程，才进 context 层（rules / CLAUDE.md / skill / ADR）——避免 ADR 目录污染，也避免遗漏非 ADR 类知识 |
 | **Bootstrap from zero** | 首次跑就建知识基础设施（docs/adr/、CLAUDE.md），不等用户手动建 |
 | **3 轮互审协议** | reviewer ↔ author 互审最多 3 轮，分歧 escalate 开发者——避免 perform agreement 也避免无限循环 |
 | **前置 stage 问题三级处理** | 中后期 stage 发现前置文档漏 / 错时，按 L1（大方向 abort）/ L2（漏写补全 + 回改）/ L3（小修 inline）分级处理，禁止 AI 自判 L3 后默默改（详见 `references/upstream-revision-protocol.md`） |

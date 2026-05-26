@@ -21,7 +21,7 @@
 - `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + Stage 1 ADR scan 结果 + ADR 候选（grill-me 即时草拟的）
 - `docs/feat-flows/<flow_id>/architecture.md`
 - `docs/feat-flows/<flow_id>/plan.md`
-- `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**，含 `ADR_CANDIDATES` / `NEW_TERMS_OR_PATTERNS` / `COMMENT_DELETIONS` / `UPSTREAM_REVISION` 等关键元信息
+- `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**，含 `ADR_CANDIDATES` / `NEW_TERMS_OR_PATTERNS` / `CONTEXT_CANDIDATES` / `COMMENT_DELETIONS` / `UPSTREAM_REVISION` 等关键元信息
 - `docs/feat-flows/<flow_id>/review.md` — 互审结论 + 待开发者决策项
 - `docs/feat-flows/<flow_id>/` 全部工件（评估归档用）
 
@@ -79,14 +79,19 @@ gate-3 (冲突 + supersede 检测)：
     → 列给用户判断是否冲突（仅提示不自动判定）
 ```
 
-### A4. CLAUDE.md / path rule 候选整理
+### A4. CLAUDE.md / path rule / skill 候选整理
 
-读取 `context-delta.md` `## Stage 2` 和 `## Stage 5` 节的 CLAUDE.md candidates 和 Path rule candidates：
+候选来源（合并去重）：
 
-- CLAUDE.md candidates → 进 Phase B Tier-A（逐项展示 diff，yes/no）
-- Path rule candidates → 进 Phase B Tier-B（批量确认带 diff）
+1. `context-delta.md` `## Stage 2` 和 `## Stage 5` 节的 CLAUDE.md candidates 和 Path rule candidates（routing 已确定，无需重新路由）
+2. **`task-reports.md` 中每个 task 的 `CONTEXT_CANDIDATES` 段**（Stage 4 实施过程中「注释无法承载」的知识，按目标层已标注）
 
-Routing 已在 S2/S5 确定，无需重新路由决策。
+各类候选处理方式：
+- CLAUDE.md 类（含 context-delta 和 CONTEXT_CANDIDATES 来源） → 进 Phase B Tier-A（逐项展示 diff，yes/no）
+- rules/<domain>.md 类 → 进 Phase B Tier-B（批量确认带 diff）
+- skill 类（CONTEXT_CANDIDATES 来源）→ 同 A5 走 `optimize-claude-context` handle-one-directive（feat-flow mode，Step 1+），产出路由提案后进 Phase B 确认
+
+去重：与 context-delta.md 候选语义重叠的 CONTEXT_CANDIDATES 条目合并，以 context-delta.md 来源措辞为准。
 
 ### A5. NEW_TERMS_OR_PATTERNS 评估
 

@@ -72,19 +72,43 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - 优先按 task 描述里的 file:line 直读，不读整个文件
 - 用 git show 看前置 task diff，不读整个文件
 
+**Review 执行约束**（写进主 session 调度逻辑）：
+- spec compliance review 和 code quality review 必须每个 task 独立执行
+- 禁止跨 task 批量合并 quality review，即使相邻 task 逻辑相似
+- 每个 task 的 review 结论必须在 task-reports.md 对应 task 段落里落盘（格式见下文，新增 `**Review**` 行）
+- 主 session 在 dispatch 下一个 task 前，先确认 task-reports.md 中上一 task 有 `**Review**` 行 → 有则继续，无则先补写
+
 **本 task 实施要求**：
 - 走 TDD（若 plan task 标注要走）
 - 实施完成后跑**全量单元测试**（design.md 项目命令.单元测试），不仅本 task 新写的测试
 - 既有单测 break：默认假设是 regression，修代码而非改测试
 - 极少数情况认为测试在测 implementation detail → DONE_WITH_CONCERNS 附建议改测试的理由（必须复核）
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
-- 局部决策（≤5 行 inline 注释或 file-level top 注释能说清的 why）必须在代码位置加注释——不要积到 Stage 6 评 ADR
+- **知识沉淀优先级**（每遇到 non-obvious 决策时必须判断）：
+  - **第一步：先用代码注释**——两种形式：
+    - File header 注释：整个文件的设计意图 / 为什么这样组织
+    - Block/inline 注释：具体逻辑的 why、非显而易见的约束、绕过特定 bug 的原因
+  - **只有满足以下任意一条，才往后走**（注释无法承载的判断标准）：
+    1. 超出当前文件：其他文件的实施者也需要遵守这条约束
+    2. 未来新代码必须遵循：对所有未来代码的要求，不只是解释现有代码
+    3. 有被放弃的替代方案：存在架构 trade-off，需要记录「为什么不选 X」
+    4. 可复用的多步流程：需要反复执行的操作序列，不是一处判断
+  - **满足上述条件后，按层路由**（多条可同时满足，各条路由独立记录）：
+    - 条件 1/2（超出文件 / 未来新代码必须遵循）→ 记入 `CONTEXT_CANDIDATES`（rules / CLAUDE.md / skill 类）
+    - 条件 3（有被放弃的替代方案）→ 记入 `ADR_CANDIDATES`，不记 CONTEXT_CANDIDATES
+    - 条件 4（可复用多步流程）→ 记入 `CONTEXT_CANDIDATES`（skill 类）
+    - 同时满足条件 3 和其他条件时：ADR_CANDIDATES 和 CONTEXT_CANDIDATES 均记
 - 删注释 ≥3 行必须在 task report 写理由
 
 **task report 额外字段**（在 SDD 默认 DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT 基础上）：
-- `INLINE_COMMENTS_ADDED`：在哪些代码位置加了 WHY 注释
-- `NEW_TERMS_OR_PATTERNS`：本 task 引入的术语候选（如 "LRUEvictionPolicy"），建议进 rules
-- `ADR_CANDIDATES`：跨文件性质的决策候选（建议 Stage 6 评 ADR）
+- `INLINE_COMMENTS_ADDED`：在哪些代码位置加了 WHY 注释（file header / block / inline）
+- `NEW_TERMS_OR_PATTERNS`：本 task 引入的**术语/命名规范**候选（如 "LRUEvictionPolicy"），建议进 rules
+- `CONTEXT_CANDIDATES`：通过「注释无法承载」判断后，需进入项目 context 层的候选，按目标层标注：
+  - `rules/<domain>.md`：当前 package 适用的约束
+  - `CLAUDE.md`：全局行为规范
+  - `skill`：可复用操作流程
+  - （ADR 类仍记入 `ADR_CANDIDATES`，不在此字段）
+- `ADR_CANDIDATES`：跨文件性质、有 trade-off 的架构决策候选（建议 Stage 6 评 ADR）
 - `COMMENT_DELETIONS`：删除注释 ≥3 行的位置 + 理由
 - `UPSTREAM_REVISION`（如适用）：本 task 期间自查发现前置 stage 问题——按 `references/upstream-revision-protocol.md` 标 L1/L2/L3 + 描述 + 处理
 
@@ -100,15 +124,22 @@ implementer subagent 返回 DONE / DONE_WITH_CONCERNS 后，**主 session 必须
 **Status**: DONE | DONE_WITH_CONCERNS
 **Commit**: <commit-sha>
 **Date**: YYYY-MM-DD
+**Review**: spec PASS | FAIL，quality PASS | FAIL
 
 ### INLINE_COMMENTS_ADDED
-（位置列表）
+（位置列表：file header / block / inline，说明注释了什么）
 
 ### NEW_TERMS_OR_PATTERNS
-（候选术语列表，每条含建议）
+（术语/命名规范候选，每条含建议层：rules/<domain>.md 或 CLAUDE.md）
+
+### CONTEXT_CANDIDATES
+（注释无法承载的知识，按目标层标注；如无，填"无"）
+- `rules/<domain>.md`：
+- `CLAUDE.md`：
+- `skill`：
 
 ### ADR_CANDIDATES
-（跨文件决策候选列表，每条含理由）
+（跨文件架构决策候选，每条含 trade-off 理由）
 
 ### COMMENT_DELETIONS
 （删除位置 + 理由）
@@ -162,7 +193,7 @@ implementer 或主 session 在 Stage 4 期间自查发现前置 stage 漏写 / �
 - plan.md 中所有 task 标 `[x]`
 - 每 task 对应一个 commit
 - `.ai-flow/feat-flow/state/base_sha_code` 文件存在
-- `docs/feat-flows/<flow_id>/task-reports.md` 累积所有 task report（**落盘文件，Stage 6 从此读 ADR_CANDIDATES / NEW_TERMS_OR_PATTERNS**）
+- `docs/feat-flows/<flow_id>/task-reports.md` 累积所有 task report（**落盘文件，Stage 6 从此读 ADR_CANDIDATES / NEW_TERMS_OR_PATTERNS / CONTEXT_CANDIDATES**）
 
 ## 完成条件
 
