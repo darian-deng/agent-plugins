@@ -62,5 +62,17 @@ export async function handleSessionStart(
     systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
   }
 
+  // After /clear, the user should not need to type "继续" to resume.
+  // Instruct the model to immediately output a status summary and continue
+  // the task on its very first response, without waiting for user direction.
+  if (isClear && !gateActive) {
+    lines.unshift(
+      `INSTRUCTION (context was just cleared via /clear):`,
+      `Your FIRST response must begin with a one-line status: "Resuming ${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
+      `Then immediately continue the task from where you left off — do NOT ask the user what to do next.`,
+      ``,
+    );
+  }
+
   return { additionalContext: lines.join('\n'), systemMessage };
 }
