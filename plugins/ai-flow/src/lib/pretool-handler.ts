@@ -110,9 +110,13 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       await writeGateToken(repoRoot, activeFlowName, token);
       await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
       return deny(
-        `Gate checkpoint for stage '${state.current_stage}'. Waiting for human approval.\n` +
-        `(The approval token was sent to the user via system message.)`,
-        `Gate token for '${activeFlowName}' stage '${state.current_stage}':\n${token}\n\nTo approve: ${activeFlowName} approve ${token}`
+        `Gate checkpoint for stage '${state.current_stage}'. AI has determined this stage is complete.\n` +
+        `User notification and approval command have been sent via system message.\n` +
+        `Do NOT output "${activeFlowName} approve" in your response. ` +
+        `Just acknowledge the gate is pending and direct the user to check the system message above.`,
+        `**${activeFlowName} Stage \`${state.current_stage}\` 已完成，等待人工确认。**\n` +
+        `- 如确认本 stage 产物符合预期 → 执行: ${activeFlowName} approve ${token}\n` +
+        `- 如认为需要继续完善 → 继续讨论，完成后重新触发`
       );
     }
 

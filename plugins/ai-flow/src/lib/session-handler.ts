@@ -1,30 +1,31 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import type { SessionStartInput, SessionOutput } from './types.js';
-import { hasActiveFlow, writeActiveState, isGateActive } from './state.js';
+import type { SessionStartInput } from './types.js';
+import { hasActiveFlow, writeActiveState, isGateActive, readGateToken } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 
 export async function handleSessionStart(
   input: SessionStartInput
-): Promise<{ additionalContext: string } | null> {
+): Promise<{ additionalContext: string; systemMessage?: string } | null> {
   const { cwd: repoRoot, session_id, model } = input;
 
   const active = await hasActiveFlow(repoRoot);
   if (!active) return null;
 
   const { flowName, state } = active;
-  // Reset context_warning whenever session changes, including when last_session_id is null
-  // (which happens after resume). null means "unknown previous session" — treat as new.
+
   const isNewSession = state.last_session_id !== session_id;
+  // /clear and compact keep the same session_id, so isNewSession stays false.
+  // Detect them via source to ensure context state is properly reset.
+  const isClear = input.source === 'compact' || input.source === 'clear';
 
   const updated = {
     ...state,
     last_session_id: session_id,
-    // Only startup events carry a reliable model name; other sources (resume/clear/compact) do not.
     ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
   };
-  if (isNewSession) {
+  if (isNewSession || isClear) {
     updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
     updated.context_blocked = false;
   }
@@ -40,10 +41,16 @@ export async function handleSessionStart(
     `requirement: ${state.requirement}`,
   ];
 
+  let systemMessage: string | undefined;
+
   const gateActive = await isGateActive(repoRoot, flowName);
   if (gateActive) {
-    lines.push('', `Gate pending — waiting for: ${flowName} approve <token>`);
-    lines.push(`(The token was delivered to the user via system message.)`);
+    const token = await readGateToken(repoRoot, flowName);
+    const approveCmd = token ? `${flowName} approve ${token}` : `${flowName} approve <token>`;
+    lines.push('', `Gate pending — run to approve: ${approveCmd}`);
+    // Re-surface the token so the model can give the user the exact command,
+    // especially after /clear or session restart when the original system message is gone.
+    systemMessage = `[feat-flow] Gate pending for stage '${state.current_stage}'.\nRun: ${approveCmd}`;
   } else {
     const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
     if (existsSync(promptPath)) {
@@ -51,7 +58,8 @@ export async function handleSessionStart(
         lines.push('', '---', '', readFileSync(promptPath, 'utf-8'));
       } catch { /* non-fatal */ }
     }
+    systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
   }
 
-  return { additionalContext: lines.join('\n') };
+  return { additionalContext: lines.join('\n'), systemMessage };
 }

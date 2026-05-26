@@ -9,9 +9,11 @@ const input = (() => { try { return JSON.parse(raw) as SessionStartInput; } catc
 try {
   const result = await handleSessionStart(input);
   if (result) {
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: result.additionalContext }
-    }));
+    const out: Record<string, unknown> = {
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: result.additionalContext },
+    };
+    if (result.systemMessage) out['systemMessage'] = result.systemMessage;
+    process.stdout.write(JSON.stringify(out));
   }
 } catch (e) {
   process.stderr.write(`[ai-flow session error] ${String(e)}\n`);
