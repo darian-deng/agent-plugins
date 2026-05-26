@@ -11,10 +11,19 @@ description: 仅通过 /ai-flow:add 命令显式调用。绝对不要基于任�
 
 ### 1. 定位插件根目录
 
-`$CLAUDE_PLUGIN_ROOT` 仅在 hook 执行时有效，Claude 的 Bash 工具里它是空的。需要主动找到已安装的最新版本：
+`$CLAUDE_PLUGIN_ROOT` 仅在 hook 执行时有效，Claude 的 Bash 工具里它是空的。优先从 `installed_plugins.json` 读取实际安装路径，避免缓存里的历史版本干扰：
 
 ```bash
-# 按版本号降序取第一个（最新版本）
+PLUGIN_ROOT=$(python3 -c "
+import json, os, sys
+f = os.path.expanduser('~/.claude/plugins/installed_plugins.json')
+try:
+    d = json.load(open(f))
+    path = d.get('ai-flow@darian-agent-plugins', [{}])[0].get('installPath', '')
+    if path: print(path)
+    else: sys.exit(1)
+except: sys.exit(1)
+" 2>/dev/null) || \
 PLUGIN_ROOT=$(ls -d ~/.claude/plugins/cache/darian-agent-plugins/ai-flow/*/ 2>/dev/null \
   | sort -t/ -k9 -V -r | head -1 | sed 's:/$::')
 echo "Plugin root: $PLUGIN_ROOT"
