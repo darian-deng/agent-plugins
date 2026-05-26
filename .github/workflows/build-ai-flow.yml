@@ -3,9 +3,6 @@ name: Build ai-flow dist
 on:
   push:
     branches: [main]
-    paths:
-      - 'plugins/ai-flow/src/**'
-      - 'plugins/ai-flow/tsconfig*.json'
   workflow_dispatch:
 
 jobs:
