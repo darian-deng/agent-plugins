@@ -5,6 +5,7 @@ import { hasActiveFlow, writeActiveState, isGateActive, readGateToken } from './
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 
+
 export async function handleSessionStart(
   input: SessionStartInput
 ): Promise<{ additionalContext: string; systemMessage?: string } | null> {
