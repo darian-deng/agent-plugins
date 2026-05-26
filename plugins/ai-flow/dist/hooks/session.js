@@ -16,9 +16,12 @@ catch {
 try {
     const result = await handleSessionStart(input);
     if (result) {
-        process.stdout.write(JSON.stringify({
-            hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: result.additionalContext }
-        }));
+        const out = {
+            hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: result.additionalContext },
+        };
+        if (result.systemMessage)
+            out['systemMessage'] = result.systemMessage;
+        process.stdout.write(JSON.stringify(out));
     }
 }
 catch (e) {
