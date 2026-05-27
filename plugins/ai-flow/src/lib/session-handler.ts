@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput } from './types.js';
-import { hasActiveFlow, writeActiveState, isGateActive, readGateToken } from './state.js';
+import { hasActiveFlow, writeActiveState, isGateActive, readGateToken, appendHookLog } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 
@@ -15,6 +15,8 @@ export async function handleSessionStart(
   if (!active) return null;
 
   const { flowName, state } = active;
+
+  await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
 
   const isNewSession = state.last_session_id !== session_id;
   // /clear and compact keep the same session_id, so isNewSession stays false.

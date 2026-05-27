@@ -88,6 +88,12 @@ export async function appendViolation(repoRoot: string, flowName: string, messag
   appendFileSync(path, `${timestamp} ${message}\n`);
 }
 
+export async function appendHookLog(repoRoot: string, flowName: string, message: string): Promise<void> {
+  const path = statePath(repoRoot, flowName, 'hooks.log');
+  const timestamp = new Date().toISOString();
+  appendFileSync(path, `${timestamp} ${message}\n`);
+}
+
 export function nextStage(config: FlowConfig, currentStageId: string): string | null {
   const idx = config.stages.findIndex((s) => s.id === currentStageId);
   if (idx === -1 || idx === config.stages.length - 1) return null;

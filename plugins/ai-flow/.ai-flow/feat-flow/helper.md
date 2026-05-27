@@ -61,7 +61,8 @@ docs/feat-flows/<flow_id>/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
 ├── base_sha_code            # Stage 4 起点 commit SHA（用于 Stage 5 diff）
 ├── signal                   # AI → 引擎 完成信号（用 Write 工具写）
-└── transitions.log          # 引擎记录 stage 切换历史
+├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
+└── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_ISSUED / ADVANCED）
 
 docs/adr/                    # Stage 6 写入；首次跑会 bootstrap
 docs/feat-flows/archive/<flow_id>/  # Stage 6 归档历史 flow 工件（含 context-delta.md）
