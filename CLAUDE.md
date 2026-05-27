@@ -47,7 +47,8 @@ npm run build   # 本地验证编译无误即可，不用 git add dist/
 
 ### CI 行为说明
 
-- `build-ai-flow.yml` 仅在 `plugins/ai-flow/src/**`、`package.json`、`tsconfig*.json`、`package-lock.json` 变更时触发，其他 plugin 的改动不会触发此 workflow
+- `build-ai-flow.yml` 在以下路径变更时触发（其他 plugin 不会触发）：
+  `plugins/ai-flow/src/**`、`.ai-flow/**`（stage 文档/flow 配置）、`.claude-plugin/**`、`package.json`、`tsconfig*.json`、`package-lock.json`
 - CI **不自动 bump 版本**：版本号由开发者在 package.json + plugin.json 两处设定，CI 照单全收，只同步到 marketplace.json
 - `marketplace.json` 中 ai-flow 的版本字段由 CI 维护；eslint-lsp / ts-eslint-lsp 没有 CI 构建，它们的版本字段仍由开发者手动维护
 - `marketplace.json` 其余字段（`description`、`tags`、`category`、`homepage`）全部由开发者手动维护，不要让 CI 覆盖

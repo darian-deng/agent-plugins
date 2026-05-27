@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'plugins/ai-flow/src/**'
+      - 'plugins/ai-flow/.ai-flow/**'
+      - 'plugins/ai-flow/.claude-plugin/**'
       - 'plugins/ai-flow/package.json'
       - 'plugins/ai-flow/tsconfig*.json'
       - 'plugins/ai-flow/package-lock.json'
