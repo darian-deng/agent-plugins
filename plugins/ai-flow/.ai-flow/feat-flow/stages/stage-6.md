@@ -2,7 +2,7 @@
 
 > feat-flow 第 6/6 步 · [流程总览](../helper.md)
 > 末步：本 stage 是流程末步
-> 当前 stage 目的：让本次 flow 让项目 context 净正向——增 + 修 + 退役 + 归档四类操作平衡（不是 add-only）
+> 当前 stage 目的：让本次 flow 让项目 context 净正向——增 + 修 + 退役三类操作平衡（不是 add-only）
 >
 > **元规则**：禁止 git commit。写入用 git add 暂存，用户最后自决提交。
 
@@ -12,9 +12,8 @@
 - 新增（应有的）
 - 修复（drift 的）
 - 退役（被 supersede 的）
-- 归档（已不需要的）
 
-**关键设计**：Phase A 静默自动评估，Phase B 直接执行所有写入并呈现汇总表，用户确认后归档并结束 flow。
+**关键设计**：Phase A 静默自动评估，Phase B 直接执行所有写入并呈现汇总表，用户确认后结束 flow。
 
 ## 前置读取
 
@@ -23,7 +22,7 @@
 - `docs/feat-flows/<flow_id>/plan.md`
 - `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**，含 `ADR_CANDIDATES` / `NEW_TERMS_OR_PATTERNS` / `CONTEXT_CANDIDATES` / `COMMENT_DELETIONS` / `UPSTREAM_REVISION` 等关键元信息
 - `docs/feat-flows/<flow_id>/review.md` — 互审结论 + 待开发者决策项
-- `docs/feat-flows/<flow_id>/` 全部工件（评估归档用）
+- `docs/feat-flows/<flow_id>/` 全部工件
 
 ## Phase A：自动评估（不写文件，不向用户输出）
 
@@ -106,13 +105,6 @@ gate-3 (现有 ADR 检测)：
 
 去重：与 A4 候选语义重叠的条目合并，以 context-delta.md 来源措辞为准（S2/S5 分类时 routing 上下文更完整）。
 
-### A6. 工件归档评估
-
-- 列 `docs/feat-flows/<flow_id>/` 工件
-- 含 ADR 历史依据的 design.md → 保留；Phase B 步骤 3 负责在其末尾追加「Stage 6 沉淀记录」
-- 普通 plan.md / review.md / architecture.md / task-reports.md → 归档到 `docs/feat-flows/archive/<flow_id>/`（仅当文件实际存在时）
-- `context-delta.md` → 归档到 `docs/feat-flows/archive/<flow_id>/context-delta.md`（仅当文件实际存在时）
-
 > Phase A 结束。进入 Phase B 前不得向用户输出任何分析内容。（A2 abort 条件已在上方处理。）
 
 ## Phase B：执行并呈现汇总表
@@ -120,8 +112,6 @@ gate-3 (现有 ADR 检测)：
 Phase A 分析完成后，**直接执行所有知识写入**（不等用户逐项确认），用 git add 暂存，然后向用户呈现汇总表。
 
 ### 执行顺序
-
-**归档不在此阶段执行**，Phase C 负责。下面四步均不包含 git mv 归档操作：
 
 1. 调用 `optimize-claude-context` handle-one-directive（feat-flow mode）写入所有 CLAUDE.md / rules / skill 候选
 2. 更新或新建 ADR（调用 `adr-manage` skill）
@@ -143,7 +133,7 @@ Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
 查看所有改动：git diff --cached
 撤回某文件：git restore --staged <路径>
 
-确认无误后告知，归档将自动执行并结束 feat-flow。
+确认无误后告知，flow 将结束。
 ```
 
 **「操作」类型**：新建 ADR / 更新 ADR / 新增规则 / 更新规则 / 更新文档 / 新增路径规则
@@ -153,31 +143,11 @@ Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
 - 说明不知道这条知识会造成什么后果
 - 不写泛泛的分类描述（「更新了命名」是无效原因，「Task 3 实施时触发 ts/dot-notation lint error，$wtFetch 等含 $ 属性名必须用点记法」才是有效原因）
 
-**归档不出现在表格中**：归档是 flow 结束时的机械收尾，在用户确认后自动执行。
-
-## Phase C：用户确认后执行归档
-
-用户确认汇总表无误后，自动执行工件归档。**以 A6 实际列出的文件为准，不存在的文件跳过，不执行 git mv：**
-
-```sh
-# 逐一检查文件是否存在，存在则 git mv
-git mv docs/feat-flows/<flow_id>/architecture.md  docs/feat-flows/archive/<flow_id>/architecture.md
-git mv docs/feat-flows/<flow_id>/plan.md          docs/feat-flows/archive/<flow_id>/plan.md
-git mv docs/feat-flows/<flow_id>/review.md        docs/feat-flows/archive/<flow_id>/review.md
-git mv docs/feat-flows/<flow_id>/task-reports.md  docs/feat-flows/archive/<flow_id>/task-reports.md
-git mv docs/feat-flows/<flow_id>/context-delta.md docs/feat-flows/archive/<flow_id>/context-delta.md
-```
-
-（design.md 保留——含 ADR 历史依据及 Stage 6 沉淀记录）
-
-git add 所有归档操作，然后写入 signal。
-
 ## 完成条件
 
-- Phase A 6 项全跑完（含 A2 context-delta.md 完整性验证通过）
+- Phase A 5 项全跑完（含 A2 context-delta.md 完整性验证通过）
 - Phase B 所有写入已执行并 git add 暂存
 - 用户已确认汇总表
-- Phase C 归档已执行并 git add 暂存
 - design.md 末尾已追加「Stage 6 沉淀记录」
 
 ## Signal
@@ -192,7 +162,7 @@ feat-flow 流程完成。
 
 📋 本次核心改动：[3-5 条主要变更]
 🧪 建议人工测试：[条件性——若 design.md AC 中有 [manual] 项，列对应场景；全部 [auto] 则跳过此行]
-📚 知识沉淀：[更新 N 个 ADR / 新增规则 / 归档 X 工件]
+📚 知识沉淀：[更新 N 个 ADR / 新增规则]
 
 代码与修复（Stage 4-5）：已 commit
   → 用 `git log <BASE_SHA_CODE>..HEAD` 看 commit 列表

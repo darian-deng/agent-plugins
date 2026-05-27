@@ -44,7 +44,7 @@ feat-flow help                      # 查看本文档
 | stage-3 | 实施计划 | ✅ | superpowers:writing-plans |
 | stage-4 | 代码实施 | ❌（无 Gate） | superpowers:subagent-driven-development |
 | stage-5 | 质量门（验证 + 3 轮互审，合并） | ✅ | feature-dev:code-reviewer + receiving-code-review |
-| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（直接写入，汇总表确认后归档） | adr-manage + optimize-claude-context |
+| stage-6 | 知识沉淀（增 + 修 + 退役） | ❌（直接写入，汇总表确认） | adr-manage + optimize-claude-context |
 
 ## 产出文件路径
 
@@ -55,7 +55,7 @@ docs/feat-flows/<flow_id>/
 ├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
 ├── task-reports.md          # Stage 4 每 task 的元信息累积（NEW_TERMS / ADR_CANDIDATES 等）
 ├── review.md                # 互审结论 + 待开发者决策（Stage 5）
-└── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取后归档）
+└── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取）
 
 .ai-flow/feat-flow/state/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
@@ -65,7 +65,6 @@ docs/feat-flows/<flow_id>/
 └── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_ISSUED / ADVANCED）
 
 docs/adr/                    # Stage 6 写入；首次跑会 bootstrap
-docs/feat-flows/archive/<flow_id>/  # Stage 6 归档历史 flow 工件（含 context-delta.md）
 <deepest-common-ancestor>/CLAUDE.md  # Stage 6 写入（monorepo 兼容路径解析）
 ```
 
