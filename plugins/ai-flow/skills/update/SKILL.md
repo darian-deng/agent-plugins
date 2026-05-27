@@ -47,7 +47,7 @@ Read .ai-flow/{flow-name}/config.json
 - 给某阶段加 / 去 Gate
 - 加 / 改 Script Validator 脚本
 - 更新某阶段的 AI 提示词
-- 修改 `preflight.sh` 检查
+- 修改 `preflight.sh` 检查（含新增 / 删除外部依赖：skill / plugin / MCP）
 
 ---
 
@@ -63,7 +63,10 @@ Read .ai-flow/{flow-name}/config.json
 
 3. **Script Validator 可靠性**：新脚本的 cwd 是 flow 目录，不是项目根目录。相对路径是否正确？
 
-4. **preflight 同步**：新增了工具依赖，`preflight.sh` 是否需要同步更新？
+4. **preflight 同步**：若本次改动新增或删除了外部依赖（skill / plugin / MCP），必须同步更新 `preflight.sh`。更新时走依赖解析流程：
+   - 对每个新增依赖：搜索确认类型和安装命令（Skill → `npx skills find <name>`；Plugin → GitHub/marketplace；MCP → 官方文档）
+   - 搜不到 → 停下来问用户提供类型和安装命令
+   - 解析完成后按 create skill 中的 preflight 模板更新对应节（Skills / Plugins / MCP）
 
 5. **stage prompt 规范合规**：改动涉及 stage 文件时，改完后该 stage 是否仍符合 `optimize-stage-prompt` 规范？检查：section 顺序（目标→前置读取→步骤→输出规格→完成条件→Signal）、Signal 是否为独立末尾 section、输出规格是否明确、完成条件是否可客观验证。
 

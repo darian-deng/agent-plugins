@@ -20,7 +20,10 @@ description: 仅通过 /ai-flow:create 命令显式调用。绝对不要基于�
 - **中间环节**：从触发到完成，有哪些自然的阶段？
 - **人工参与点**：哪些环节需要人来确认后才能继续？
 - **自动化验证**：哪些环节可以用脚本客观判断完成（如跑测试、检查文件）？
-- **环境依赖**：flow 依赖哪些工具或前置条件？
+- **外部依赖**：flow 依赖哪些外部工具？分三类收集：
+  - **Skills**（Claude Code skill，名称即可）
+  - **Plugins**（Claude Code plugin，名称即可）
+  - **MCP**（MCP server，名称即可）
 
 **六个维度全部清晰之前，不要进入提案阶段。** 一个 flow 设计错误的代价是高的。
 
@@ -84,7 +87,36 @@ ai-flow 对用户的承诺：**任一 stage 完成后 /clear，或多-task stage
 
 ---
 
-## 第二点五阶段：全局连贯性校验
+## 第二点五阶段：依赖解析
+
+用户确认提案中的外部依赖列表后，对每个依赖逐一解析，**搜不到就停下来问用户**：
+
+### 每个依赖的解析流程
+
+1. **搜索类型和安装方式**（按顺序尝试）：
+   - Skill → 执行 `npx skills find <name>`，看顶部结果的 `owner/repo@skill` 格式
+   - Plugin → 搜索 Claude plugin marketplace / 用户提供的 GitHub 仓库（如 `darian-deng/agent-plugins`）
+   - MCP → 查该 MCP 的官方文档或 README
+
+2. **搜到** → 记录：类型、检测命令、安装命令
+
+3. **搜不到** → 停下来，告知用户未找到，请用户提供：
+   - 类型（skill / plugin / MCP）
+   - 安装命令或 repo 地址
+
+4. 所有依赖解析完成后，进入第二点七五阶段。
+
+### 各类型的检测和安装方式
+
+| 类型 | 检测方式 | 安装命令格式 |
+|------|---------|------------|
+| Skill | `[ -f "$HOME/.claude/skills/<name>/SKILL.md" ]` | `npx skills add owner/repo@skill -g -y` |
+| Plugin | `find "$HOME/.claude/plugins/cache" -maxdepth 4 -type d -name "<name>"` | `claude plugin install name@registry --scope user` |
+| MCP | `claude mcp list 2>/dev/null \| grep -q "^<name>"` | 依官方文档（`claude mcp add` 或手动配置） |
+
+---
+
+## 第二点七五阶段：全局连贯性校验
 
 用户确认提案后，**在生成任何文件之前**，先做一次内部推演，发现问题则告知用户共同决定，没有问题则静默通过：
 
@@ -190,15 +222,78 @@ stage prompt 中应包含此协议，避免 AI 在用户提异议时反射性接
 - 产出文件路径汇总
 - 环境要求
 
-### `.ai-flow/{flow-name}/preflight.sh`（如有依赖检测需求）
+### `.ai-flow/{flow-name}/preflight.sh`
 
-- chmod +x
-- 检测失败时打印清晰错误信息后 exit 1
-- 全部通过时 exit 0
-- 只检测，不安装
-- 错误信息中若包含 `npx skills add` 安装命令，必须带 `-g -y` flags（`-g` 全局安装，`-y` 跳过交互式 scope 选择）
+有外部依赖时必须生成。按以下模板填充，空节（无该类依赖）直接省略整节：
 
-脚本的工作目录（cwd）是 `.ai-flow/{flow-name}/`。如需在项目根目录执行命令，要先切换：
+```sh
+#!/bin/sh
+# {flow-name} preflight — runs once when '{flow-name} start' is called.
+# Exit 0 = all checks pass. Non-zero = blocked with error message.
+
+PASS=0
+FAIL=1
+SKILLS_DIR="$HOME/.claude/skills"
+PLUGINS_CACHE="$HOME/.claude/plugins/cache"
+
+err()  { printf "❌  %s\n" "$1" >&2; }
+cmd()  { printf "    %s\n" "$1" >&2; }
+ok()   { printf "✅  %s\n" "$1"; }
+check_cmd()    { command -v "$1" >/dev/null 2>&1; }
+check_skill()  { [ -f "$SKILLS_DIR/$1/SKILL.md" ]; }
+check_plugin() { find "$PLUGINS_CACHE" -maxdepth 4 -type d -name "$1" 2>/dev/null | grep -q .; }
+check_mcp()    { claude mcp list 2>/dev/null | grep -q "^$1"; }
+
+# ── 系统依赖 ────────────────────────────────────────────────────────
+# （按需添加，参考示例）
+# if ! check_cmd node; then
+#   err "node not found."; exit $FAIL
+# fi
+# ok "Node.js $(node --version)"
+
+# ── Skills ─────────────────────────────────────────────────────────
+# （每个 skill 一行 check，所有 missing 统一报告）
+MISSING_SKILLS=""
+for skill in {skill-1} {skill-2}; do   # ← 替换为实际 skill 名列表
+  if check_skill "$skill"; then
+    ok "skill: $skill"
+  else
+    MISSING_SKILLS="$MISSING_SKILLS $skill"
+  fi
+done
+if [ -n "$MISSING_SKILLS" ]; then
+  err "Missing required skills:$MISSING_SKILLS"
+  err "── 复制以下命令到终端执行 ──────────────────────────────────"
+  # 每个 missing skill 一行，格式固定：
+  cmd "npx skills add {owner/repo}@{skill-name} -g -y"   # ← 替换
+  err "────────────────────────────────────────────────────────────"
+  exit $FAIL
+fi
+
+# ── Plugins ────────────────────────────────────────────────────────
+# （每个 plugin 独立 check，避免 cascade fail）
+# if check_plugin "{plugin-name}"; then
+#   ok "plugin: {plugin-name}"
+# else
+#   err "{plugin-name} plugin not detected."
+#   err "Install: claude plugin install {name}@{registry} --scope user"
+#   exit $FAIL
+# fi
+
+# ── MCP ────────────────────────────────────────────────────────────
+# （MCP 安装方式各异，只检测是否已配置）
+# if check_mcp "{mcp-name}"; then
+#   ok "mcp: {mcp-name}"
+# else
+#   err "{mcp-name} MCP not configured."
+#   err "Install: {按官方文档的安装命令或配置路径}"
+#   exit $FAIL
+# fi
+
+exit $PASS
+```
+
+脚本的 cwd 是 `.ai-flow/{flow-name}/`。若需在项目根目录执行命令：
 ```sh
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT" || exit 1
