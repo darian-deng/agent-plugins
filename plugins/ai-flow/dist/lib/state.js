@@ -63,6 +63,11 @@ export async function appendViolation(repoRoot, flowName, message) {
     const timestamp = new Date().toISOString();
     appendFileSync(path, `${timestamp} ${message}\n`);
 }
+export async function appendHookLog(repoRoot, flowName, message) {
+    const path = statePath(repoRoot, flowName, 'hooks.log');
+    const timestamp = new Date().toISOString();
+    appendFileSync(path, `${timestamp} ${message}\n`);
+}
 export function nextStage(config, currentStageId) {
     const idx = config.stages.findIndex((s) => s.id === currentStageId);
     if (idx === -1 || idx === config.stages.length - 1)

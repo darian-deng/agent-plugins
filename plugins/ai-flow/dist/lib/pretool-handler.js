@@ -1,6 +1,6 @@
 import { join, relative } from 'path';
 import { randomBytes } from 'crypto';
-import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, nextStage, gateTokenPath, signalPath } from './state.js';
+import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, appendHookLog, nextStage, gateTokenPath, signalPath } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
@@ -85,6 +85,7 @@ export async function handlePreTool(input) {
     const absPath = resolvePath(repoRoot, fp);
     // ─── Signal interception ─────────────────────────────────────────────────────
     if (absPath === signalPath(repoRoot, activeFlowName)) {
+        await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
         const stageCfg = getStageConfig(config, state.current_stage);
         if (stageCfg.completion.script) {
             const flowDir = join(repoRoot, '.ai-flow', activeFlowName);
@@ -93,6 +94,7 @@ export async function handlePreTool(input) {
                 : undefined;
             const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
             if (!scriptResult.ok) {
+                await appendHookLog(repoRoot, activeFlowName, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
                 return deny(`Script validation failed:\n${scriptResult.reason}\n\nFix the issues and try again.`);
             }
         }
@@ -100,6 +102,7 @@ export async function handlePreTool(input) {
             const token = randomBytes(16).toString('hex');
             await writeGateToken(repoRoot, activeFlowName, token);
             await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
+            await appendHookLog(repoRoot, activeFlowName, `GATE_ISSUED stage=${state.current_stage} token=${token.slice(0, 8)}...`);
             return deny(`Gate checkpoint for stage '${state.current_stage}'. AI has determined this stage is complete.\n` +
                 `User notification and approval command have been sent via system message.\n` +
                 `Do NOT output "${activeFlowName} approve" in your response. ` +
@@ -115,11 +118,13 @@ export async function handlePreTool(input) {
             if (existsSync(activeJsonPath))
                 unlinkSync(activeJsonPath);
             await appendTransition(repoRoot, activeFlowName, `COMPLETED flow_id=${state.flow_id}`);
+            await appendHookLog(repoRoot, activeFlowName, `COMPLETED flow_id=${state.flow_id}`);
             return allow();
         }
         const updated = { ...state, current_stage: next };
         await writeActiveState(repoRoot, activeFlowName, updated);
         await appendTransition(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
+        await appendHookLog(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
         return allow();
     }
     // ─── Control plane protection ─────────────────────────────────────────────────

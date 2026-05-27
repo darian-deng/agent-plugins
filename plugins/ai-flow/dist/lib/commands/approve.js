@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { readActiveState, writeActiveState, readGateToken, deleteGateToken, isGateActive, appendTransition, nextStage, } from '../state.js';
+import { readActiveState, writeActiveState, readGateToken, deleteGateToken, isGateActive, appendTransition, appendHookLog, nextStage, } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
 export async function handleApprove(repoRoot, flowName, token) {
     const state = await readActiveState(repoRoot, flowName);
@@ -24,11 +24,13 @@ export async function handleApprove(repoRoot, flowName, token) {
         if (existsSync(activeJsonFile))
             rmSync(activeJsonFile);
         await appendTransition(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
+        await appendHookLog(repoRoot, flowName, `APPROVED_COMPLETE flow_id=${state.flow_id}`);
         return { action: 'allow', additionalContext: `Flow '${flowName}' is complete! All stages finished.` };
     }
     const updated = { ...state, current_stage: next };
     await writeActiveState(repoRoot, flowName, updated);
     await appendTransition(repoRoot, flowName, `APPROVED ${state.current_stage} → ${next}`);
+    await appendHookLog(repoRoot, flowName, `APPROVED ${state.current_stage} → ${next}`);
     const nextStageCfg = getStageConfig(config, next);
     const promptPath = join(repoRoot, '.ai-flow', flowName, nextStageCfg.prompt);
     let stageContent = '';
