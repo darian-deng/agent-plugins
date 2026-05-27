@@ -141,15 +141,9 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     await appendTransition(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
     await appendHookLog(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
 
-    // Delete the signal file so it cannot persist into the next stage and mislead the model.
-    const sig = signalPath(repoRoot, activeFlowName);
-    if (existsSync(sig)) unlinkSync(sig);
-
-    return deny(
-      `Stage '${state.current_stage}' → '${next}': transition complete. ` +
-      `active.json updated. Do NOT retry the Write — the signal has been processed. ` +
-      `Proceed with stage '${next}'.`
-    );
+    // Signal file is cleaned by session-handler on next session startup.
+    // Return allow() so the Write succeeds silently — no "Error:" shown to the developer.
+    return allow();
   }
 
   // ─── Control plane protection ─────────────────────────────────────────────────

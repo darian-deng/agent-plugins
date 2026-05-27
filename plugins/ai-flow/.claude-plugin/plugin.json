@@ -1,6 +1,6 @@
 {
   "name": "ai-flow",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Generic data-driven AI workflow engine with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
   "author": {
     "name": "Darian Deng",
