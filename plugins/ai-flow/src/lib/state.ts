@@ -79,19 +79,19 @@ export async function readGateToken(repoRoot: string, flowName: string): Promise
 export async function appendTransition(repoRoot: string, flowName: string, message: string): Promise<void> {
   const path = statePath(repoRoot, flowName, 'transitions.log');
   const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} ${message}\n`);
+  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 
 export async function appendViolation(repoRoot: string, flowName: string, message: string): Promise<void> {
   const path = statePath(repoRoot, flowName, 'violations.log');
   const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} ${message}\n`);
+  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 
 export async function appendHookLog(repoRoot: string, flowName: string, message: string): Promise<void> {
   const path = statePath(repoRoot, flowName, 'hooks.log');
   const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} ${message}\n`);
+  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 
 export function nextStage(config: FlowConfig, currentStageId: string): string | null {

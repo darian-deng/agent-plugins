@@ -1,9 +1,11 @@
 import { join, relative } from 'path';
 import { randomBytes } from 'crypto';
+import { unlinkSync, existsSync, readdirSync } from 'fs';
 import type { PreToolInput } from './types.js';
 import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, appendHookLog, nextStage, gateTokenPath, signalPath } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
+import { truncateError } from './format.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -36,7 +38,6 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   let activeFlowName: string | null = null;
   let state = null;
   try {
-    const { readdirSync, existsSync } = await import('fs');
     if (!existsSync(aiFlowBase)) return null;
     for (const entry of readdirSync(aiFlowBase, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -46,6 +47,8 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   } catch { return null; }
 
   if (!activeFlowName || !state) return null;
+
+  try {
 
   const config = await loadFlowConfig(repoRoot, activeFlowName);
 
@@ -126,7 +129,6 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     const next = nextStage(config, state.current_stage);
     if (!next) {
       // Last stage — complete the flow
-      const { unlinkSync, existsSync } = await import('fs');
       const activeJsonPath = join(repoRoot, '.ai-flow', activeFlowName, 'state', 'active.json');
       if (existsSync(activeJsonPath)) unlinkSync(activeJsonPath);
       await appendTransition(repoRoot, activeFlowName, `COMPLETED flow_id=${state.flow_id}`);
@@ -140,9 +142,8 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     await appendHookLog(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
 
     // Delete the signal file so it cannot persist into the next stage and mislead the model.
-    const { unlinkSync: rmSignal, existsSync: hasSignal } = await import('fs');
     const sig = signalPath(repoRoot, activeFlowName);
-    if (hasSignal(sig)) rmSignal(sig);
+    if (existsSync(sig)) unlinkSync(sig);
 
     return deny(
       `Stage '${state.current_stage}' → '${next}': transition complete. ` +
@@ -201,4 +202,11 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   }
 
   return null;
+
+  } catch (e) {
+    try {
+      await appendHookLog(repoRoot, activeFlowName, `ERROR pretool tool=${tool_name}: ${truncateError(e)}`);
+    } catch { /* appendHookLog itself failed */ }
+    return null;
+  }
 }

@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput } from './types.js';
 import { hasActiveFlow, writeActiveState, isGateActive, readGateToken, appendHookLog } from './state.js';
+import { truncateError } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 
@@ -16,6 +17,7 @@ export async function handleSessionStart(
 
   const { flowName, state } = active;
 
+  try {
   await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
 
   const isNewSession = state.last_session_id !== session_id;
@@ -87,4 +89,10 @@ export async function handleSessionStart(
   }
 
   return { additionalContext: lines.join('\n'), systemMessage };
+  } catch (e) {
+    try {
+      await appendHookLog(repoRoot, flowName, `ERROR session: ${truncateError(e)}`);
+    } catch { /* appendHookLog itself failed — nothing more to do */ }
+    return null;
+  }
 }

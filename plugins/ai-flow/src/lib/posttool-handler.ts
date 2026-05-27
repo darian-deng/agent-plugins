@@ -1,5 +1,6 @@
 import type { PostToolInput } from './types.js';
-import { hasActiveFlow, writeActiveState } from './state.js';
+import { hasActiveFlow, writeActiveState, appendHookLog } from './state.js';
+import { truncateError } from './format.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
 import { loadFlowConfig } from './flow-config-loader.js';
 
@@ -12,11 +13,13 @@ export async function handlePostTool(
 ): Promise<{ additionalContext: string } | null> {
   const { cwd: repoRoot, tool_name, session_id, context_size_pct } = input;
 
+  if (!WRITE_TOOLS.has(tool_name)) return null;
   const active = await hasActiveFlow(repoRoot);
   if (!active) return null;
-  if (!WRITE_TOOLS.has(tool_name)) return null;
 
   const { flowName, state } = active;
+
+  try {
 
   // Load flow config to get per-flow context thresholds.
   let flowContextCfg: Awaited<ReturnType<typeof loadFlowConfig>>['context'] | undefined;
@@ -67,4 +70,11 @@ export async function handlePostTool(
     additionalContext:
       `Context at ${pct}%. When you finish the current task, run /clear — state is persisted and progress won't be lost.`,
   };
+
+  } catch (e) {
+    try {
+      await appendHookLog(repoRoot, flowName, `ERROR posttool tool=${tool_name}: ${truncateError(e)}`);
+    } catch { /* appendHookLog itself failed */ }
+    return null;
+  }
 }
