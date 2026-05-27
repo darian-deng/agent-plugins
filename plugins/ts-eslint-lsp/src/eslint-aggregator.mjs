@@ -2,7 +2,7 @@
 
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
-import { existsSync, watch, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { homedir } from 'node:os'
@@ -33,10 +33,29 @@ function findPkgRoot(filePath) {
 }
 
 const eslintCache = new Map()
-const configWatchers = new Map()
+const configFingerprintCache = new Map()
+
+function getConfigFingerprint(pkgRoot) {
+  for (const name of FLAT_CONFIGS) {
+    const p = resolve(pkgRoot, name)
+    try {
+      const s = statSync(p)
+      return `${s.ino}:${s.mtimeMs}`
+    } catch {}
+  }
+  return null
+}
 
 function getESLint(pkgRoot) {
-  if (eslintCache.has(pkgRoot)) return eslintCache.get(pkgRoot)
+  const fp = getConfigFingerprint(pkgRoot)
+  if (eslintCache.has(pkgRoot) && configFingerprintCache.get(pkgRoot) === fp) {
+    return eslintCache.get(pkgRoot)
+  }
+
+  // fingerprint changed (or first call) — rebuild instance
+  eslintCache.delete(pkgRoot)
+  configFingerprintCache.delete(pkgRoot)
+  diagnosticsCache.clear()
 
   const req = createRequire(resolve(pkgRoot, 'package.json'))
   let ESLint, major
@@ -52,26 +71,9 @@ function getESLint(pkgRoot) {
     : []
 
   const instance = new ESLint({ cwd: pkgRoot, overrideConfig: overrides })
+  configFingerprintCache.set(pkgRoot, fp)
   eslintCache.set(pkgRoot, { instance, major })
-  watchConfigs(pkgRoot)
   return { instance, major }
-}
-
-function watchConfigs(pkgRoot) {
-  if (configWatchers.has(pkgRoot)) return
-  const watchers = []
-  for (const name of FLAT_CONFIGS) {
-    const configPath = resolve(pkgRoot, name)
-    if (!existsSync(configPath)) continue
-    try {
-      const w = watch(configPath, { persistent: false }, () => {
-        eslintCache.delete(pkgRoot)
-        diagnosticsCache.clear()
-      })
-      watchers.push(w)
-    } catch { /* file disappeared */ }
-  }
-  if (watchers.length) configWatchers.set(pkgRoot, watchers)
 }
 
 async function runLint(uri, text) {
