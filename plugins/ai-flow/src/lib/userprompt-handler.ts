@@ -80,7 +80,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
       result = await handleApprove(repoRoot, flowName, args);
       break;
     case 'abort':
-      result = await handleAbort(repoRoot, flowName);
+      result = await handleAbort(repoRoot, flowName, args);
       break;
     case 'resume':
       result = await handleResume(repoRoot, flowName, args);
