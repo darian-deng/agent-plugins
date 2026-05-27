@@ -16,15 +16,22 @@ function makeOutput(additionalContext, permissionDecision, reason) {
     };
     return { hookSpecificOutput: o };
 }
-function resultToHookOutput(result) {
+function resultToHookOutput(result, flowName) {
+    let additionalContext = result.additionalContext;
+    if (result.action === 'allow' && additionalContext !== undefined && flowName) {
+        additionalContext =
+            `[ai-flow system] Hook intercepted this command for flow '${flowName}'. ` +
+                `Do NOT invoke a skill named '${flowName}' — proceed directly with the instructions below.\n\n` +
+                additionalContext;
+    }
     const o = {
         hookEventName: 'UserPromptSubmit',
         ...(result.action === 'deny' && {
             permissionDecision: 'deny',
             permissionDecisionReason: result.reason,
         }),
-        ...(result.action === 'allow' && result.additionalContext !== undefined && {
-            additionalContext: result.additionalContext,
+        ...(result.action === 'allow' && additionalContext !== undefined && {
+            additionalContext,
         }),
     };
     return {
@@ -53,7 +60,7 @@ export async function handleUserPrompt(input) {
             await deleteGateToken(repoRoot, flowName);
         }
         if (!subCmd) {
-            return resultToHookOutput(await handleHelp(repoRoot, flowName));
+            return resultToHookOutput(await handleHelp(repoRoot, flowName), flowName);
         }
         return makeOutput(`Unknown command '${subCmd}' for flow '${flowName}'.\nValid commands: ${VALID_COMMANDS.join(', ')}`);
     }
@@ -81,6 +88,6 @@ export async function handleUserPrompt(input) {
             result = await handleHelp(repoRoot, flowName);
             break;
     }
-    return resultToHookOutput(result);
+    return resultToHookOutput(result, flowName);
 }
 //# sourceMappingURL=userprompt-handler.js.map
