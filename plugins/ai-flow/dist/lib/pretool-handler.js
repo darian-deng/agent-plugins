@@ -1,7 +1,7 @@
 import { join, relative } from 'path';
 import { randomBytes } from 'crypto';
-import { unlinkSync, existsSync, readdirSync } from 'fs';
-import { readActiveState, writeActiveState, writeGateToken, appendTransition, appendViolation, appendHookLog, nextStage, gateTokenPath, signalPath } from './state.js';
+import { unlinkSync, existsSync } from 'fs';
+import { hasActiveFlow, writeActiveState, writeGateToken, appendTransition, appendViolation, appendHookLog, nextStage, gateTokenPath, signalPath } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
 import { truncateError } from './format.js';
@@ -19,30 +19,11 @@ function resolvePath(repoRoot, filePath) {
     return join(repoRoot, filePath);
 }
 export async function handlePreTool(input) {
-    const { cwd: repoRoot, tool_name, tool_input } = input;
-    // Discover which flow is active
-    const aiFlowBase = join(repoRoot, '.ai-flow');
-    let activeFlowName = null;
-    let state = null;
-    try {
-        if (!existsSync(aiFlowBase))
-            return null;
-        for (const entry of readdirSync(aiFlowBase, { withFileTypes: true })) {
-            if (!entry.isDirectory())
-                continue;
-            const s = await readActiveState(repoRoot, entry.name);
-            if (s) {
-                activeFlowName = entry.name;
-                state = s;
-                break;
-            }
-        }
-    }
-    catch {
+    const { cwd, tool_name, tool_input } = input;
+    const active = await hasActiveFlow(cwd).catch(() => null);
+    if (!active)
         return null;
-    }
-    if (!activeFlowName || !state)
-        return null;
+    const { flowName: activeFlowName, state, repoRoot } = active;
     try {
         const config = await loadFlowConfig(repoRoot, activeFlowName);
         // ─── Context block enforcement ────────────────────────────────────────────────

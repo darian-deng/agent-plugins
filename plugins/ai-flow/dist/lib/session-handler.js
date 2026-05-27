@@ -5,11 +5,11 @@ import { truncateError } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 export async function handleSessionStart(input) {
-    const { cwd: repoRoot, session_id, model } = input;
-    const active = await hasActiveFlow(repoRoot);
+    const { cwd, session_id, model } = input;
+    const active = await hasActiveFlow(cwd);
     if (!active)
         return null;
-    const { flowName, state } = active;
+    const { flowName, state, repoRoot } = active;
     try {
         await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
         const isNewSession = state.last_session_id !== session_id;

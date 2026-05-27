@@ -6,13 +6,13 @@ const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const DEFAULT_WARN_AT_PCT = 50;
 const DEFAULT_REWARN_DELTA_PCT = 5;
 export async function handlePostTool(input) {
-    const { cwd: repoRoot, tool_name, session_id, context_size_pct } = input;
+    const { cwd, tool_name, session_id, context_size_pct } = input;
     if (!WRITE_TOOLS.has(tool_name))
         return null;
-    const active = await hasActiveFlow(repoRoot);
+    const active = await hasActiveFlow(cwd);
     if (!active)
         return null;
-    const { flowName, state } = active;
+    const { flowName, state, repoRoot } = active;
     try {
         // Load flow config to get per-flow context thresholds.
         let flowContextCfg;
