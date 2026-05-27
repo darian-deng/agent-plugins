@@ -40,10 +40,16 @@ npm run build   # 本地验证编译无误即可，不用 git add dist/
 2. 更新版本号（**必须**，否则 `/plugin update` 不会触发更新）：
    - `plugins/ai-flow/package.json` → `"version"`
    - `plugins/ai-flow/.claude-plugin/plugin.json` → `"version"`
-   - `.claude-plugin/marketplace.json` → ai-flow 条目的 `"version"`
+   - **不需要手动改** `.claude-plugin/marketplace.json`：CI 从 plugin.json 读版本并自动同步
 3. `npm run build` 验证无编译错误
 4. 提交 `src/` + 版本号变更（**不提交 dist/**）
-5. push 到 main — CI 自动 build 并 commit dist/
+5. push 到 main — CI 自动 build、同步 marketplace.json 版本、commit dist/
+
+### CI 行为说明
+
+- `build-ai-flow.yml` 仅在 `plugins/ai-flow/src/**`、`package.json`、`tsconfig*.json`、`package-lock.json` 变更时触发，其他 plugin 的改动不会触发此 workflow
+- CI **不自动 bump 版本**：版本号由开发者在 package.json + plugin.json 两处设定，CI 照单全收，只同步到 marketplace.json
+- `marketplace.json` 的版本字段由 CI 维护，其余字段（`description`、`tags`、`category`、`homepage`）由开发者手动维护，不要让 CI 覆盖
 
 ### plugin.json 字段说明
 
