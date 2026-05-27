@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { hasActiveFlow, writeActiveState, isGateActive, readGateToken, appendHookLog } from './state.js';
+import { hasActiveFlow, writeActiveState, isGateActive, readGateToken, appendHookLog, signalPath } from './state.js';
 import { truncateError } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
@@ -36,6 +36,16 @@ export async function handleSessionStart(input) {
         ];
         let systemMessage;
         const gateActive = await isGateActive(repoRoot, flowName);
+        // Clean up any signal file left over from the previous stage's ADVANCE.
+        // Prevents a new session from seeing a stale signal and skipping the current stage.
+        if (!gateActive) {
+            const sig = signalPath(repoRoot, flowName);
+            try {
+                if (existsSync(sig))
+                    unlinkSync(sig);
+            }
+            catch { /* non-fatal */ }
+        }
         if (gateActive) {
             const token = await readGateToken(repoRoot, flowName);
             const approveCmd = token ? `${flowName} approve ${token}` : `${flowName} approve <token>`;
