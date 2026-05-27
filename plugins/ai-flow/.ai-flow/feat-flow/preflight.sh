@@ -10,6 +10,7 @@ SKILLS_DIR="$HOME/.claude/skills"
 PLUGINS_CACHE="$HOME/.claude/plugins/cache"
 
 err()  { printf "❌  %s\n" "$1" >&2; }
+cmd()  { printf "    %s\n" "$1" >&2; }
 warn() { printf "⚠️   %s\n" "$1" >&2; }
 ok()   { printf "✅  %s\n" "$1"; }
 
@@ -48,7 +49,13 @@ fi
 ok "git $(git --version | awk '{print $3}')"
 
 # ── 4. 必需 user-installed skills ──────────────────────────────────────────────
-# optimize-claude-context + adr-manage 来自 darian-deng/agent-skills 仓库（Stage 6 强依赖）
+# skill 来源（均通过 npx skills add <owner/repo@skill> -g 安装）：
+#   grill-me                    → mattpocock/skills
+#   writing-plans               → obra/superpowers
+#   subagent-driven-development → obra/superpowers
+#   receiving-code-review       → obra/superpowers
+#   optimize-claude-context     → darian-deng/agent-skills
+#   adr-manage                  → darian-deng/agent-skills
 REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review optimize-claude-context adr-manage"
 MISSING_SKILLS=""
 
@@ -63,12 +70,33 @@ done
 if [ -n "$MISSING_SKILLS" ]; then
   err "Missing required skills:$MISSING_SKILLS"
   err ""
-  err "通用 skill 安装：npx skills add <skill-name> -g"
-  err ""
-  err "optimize-claude-context / adr-manage 来自 darian-deng/agent-skills 仓库："
-  err "  git clone https://github.com/darian-deng/agent-skills.git /tmp/agent-skills"
-  err "  cp -r /tmp/agent-skills/skills/optimize-claude-context ~/.claude/skills/"
-  err "  cp -r /tmp/agent-skills/skills/adr-manage ~/.claude/skills/"
+  err "── 复制以下命令到终端执行 ──────────────────────────────────"
+
+  # 按 skill 输出精确安装命令
+  for skill in $MISSING_SKILLS; do
+    case "$skill" in
+      grill-me)
+        cmd "npx skills add mattpocock/skills@grill-me -g"
+        ;;
+      writing-plans)
+        cmd "npx skills add obra/superpowers@writing-plans -g"
+        ;;
+      subagent-driven-development)
+        cmd "npx skills add obra/superpowers@subagent-driven-development -g"
+        ;;
+      receiving-code-review)
+        cmd "npx skills add obra/superpowers@receiving-code-review -g"
+        ;;
+      optimize-claude-context)
+        cmd "npx skills add darian-deng/agent-skills@optimize-claude-context -g"
+        ;;
+      adr-manage)
+        cmd "npx skills add darian-deng/agent-skills@adr-manage -g"
+        ;;
+    esac
+  done
+
+  err "────────────────────────────────────────────────────────────"
   exit $FAIL
 fi
 
