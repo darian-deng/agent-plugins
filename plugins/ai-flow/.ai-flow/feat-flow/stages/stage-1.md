@@ -12,6 +12,11 @@
 
 ## 入场动作（按顺序，主 session 执行）
 
+**工作目录规范**：ai-flow hook 依赖 session cwd 定位项目根目录。执行命令时：
+- 优先使用包管理器的 workspace/filter 参数或命令的 `-C <path>` 标志
+- 如果必须 `cd <子目录>`，必须在同一 Bash 调用内恢复：`cd <子目录> && <命令> && cd -`
+- 禁止跨多个 Bash 调用保持非项目根目录的 cwd
+
 1. **ADR 一次性扫描**
    - `ls docs/adr/` 列标题（不存在跳过）
    - 与 requirement 相关性筛 ≤5 篇，读后注入 system context

@@ -21,6 +21,11 @@
 
 ## Phase A：自动化检查
 
+**工作目录规范**：ai-flow hook 依赖 session cwd 定位项目根目录。执行命令时：
+- 优先使用包管理器的 workspace/filter 参数或命令的 `-C <path>` 标志
+- 如果必须 `cd <子目录>`，必须在同一 Bash 调用内恢复：`cd <子目录> && <命令> && cd -`
+- 禁止跨多个 Bash 调用保持非项目根目录的 cwd
+
 按 design.md 项目命令运行：
 - 单元测试：`<design.md 项目命令.单元测试>`
 - 集成测试（若有）：`<design.md 项目命令.集成测试>`

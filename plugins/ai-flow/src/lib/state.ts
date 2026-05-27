@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 
 export interface ContextWarning {
@@ -44,16 +44,23 @@ export async function writeActiveState(repoRoot: string, flowName: string, state
   writeFileSync(statePath(repoRoot, flowName, 'active.json'), JSON.stringify(state, null, 2));
 }
 
-export async function hasActiveFlow(repoRoot: string): Promise<{ flowName: string; state: ActiveState } | null> {
-  const aiFlowDir = join(repoRoot, '.ai-flow');
-  if (!existsSync(aiFlowDir)) return null;
-  const entries = readdirSync(aiFlowDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const state = await readActiveState(repoRoot, entry.name);
-    if (state) return { flowName: entry.name, state };
+export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
+  // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
+  let dir = cwd;
+  while (true) {
+    const aiFlowDir = join(dir, '.ai-flow');
+    if (existsSync(aiFlowDir)) {
+      for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const state = await readActiveState(dir, entry.name);
+        if (state) return { flowName: entry.name, state, repoRoot: dir };
+      }
+      return null; // .ai-flow exists but no active flow inside
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null; // reached filesystem root
+    dir = parent;
   }
-  return null;
 }
 
 export async function isGateActive(repoRoot: string, flowName: string): Promise<boolean> {

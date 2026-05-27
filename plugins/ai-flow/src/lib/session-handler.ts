@@ -10,12 +10,12 @@ import { contextWindowForModel } from './context.js';
 export async function handleSessionStart(
   input: SessionStartInput
 ): Promise<{ additionalContext: string; systemMessage?: string } | null> {
-  const { cwd: repoRoot, session_id, model } = input;
+  const { cwd, session_id, model } = input;
 
-  const active = await hasActiveFlow(repoRoot);
+  const active = await hasActiveFlow(cwd);
   if (!active) return null;
 
-  const { flowName, state } = active;
+  const { flowName, state, repoRoot } = active;
 
   try {
   await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);

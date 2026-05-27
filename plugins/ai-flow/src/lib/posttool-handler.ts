@@ -11,13 +11,13 @@ const DEFAULT_REWARN_DELTA_PCT = 5;
 export async function handlePostTool(
   input: PostToolInput & { context_size_pct?: number }
 ): Promise<{ additionalContext: string } | null> {
-  const { cwd: repoRoot, tool_name, session_id, context_size_pct } = input;
+  const { cwd, tool_name, session_id, context_size_pct } = input;
 
   if (!WRITE_TOOLS.has(tool_name)) return null;
-  const active = await hasActiveFlow(repoRoot);
+  const active = await hasActiveFlow(cwd);
   if (!active) return null;
 
-  const { flowName, state } = active;
+  const { flowName, state, repoRoot } = active;
 
   try {
 
