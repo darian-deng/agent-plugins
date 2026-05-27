@@ -56,17 +56,17 @@ export async function readGateToken(repoRoot, flowName) {
 export async function appendTransition(repoRoot, flowName, message) {
     const path = statePath(repoRoot, flowName, 'transitions.log');
     const timestamp = new Date().toISOString();
-    appendFileSync(path, `${timestamp} ${message}\n`);
+    appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 export async function appendViolation(repoRoot, flowName, message) {
     const path = statePath(repoRoot, flowName, 'violations.log');
     const timestamp = new Date().toISOString();
-    appendFileSync(path, `${timestamp} ${message}\n`);
+    appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 export async function appendHookLog(repoRoot, flowName, message) {
     const path = statePath(repoRoot, flowName, 'hooks.log');
     const timestamp = new Date().toISOString();
-    appendFileSync(path, `${timestamp} ${message}\n`);
+    appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
 }
 export function nextStage(config, currentStageId) {
     const idx = config.stages.findIndex((s) => s.id === currentStageId);
