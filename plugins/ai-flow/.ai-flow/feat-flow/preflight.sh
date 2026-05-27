@@ -76,22 +76,22 @@ if [ -n "$MISSING_SKILLS" ]; then
   for skill in $MISSING_SKILLS; do
     case "$skill" in
       grill-me)
-        cmd "npx skills add mattpocock/skills@grill-me -g"
+        cmd "npx skills add mattpocock/skills@grill-me -g -y"
         ;;
       writing-plans)
-        cmd "npx skills add obra/superpowers@writing-plans -g"
+        cmd "npx skills add obra/superpowers@writing-plans -g -y"
         ;;
       subagent-driven-development)
-        cmd "npx skills add obra/superpowers@subagent-driven-development -g"
+        cmd "npx skills add obra/superpowers@subagent-driven-development -g -y"
         ;;
       receiving-code-review)
-        cmd "npx skills add obra/superpowers@receiving-code-review -g"
+        cmd "npx skills add obra/superpowers@receiving-code-review -g -y"
         ;;
       optimize-claude-context)
-        cmd "npx skills add darian-deng/agent-skills@optimize-claude-context -g"
+        cmd "npx skills add darian-deng/agent-skills@optimize-claude-context -g -y"
         ;;
       adr-manage)
-        cmd "npx skills add darian-deng/agent-skills@adr-manage -g"
+        cmd "npx skills add darian-deng/agent-skills@adr-manage -g -y"
         ;;
     esac
   done
