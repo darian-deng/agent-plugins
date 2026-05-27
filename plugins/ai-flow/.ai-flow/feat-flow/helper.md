@@ -44,7 +44,7 @@ feat-flow help                      # 查看本文档
 | stage-3 | 实施计划 | ✅ | superpowers:writing-plans |
 | stage-4 | 代码实施 | ❌（无 Gate） | superpowers:subagent-driven-development |
 | stage-5 | 质量门（验证 + 3 轮互审，合并） | ✅ | feature-dev:code-reviewer + receiving-code-review |
-| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（写入分级用户确认） | adr-manage + optimize-claude-context |
+| stage-6 | 知识沉淀（增 + 修 + 退役 + 归档） | ❌（直接写入，汇总表确认后归档） | adr-manage + optimize-claude-context |
 
 ## 产出文件路径
 

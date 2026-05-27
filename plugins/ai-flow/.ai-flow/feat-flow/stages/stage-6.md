@@ -14,7 +14,7 @@
 - 退役（被 supersede 的）
 - 归档（已不需要的）
 
-**关键设计**：Phase A 自动评估（不写文件），Phase B 分级用户确认，Phase C 写入。**写入必须显式确认**——避免笼统 yes 让低质沉淀污染项目档案。
+**关键设计**：Phase A 静默自动评估，Phase B 直接执行所有写入并呈现汇总表，用户确认后归档并结束 flow。
 
 ## 前置读取
 
@@ -25,7 +25,10 @@
 - `docs/feat-flows/<flow_id>/review.md` — 互审结论 + 待开发者决策项
 - `docs/feat-flows/<flow_id>/` 全部工件（评估归档用）
 
-## Phase A：自动评估（不写文件）
+## Phase A：自动评估（不写文件，不向用户输出）
+
+> **内部分析阶段**：全程禁止向用户输出任何内容，分析结果仅内部保留，通过 Phase B 汇总表呈现。
+> （例外：A2 检测到 abort 条件时，仅输出 abort 原因（一句话），不得附带 Phase A 其余分析内容，然后停止，不进入 Phase B。）
 
 ### A1. 解析写入根目录（monorepo 兼容）
 
@@ -71,12 +74,14 @@ gate-2.5 (placement: comment vs ADR)：
   YES → 在对应位置写注释，不写 ADR
   NO（跨文件 / 跨模块 / 涉及架构层级决策） → 进 gate-3
 
-gate-3 (冲突 + supersede 检测)：
-  - grep docs/adr/ 检查是否覆写既有 ADR
-    → YES：起草 new ADR 标 "Supersedes ADR-NNNN" + why-changed
-    → NO：起草 new ADR
-  - grep 新 ADR 关键术语命中的其它 ADR
-    → 列给用户判断是否冲突（仅提示不自动判定）
+gate-3 (现有 ADR 检测)：
+  - grep docs/adr/ 检查是否有语义重叠的现有 ADR
+    → YES：**直接更新该 ADR（in-place）**
+           git 已保障历史记录，不需要新建 supersede 链积累噪音
+           在更新内容中记录变更背景（what changed and why）
+    → NO：起草新 ADR（Nygard 模板）
+  - grep 新决策/更新内容关键术语命中的其他 ADR
+    → 列入 Phase B 汇总表「⚠️ 仅供参考」行（无需用户回复）
 ```
 
 ### A4. CLAUDE.md / path rule / skill 候选整理
@@ -86,10 +91,12 @@ gate-3 (冲突 + supersede 检测)：
 1. `context-delta.md` `## Stage 2` 和 `## Stage 5` 节的 CLAUDE.md candidates 和 Path rule candidates（routing 已确定，无需重新路由）
 2. **`task-reports.md` 中每个 task 的 `CONTEXT_CANDIDATES` 段**（Stage 4 实施过程中「注释无法承载」的知识，按目标层已标注）
 
+**写入前检查**：对每条 CLAUDE.md 候选，先 grep `.claude/rules/*.md` 确认无语义重叠。若已有 path-rule 覆盖相同范围 → 将内容 merge 到该 path-rule，不写 CLAUDE.md（避免同一条知识在两处重复）。
+
 各类候选处理方式：
-- CLAUDE.md 类（含 context-delta 和 CONTEXT_CANDIDATES 来源） → 进 Phase B Tier-A（逐项展示 diff，yes/no）
-- rules/<domain>.md 类 → 进 Phase B Tier-B（批量确认带 diff）
-- skill 类（CONTEXT_CANDIDATES 来源）→ 同 A5 走 `optimize-claude-context` handle-one-directive（feat-flow mode，Step 1+），产出路由提案后进 Phase B 确认
+- CLAUDE.md 类 → 调用 `optimize-claude-context` handle-one-directive（feat-flow mode，Step 1+）写入
+- rules/<domain>.md 类 → 同上
+- skill 类 → 同上，产出 stub 后通知用户用 skill-creator 完善
 
 去重：与 context-delta.md 候选语义重叠的 CONTEXT_CANDIDATES 条目合并，以 context-delta.md 来源措辞为准。
 
@@ -99,50 +106,79 @@ gate-3 (冲突 + supersede 检测)：
 
 去重：与 A4 候选语义重叠的条目合并，以 context-delta.md 来源措辞为准（S2/S5 分类时 routing 上下文更完整）。
 
-产出：路由提案清单，进 Phase B 确认。
-
 ### A6. 工件归档评估
 
 - 列 `docs/feat-flows/<flow_id>/` 工件
-- 含 supersede 候选的 design.md → 保留作历史依据
-- 普通 plan.md / review.md → 建议移到 `docs/feat-flows/archive/<flow_id>/`
-- `context-delta.md` → 归档到 `docs/feat-flows/archive/<flow_id>/context-delta.md`（作为规则引入决策溯源文档）
+- 含 ADR 历史依据的 design.md → 保留；Phase B 步骤 3 负责在其末尾追加「Stage 6 沉淀记录」
+- 普通 plan.md / review.md / architecture.md / task-reports.md → 归档到 `docs/feat-flows/archive/<flow_id>/`（仅当文件实际存在时）
+- `context-delta.md` → 归档到 `docs/feat-flows/archive/<flow_id>/context-delta.md`（仅当文件实际存在时）
 
-## Phase B：分级用户确认
+> Phase A 结束。进入 Phase B 前不得向用户输出任何分析内容。（A2 abort 条件已在上方处理。）
 
-呈现 Phase A 评估结果分两 tier 确认（避免笼统 yes）：
+## Phase B：执行并呈现汇总表
 
-### Tier-A（必须逐项确认 yes/no）
-- 新建 ADR（每条单独 yes/no）
-- CLAUDE.md 直接写入（每条 diff 展示 yes/no）
-- Supersede 既有 ADR（高风险，必须明示）
-- ADR 关键术语命中其他 ADR 的冲突提示（用户判断）
+Phase A 分析完成后，**直接执行所有知识写入**（不等用户逐项确认），用 git add 暂存，然后向用户呈现汇总表。
 
-### Tier-B（批量确认带 diff）
-- rules/<domain>.md 追加术语
-- 工件归档（一句话清单）
+### 执行顺序
 
-## Phase C：写入
+**归档不在此阶段执行**，Phase C 负责。下面四步均不包含 git mv 归档操作：
 
-按用户确认结果应用：
+1. 调用 `optimize-claude-context` handle-one-directive（feat-flow mode）写入所有 CLAUDE.md / rules / skill 候选
+2. 更新或新建 ADR（调用 `adr-manage` skill）
+3. 在 design.md 末尾追加「Stage 6 沉淀记录」
+4. 所有写入 `git add` 暂存，**不 commit**
 
-- **新 ADR** → 调用 `adr-manage` skill（自然语言意图："新建 ADR，内容是 <填决策内容>"），skill 自动分配编号 + Nygard 模板 + 更新索引
-- **CLAUDE.md / path rule 写入** → 对每条已确认条目，调用 `optimize-claude-context` 的 `handle-one-directive` 命令（**feat-flow mode**，从 Step 1 开始，跳过 Step 0），传入 directive 文本 + 预分类的 scope + target layer：
-  - Steps 1-3 仍会执行（linter check、现有 directive 冲突检查、routing）；Step 3 路由结论应与 context-delta.md / A5 预分类一致，若不一致以 handle-one-directive 路由结果为准
-  - A4 来源（context-delta.md）和 A5 来源均适用此模式
-- **Supersede ADR** → 调用 `adr-manage` skill（自然语言意图："supersede ADR-NNNN，新决策是 <内容>"），skill 自动双向链接
-- **归档** → `git mv docs/feat-flows/<flow_id>/plan.md docs/feat-flows/archive/<flow_id>/plan.md` 等
-- **context-delta.md 归档** → `git mv docs/feat-flows/<flow_id>/context-delta.md docs/feat-flows/archive/<flow_id>/context-delta.md`
+### 汇总表格式（严格遵守）
 
-所有写入用 `git add` 暂存，**不 commit**（用户最后自决提交）。
+```
+Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
+
+| 操作 | 文件 | 改动和原因 |
+|------|------|----------|
+| [操作类型] | [文件路径] | [触发场景 + 为什么需要写入，包含具体 Task / 发现 / 不知道会踩什么坑] |
+
+⚠️ 仅供参考（无需回复）
+- [ADR 关键术语冲突提示，简述潜在冲突]
+
+查看所有改动：git diff --cached
+撤回某文件：git restore --staged <路径>
+
+确认无误后告知，归档将自动执行并结束 feat-flow。
+```
+
+**「操作」类型**：新建 ADR / 更新 ADR / 新增规则 / 更新规则 / 更新文档 / 新增路径规则
+
+**「改动和原因」写法**：
+- 必须包含触发场景（哪个 Task 发现了什么、实施时踩了什么坑）
+- 说明不知道这条知识会造成什么后果
+- 不写泛泛的分类描述（「更新了命名」是无效原因，「Task 3 实施时触发 ts/dot-notation lint error，$wtFetch 等含 $ 属性名必须用点记法」才是有效原因）
+
+**归档不出现在表格中**：归档是 flow 结束时的机械收尾，在用户确认后自动执行。
+
+## Phase C：用户确认后执行归档
+
+用户确认汇总表无误后，自动执行工件归档。**以 A6 实际列出的文件为准，不存在的文件跳过，不执行 git mv：**
+
+```sh
+# 逐一检查文件是否存在，存在则 git mv
+git mv docs/feat-flows/<flow_id>/architecture.md  docs/feat-flows/archive/<flow_id>/architecture.md
+git mv docs/feat-flows/<flow_id>/plan.md          docs/feat-flows/archive/<flow_id>/plan.md
+git mv docs/feat-flows/<flow_id>/review.md        docs/feat-flows/archive/<flow_id>/review.md
+git mv docs/feat-flows/<flow_id>/task-reports.md  docs/feat-flows/archive/<flow_id>/task-reports.md
+git mv docs/feat-flows/<flow_id>/context-delta.md docs/feat-flows/archive/<flow_id>/context-delta.md
+```
+
+（design.md 保留——含 ADR 历史依据及 Stage 6 沉淀记录）
+
+git add 所有归档操作，然后写入 signal。
 
 ## 完成条件
 
 - Phase A 6 项全跑完（含 A2 context-delta.md 完整性验证通过）
-- Phase B 用户对所有候选明确响应
-- Phase C 已写入所有 yes 项（git add 暂存）
-- context-delta.md 已归档到 `docs/feat-flows/archive/<flow_id>/`（git add 暂存）
-- design.md 末尾追加「Stage 6 沉淀记录」：列每条候选 + 用户决定 + 实际操作
+- Phase B 所有写入已执行并 git add 暂存
+- 用户已确认汇总表
+- Phase C 归档已执行并 git add 暂存
+- design.md 末尾已追加「Stage 6 沉淀记录」
 
 ## Signal
 
@@ -156,7 +192,7 @@ feat-flow 流程完成。
 
 📋 本次核心改动：[3-5 条主要变更]
 🧪 建议人工测试：[条件性——若 design.md AC 中有 [manual] 项，列对应场景；全部 [auto] 则跳过此行]
-📚 知识沉淀：[新建 N 个 ADR / 更新 CLAUDE.md / rules / 归档 X 工件]
+📚 知识沉淀：[更新 N 个 ADR / 新增规则 / 归档 X 工件]
 
 代码与修复（Stage 4-5）：已 commit
   → 用 `git log <BASE_SHA_CODE>..HEAD` 看 commit 列表
