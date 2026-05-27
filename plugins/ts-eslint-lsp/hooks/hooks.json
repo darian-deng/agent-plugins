@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && launchctl setenv CLAUDE_CODE_SSE_PORT 7475 2>/dev/null || true && if [ ! -f \"${HOME}/.claude/ide/7475.lock\" ]; then mkdir -p \"${HOME}/.claude/logs\" && ESLINT_IDE_PORT=7475 node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-aggregator.mjs\" >> \"${HOME}/.claude/logs/eslint-aggregator.log\" 2>&1 & fi",
-            "timeout": 10
+            "command": "mkdir -p \"${CLAUDE_PLUGIN_DATA}\" && cp \"${CLAUDE_PLUGIN_ROOT}/src/ts-eslint-proxy.mjs\" \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && chmod +x \"${CLAUDE_PLUGIN_DATA}/ts-eslint-proxy.mjs\" && launchctl setenv CLAUDE_CODE_SSE_PORT 7475 2>/dev/null || true && if [ -f \"${HOME}/.claude/ide/7475.lock\" ]; then RUNNING_PID=$(node -e \"try{const l=require('fs').readFileSync('${HOME}/.claude/ide/7475.lock','utf8');console.log(JSON.parse(l).pid)}catch{}\") && if [ -n \"${RUNNING_PID}\" ]; then RUNNING_SCRIPT=$(ps -ww -p \"${RUNNING_PID}\" -o args= 2>/dev/null | grep -o '[^ ]*eslint-aggregator.mjs' || true) && if [ \"${RUNNING_SCRIPT}\" != \"${CLAUDE_PLUGIN_ROOT}/src/eslint-aggregator.mjs\" ]; then kill \"${RUNNING_PID}\" 2>/dev/null || true && for i in 1 2 3 4; do sleep 0.5 && kill -0 \"${RUNNING_PID}\" 2>/dev/null || break; done && kill -9 \"${RUNNING_PID}\" 2>/dev/null || true && rm -f \"${HOME}/.claude/ide/7475.lock\"; fi; fi; fi && if [ ! -f \"${HOME}/.claude/ide/7475.lock\" ]; then mkdir -p \"${HOME}/.claude/logs\" && ESLINT_IDE_PORT=7475 node \"${CLAUDE_PLUGIN_ROOT}/src/eslint-aggregator.mjs\" >> \"${HOME}/.claude/logs/eslint-aggregator.log\" 2>&1 & fi",
+            "timeout": 15
           }
         ]
       }
