@@ -6,7 +6,7 @@ import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 export async function handleSessionStart(input) {
     const { cwd, session_id, model } = input;
-    const active = await hasActiveFlow(cwd);
+    const active = await hasActiveFlow(cwd).catch(() => null);
     if (!active)
         return null;
     const { flowName, state, repoRoot } = active;

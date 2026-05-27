@@ -9,7 +9,7 @@ export async function handlePostTool(input) {
     const { cwd, tool_name, session_id, context_size_pct } = input;
     if (!WRITE_TOOLS.has(tool_name))
         return null;
-    const active = await hasActiveFlow(cwd);
+    const active = await hasActiveFlow(cwd).catch(() => null);
     if (!active)
         return null;
     const { flowName, state, repoRoot } = active;
