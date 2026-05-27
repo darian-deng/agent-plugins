@@ -20,10 +20,11 @@ description: 仅通过 /ai-flow:create 命令显式调用。绝对不要基于�
 - **中间环节**：从触发到完成，有哪些自然的阶段？
 - **人工参与点**：哪些环节需要人来确认后才能继续？
 - **自动化验证**：哪些环节可以用脚本客观判断完成（如跑测试、检查文件）？
-- **外部依赖**：flow 依赖哪些外部工具？分三类收集：
-  - **Skills**（Claude Code skill，名称即可）
-  - **Plugins**（Claude Code plugin，名称即可）
-  - **MCP**（MCP server，名称即可）
+- **外部依赖**：flow 依赖哪些外部工具？分四类收集（名称即可，安装方式后续解析）：
+  - **Skills**（Claude Code skill）
+  - **Plugins**（Claude Code plugin）
+  - **MCP**（MCP server）
+  - **系统工具**（node、git、特定 CLI 等）
 
 **六个维度全部清晰之前，不要进入提案阶段。** 一个 flow 设计错误的代价是高的。
 
@@ -42,7 +43,11 @@ Flow 名称：{name}（小写连字符，将成为命令前缀）
     写入范围：unrestricted / docs_only（路径）
     完成方式：Signal 自动推进 / Script Validator（命令）/ Gate（人工审批）
 
-Preflight 检查：{工具/依赖列表，或"无"}
+Preflight 检查（安装命令待第二点五阶段确认）：
+  Skills:   {名称列表，或"无"}
+  Plugins:  {名称列表，或"无"}
+  MCP:      {名称列表，或"无"}
+  系统工具: {名称列表，或"无"}
 ```
 
 说明每个设计决策的理由——尤其是为什么某个阶段需要 Gate 而不是自动推进。
@@ -89,19 +94,22 @@ ai-flow 对用户的承诺：**任一 stage 完成后 /clear，或多-task stage
 
 ## 第二点五阶段：依赖解析
 
-用户确认提案中的外部依赖列表后，对每个依赖逐一解析，**搜不到就停下来问用户**：
+**若所有依赖均为「无」，跳过此阶段直接进入第二点七五阶段。**
+
+用户确认提案后，对每个非空依赖逐一解析，**搜不到就停下来问用户，不要猜**：
 
 ### 每个依赖的解析流程
 
-1. **搜索类型和安装方式**（按顺序尝试）：
-   - Skill → 执行 `npx skills find <name>`，看顶部结果的 `owner/repo@skill` 格式
-   - Plugin → 搜索 Claude plugin marketplace / 用户提供的 GitHub 仓库（如 `darian-deng/agent-plugins`）
+1. **搜索类型和安装方式**：
+   - Skill → 执行 `npx skills find <name>`。顶部结果若有清晰的 `owner/repo@skill` 格式条目则记录；若无此格式，视为「未找到」
+   - Plugin → 搜索 Claude plugin marketplace 或用户提供的 GitHub 仓库（如 `darian-deng/agent-plugins`）
    - MCP → 查该 MCP 的官方文档或 README
+   - 系统工具 → 直接确认 CLI 命令名（如 `node`、`git`），无需额外搜索
 
-2. **搜到** → 记录：类型、检测命令、安装命令
+2. **找到** → 记录：类型、检测命令、安装命令，继续下一个依赖
 
-3. **搜不到** → 停下来，告知用户未找到，请用户提供：
-   - 类型（skill / plugin / MCP）
+3. **未找到** → 停下来，告知用户名称和已尝试的搜索，请用户提供：
+   - 类型（skill / plugin / MCP / 系统工具）
    - 安装命令或 repo 地址
 
 4. 所有依赖解析完成后，进入第二点七五阶段。
@@ -111,8 +119,9 @@ ai-flow 对用户的承诺：**任一 stage 完成后 /clear，或多-task stage
 | 类型 | 检测方式 | 安装命令格式 |
 |------|---------|------------|
 | Skill | `[ -f "$HOME/.claude/skills/<name>/SKILL.md" ]` | `npx skills add owner/repo@skill -g -y` |
-| Plugin | `find "$HOME/.claude/plugins/cache" -maxdepth 4 -type d -name "<name>"` | `claude plugin install name@registry --scope user` |
-| MCP | `claude mcp list 2>/dev/null \| grep -q "^<name>"` | 依官方文档（`claude mcp add` 或手动配置） |
+| Plugin | `find "$HOME/.claude/plugins/cache" -maxdepth 4 -type d -name "<name>"` （注：路径为实现细节，跨版本不保证稳定）| `claude plugin install name@registry --scope user` |
+| MCP | `claude mcp list 2>/dev/null \| grep -qE "(^\|[[:space:]])<name>([[:space:]]\|$)"` | 依官方文档（`claude mcp add` 或手动配置） |
+| 系统工具 | `command -v <name> >/dev/null 2>&1` | 依工具官方文档 |
 
 ---
 
@@ -233,63 +242,68 @@ stage prompt 中应包含此协议，避免 AI 在用户提异议时反射性接
 
 PASS=0
 FAIL=1
+MISSING=0
 SKILLS_DIR="$HOME/.claude/skills"
-PLUGINS_CACHE="$HOME/.claude/plugins/cache"
+PLUGINS_CACHE="$HOME/.claude/plugins/cache"  # 实现细节路径，跨版本不保证稳定
 
-err()  { printf "❌  %s\n" "$1" >&2; }
-cmd()  { printf "    %s\n" "$1" >&2; }
-ok()   { printf "✅  %s\n" "$1"; }
+err()          { printf "❌  %s\n" "$1" >&2; }
+cmd()          { printf "    %s\n" "$1" >&2; }
+ok()           { printf "✅  %s\n" "$1"; }
 check_cmd()    { command -v "$1" >/dev/null 2>&1; }
 check_skill()  { [ -f "$SKILLS_DIR/$1/SKILL.md" ]; }
 check_plugin() { find "$PLUGINS_CACHE" -maxdepth 4 -type d -name "$1" 2>/dev/null | grep -q .; }
-check_mcp()    { claude mcp list 2>/dev/null | grep -q "^$1"; }
+check_mcp()    { claude mcp list 2>/dev/null | grep -qE "(^|[[:space:]])$1([[:space:]]|$)"; }
 
-# ── 系统依赖 ────────────────────────────────────────────────────────
-# （按需添加，参考示例）
-# if ! check_cmd node; then
-#   err "node not found."; exit $FAIL
+# ── 系统工具 ────────────────────────────────────────────────────────
+# 每个系统工具一个独立 check 块，按需添加：
+# if ! check_cmd {tool}; then
+#   err "{tool} not found. Install: {官方安装命令}"
+#   MISSING=1
+# else
+#   ok "{tool} $(${tool} --version 2>/dev/null | head -1)"
 # fi
-# ok "Node.js $(node --version)"
 
 # ── Skills ─────────────────────────────────────────────────────────
-# （每个 skill 一行 check，所有 missing 统一报告）
-MISSING_SKILLS=""
-for skill in {skill-1} {skill-2}; do   # ← 替换为实际 skill 名列表
-  if check_skill "$skill"; then
-    ok "skill: $skill"
-  else
-    MISSING_SKILLS="$MISSING_SKILLS $skill"
-  fi
-done
-if [ -n "$MISSING_SKILLS" ]; then
-  err "Missing required skills:$MISSING_SKILLS"
-  err "── 复制以下命令到终端执行 ──────────────────────────────────"
-  # 每个 missing skill 一行，格式固定：
-  cmd "npx skills add {owner/repo}@{skill-name} -g -y"   # ← 替换
-  err "────────────────────────────────────────────────────────────"
-  exit $FAIL
+# 每个 skill 一个独立块，安装命令来自第二点五阶段解析结果。
+# 所有 skill 检测完后统一 exit，让用户一次看到全部缺失项。
+
+if check_skill "{skill-a}"; then
+  ok "skill: {skill-a}"
+else
+  err "Missing skill: {skill-a}"
+  cmd "npx skills add {owner-a/repo-a}@{skill-a} -g -y"
+  MISSING=1
+fi
+
+if check_skill "{skill-b}"; then
+  ok "skill: {skill-b}"
+else
+  err "Missing skill: {skill-b}"
+  cmd "npx skills add {owner-b/repo-b}@{skill-b} -g -y"
+  MISSING=1
 fi
 
 # ── Plugins ────────────────────────────────────────────────────────
-# （每个 plugin 独立 check，避免 cascade fail）
+# 同 Skills 模式：每个 plugin 独立块，收集后统一 exit。
 # if check_plugin "{plugin-name}"; then
 #   ok "plugin: {plugin-name}"
 # else
-#   err "{plugin-name} plugin not detected."
-#   err "Install: claude plugin install {name}@{registry} --scope user"
-#   exit $FAIL
+#   err "Missing plugin: {plugin-name}"
+#   cmd "claude plugin install {name}@{registry} --scope user"
+#   MISSING=1
 # fi
 
 # ── MCP ────────────────────────────────────────────────────────────
-# （MCP 安装方式各异，只检测是否已配置）
+# MCP 安装方式各异，只检测是否已配置，安装需用户手动操作。
 # if check_mcp "{mcp-name}"; then
 #   ok "mcp: {mcp-name}"
 # else
 #   err "{mcp-name} MCP not configured."
 #   err "Install: {按官方文档的安装命令或配置路径}"
-#   exit $FAIL
+#   MISSING=1
 # fi
 
+[ "$MISSING" = "1" ] && exit $FAIL
 exit $PASS
 ```
 

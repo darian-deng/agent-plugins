@@ -63,10 +63,46 @@ Read .ai-flow/{flow-name}/config.json
 
 3. **Script Validator 可靠性**：新脚本的 cwd 是 flow 目录，不是项目根目录。相对路径是否正确？
 
-4. **preflight 同步**：若本次改动新增或删除了外部依赖（skill / plugin / MCP），必须同步更新 `preflight.sh`。更新时走依赖解析流程：
-   - 对每个新增依赖：搜索确认类型和安装命令（Skill → `npx skills find <name>`；Plugin → GitHub/marketplace；MCP → 官方文档）
-   - 搜不到 → 停下来问用户提供类型和安装命令
-   - 解析完成后按 create skill 中的 preflight 模板更新对应节（Skills / Plugins / MCP）
+4. **preflight 同步**：若本次改动涉及外部依赖变化，必须同步更新 `preflight.sh`：
+
+   **新增依赖**：
+   - Skill → `npx skills find <name>`，顶部若无清晰 `owner/repo@skill` 格式 = 未找到，停下来问用户
+   - Plugin → 搜索 marketplace 或 GitHub；MCP → 查官方文档；系统工具 → 直接确认命令名
+   - 找到后，在 preflight.sh 对应节（Skills / Plugins / MCP / 系统工具）按以下规则添加独立 check 块：
+     ```sh
+     # Skill 块（每个 skill 独立，安装命令对应解析结果）
+     if check_skill "{name}"; then ok "skill: {name}"
+     else err "Missing skill: {name}"; cmd "npx skills add {owner/repo}@{name} -g -y"; MISSING=1; fi
+
+     # Plugin 块
+     # if check_plugin "{name}"; then ok "plugin: {name}"
+     # else err "Missing plugin: {name}"; cmd "claude plugin install {name}@{registry} --scope user"; MISSING=1; fi
+
+     # MCP 块
+     # if check_mcp "{name}"; then ok "mcp: {name}"
+     # else err "{name} MCP not configured."; err "Install: {官方命令}"; MISSING=1; fi
+     ```
+
+   **删除依赖**：移除 preflight.sh 中该依赖的完整 check 块，同步更新 helper.md 的「环境要求」节。
+
+   **重命名依赖**：等价于先删除旧名称 check 块，再新增新名称 check 块（走新增流程解析安装命令）。
+
+   **preflight.sh 不存在时**：若首次新增依赖，从零创建。文件头部固定为：
+   ```sh
+   #!/bin/sh
+   # {flow-name} preflight — runs once when '{flow-name} start' is called.
+   PASS=0; FAIL=1; MISSING=0
+   SKILLS_DIR="$HOME/.claude/skills"
+   PLUGINS_CACHE="$HOME/.claude/plugins/cache"  # 实现细节，跨版本不保证稳定
+   err()          { printf "❌  %s\n" "$1" >&2; }
+   cmd()          { printf "    %s\n" "$1" >&2; }
+   ok()           { printf "✅  %s\n" "$1"; }
+   check_cmd()    { command -v "$1" >/dev/null 2>&1; }
+   check_skill()  { [ -f "$SKILLS_DIR/$1/SKILL.md" ]; }
+   check_plugin() { find "$PLUGINS_CACHE" -maxdepth 4 -type d -name "$1" 2>/dev/null | grep -q .; }
+   check_mcp()    { claude mcp list 2>/dev/null | grep -qE "(^|[[:space:]])$1([[:space:]]|$)"; }
+   ```
+   文件末尾固定为 `[ "$MISSING" = "1" ] && exit $FAIL; exit $PASS`
 
 5. **stage prompt 规范合规**：改动涉及 stage 文件时，改完后该 stage 是否仍符合 `optimize-stage-prompt` 规范？检查：section 顺序（目标→前置读取→步骤→输出规格→完成条件→Signal）、Signal 是否为独立末尾 section、输出规格是否明确、完成条件是否可客观验证。
 
