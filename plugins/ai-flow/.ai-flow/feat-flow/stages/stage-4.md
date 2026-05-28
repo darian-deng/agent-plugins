@@ -12,11 +12,9 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md`
-- `docs/feat-flows/<flow_id>/architecture.md`
-- `docs/feat-flows/<flow_id>/plan.md`
+- `docs/feat-flows/<flow_id>/plan.md` — 主 session 只读 plan.md 获取 task 列表
 
-主 session 必须读完三份文档再进入 SDD——因为后续 dispatch 每个 implementer 时要主动构造 Curated Sources。
+`design.md` / `architecture.md` 不在主 session 里读取——它们作为路径写进 implementer prompt，由 subagent 按需自行读取。主 session 提前读取会污染 context 并诱导在主 session 内联实施代码。
 
 ## 入场动作
 
@@ -58,13 +56,15 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 ## 主循环：调用 SDD
 
+**执行机制**：每个 task 必须通过 `Agent` 工具 dispatch（`subagent_type='general-purpose'`）。代码的读写和测试全部在子代理里发生；主 session 只负责读 plan.md / task-reports.md、构造 dispatch prompt、记录结果。禁止在主 session 直接实施代码。
+
 调用 `superpowers:subagent-driven-development` 执行 `docs/feat-flows/<flow_id>/plan.md`。
 
-**对 SDD 默认 implementer-prompt 的修改**（基于我们的三工件拓扑）：
+**对 SDD 默认 implementer-prompt 的修改**：
 
 每个 task 的 implementer prompt 改为含以下 Curated Sources（subagent 按需读，不批量加载）：
 
-- 本 task 完整文本（paste-in plan.md 对应段）
+- 当前 task 完整文本（paste-in plan.md 对应段）
 - `docs/feat-flows/<flow_id>/design.md`
 - `docs/feat-flows/<flow_id>/architecture.md`
 - `docs/feat-flows/<flow_id>/plan.md`（**仅前后 task 上下文用，禁止跨 task 拿活**）
@@ -73,7 +73,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - 提示：`git log` / `git show <commit>` 看前置 task 已实现细节
 
 **Focus 约束**（写进 implementer prompt）：
-- 专注本 task，不探索本 task 范围外的代码或议题
+- 专注当前 task，不探索当前 task 范围外的代码或议题
 - 优先按 task 描述里的 file:line 直读，不读整个文件
 - 用 git show 看前置 task diff，不读整个文件
 
@@ -83,31 +83,32 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - 每个 task 的 review 结论必须在 task-reports.md 对应 task 段落里落盘（格式见下文，新增 `**Review**` 行）
 - 主 session 在 dispatch 下一个 task 前，先确认 task-reports.md 中上一 task 有 `**Review**` 行 → 有则继续，无则先补写
 
-**本 task 实施要求**：
+**当前 task 实施要求**：
 - 走 TDD（若 plan task 标注要走）
-- 实施完成后跑**全量单元测试**（design.md 项目命令.单元测试），不仅本 task 新写的测试
+- 实施完成后跑**全量单元测试**（design.md 项目命令.单元测试），不仅当前 task 新写的测试
 - 既有单测 break：默认假设是 regression，修代码而非改测试
 - 极少数情况认为测试在测 implementation detail → DONE_WITH_CONCERNS 附建议改测试的理由（必须复核）
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
-- **知识沉淀优先级**（每遇到 non-obvious 决策时必须判断）：
-  - **第一步：先用代码注释**——两种形式：
-    - File header 注释：整个文件的设计意图 / 为什么这样组织
-    - Block/inline 注释：具体逻辑的 why、非显而易见的约束、绕过特定 bug 的原因
-  - **只有满足以下任意一条，才往后走**（注释无法承载的判断标准）：
-    1. 超出当前文件：其他文件的实施者也需要遵守这条约束
-    2. 未来新代码必须遵循：对所有未来代码的要求，不只是解释现有代码
-    3. 有被放弃的替代方案：存在架构 trade-off，需要记录「为什么不选 X」
-    4. 可复用的多步流程：需要反复执行的操作序列，不是一处判断
-  - **满足上述条件后，按层路由**（多条可同时满足，各条路由独立记录）：
-    - 条件 1/2（超出文件 / 未来新代码必须遵循）→ 记入 `CONTEXT_CANDIDATES`（rules / CLAUDE.md / skill 类）
-    - 条件 3（有被放弃的替代方案）→ 记入 `ADR_CANDIDATES`，不记 CONTEXT_CANDIDATES
-    - 条件 4（可复用多步流程）→ 记入 `CONTEXT_CANDIDATES`（skill 类）
-    - 同时满足条件 3 和其他条件时：ADR_CANDIDATES 和 CONTEXT_CANDIDATES 均记
+- **知识沉淀**（全量单测通过后，专门做一次反思——不是实施中随时记，是测试稳定后的整体回顾）：
+
+  识别命中以下任一类的决策，对每条调用 `optimize-claude-context` 的 `assess-candidate`：
+
+  1. **WHY 类**：做了非显然选择，或绕过了看起来更自然的做法（含「为什么不选 X」的 trade-off）
+  2. **否定类**：验证了某方案不可行（含验证过程和失败原因）
+  3. **约定类**：用了不确定是否已记录的命名规范、架构惯例或接口契约
+  4. **边界类**：实现依赖外部条件，条件变化会静默失效（版本假设、环境假设、隐式顺序）
+
+  以下情况跳过，不算候选项：
+  - 调试过程中的中间试验（最终方案已确定）
+  - 临时 workaround（已确认有效但尚未提交）
+  - 个人工作偏好（对团队无约束力）
+
+  `assess-candidate` 的处理结果包含在 implementer 的 task report 输出里，由主 session 落盘到 task-reports.md。不在 Stage 4 直接写入 context 文件，写入在 Stage 6 统一处理。
 - 删注释 ≥3 行必须在 task report 写理由
 
 **task report 额外字段**（在 SDD 默认 DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT 基础上）：
 - `INLINE_COMMENTS_ADDED`：在哪些代码位置加了 WHY 注释（file header / block / inline）
-- `NEW_TERMS_OR_PATTERNS`：本 task 引入的**术语/命名规范**候选（如 "LRUEvictionPolicy"），建议进 rules
+- `NEW_TERMS_OR_PATTERNS`：当前 task 引入的**术语/命名规范**候选（如 "LRUEvictionPolicy"），建议进 rules
 - `CONTEXT_CANDIDATES`：通过「注释无法承载」判断后，需进入项目 context 层的候选，按目标层标注：
   - `rules/<domain>.md`：当前 package 适用的约束
   - `CLAUDE.md`：全局行为规范
@@ -115,7 +116,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
   - （ADR 类仍记入 `ADR_CANDIDATES`，不在此字段）
 - `ADR_CANDIDATES`：跨文件性质、有 trade-off 的架构决策候选（建议 Stage 6 评 ADR）
 - `COMMENT_DELETIONS`：删除注释 ≥3 行的位置 + 理由
-- `UPSTREAM_REVISION`（如适用）：本 task 期间自查发现前置 stage 问题——按 `references/upstream-revision-protocol.md` 标 L1/L2/L3 + 描述 + 处理
+- `UPSTREAM_REVISION`（如适用）：当前 task 期间自查发现前置 stage 问题——按 `references/upstream-revision-protocol.md` 标 L1/L2/L3 + 描述 + 处理
 
 ## task-reports.md 持久化（每 task 完成后必做）
 
