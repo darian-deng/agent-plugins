@@ -1,88 +1,36 @@
 # Stage 2：实施蓝图
 
 > feat-flow 第 2/6 步 · [流程总览](../helper.md)
-> 后续：Stage 3 实施计划（Gate）
 > 当前 stage 目的：把 design.md 的决策翻译成可执行的实施蓝图（架构层级）
 >
-> **元规则**：禁止 git commit。文档改动用 `git add` 暂存，Stage 4 起点统一提交。
+> **元规则**：禁止 git commit，stage-4 起点统一提交。
 
 ## 目标
 
-dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含文件清单、接口设计、数据流、集成点、build 顺序。code-architect 单 subagent 即可，**不并行多方案**（反锚定职责在 Stage 1 决策记录已尽到，此处只做翻译）。
+dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含架构决策、文件清单、接口设计、数据流、集成点、build 顺序。code-architect 自带代码模式分析能力，且被设计为「决断单一方案、不罗列多选项」，因此**单 subagent 即可，不并行多方案**（反锚定职责在 Stage 1 决策记录已尽到，此处只做翻译）。
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 需求 / 决策记录 / UI 状态清单 / 项目命令 / TDD bootstrap 决策
+- `docs/feat-flows/<flow_id>/design.md` — 需求 / 决策记录 / UI 状态清单 / 项目命令 / TDD 基建决策
 
 ## 入场动作
 
-1. **ADR scan**：`ls docs/adr/` + 与 design.md 决策相关性筛 ≤5 篇标题
-2. 把相关 ADR 路径列表作为 Curated Sources 待传给 architect
+1. **ADR 查阅**：执行 `references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
 
 ## 步骤
 
 1. dispatch `feature-dev:code-architect` subagent，传入：
    - design.md 全量
-   - 相关 ADR 路径列表（Curated Sources，subagent 按需读）
-   - 任务：产出实施蓝图（架构层级，非 task 切分）
+   - 相关 ADR 路径列表（精选来源，subagent 按需读）
+   - 任务：产出实施蓝图（架构层级，非 task 切分；build 顺序保持高层阶段，task 粒度留给 Stage 3）
 
 2. 取回结构化蓝图后，主 session 审视与 design.md 一致性：
    - 蓝图是否覆盖 design.md 每个决策？
-   - 蓝图是否引入了 design.md 「不在范围内」的内容？
+   - 蓝图是否引入了 design.md「不在范围内」的内容？
    - 蓝图是否与 design.md 冲突？
-     - 若用户提出异议 → `references/dissent-protocol.md`
-     - 若 AI（主 session 或 architect subagent）**自查**发现 design.md 漏写 / 错了 → `references/upstream-revision-protocol.md`（L1 abort / L2 暂停回改 / L3 inline 修）
+   - 任一处需要改前面已对齐的东西 → 走 `references/revision-protocol.md`（开发者提的走入口 A，AI 自查的走入口 B）
 
-3. 追加到 `docs/feat-flows/<flow_id>/architecture.md`（新文件）
-
-## 用户审批清单（Gate 前主动呈现）
-
-完成 architecture.md 后向用户输出：
-
-```
-请按以下 7 点审 architecture.md：
-
-1. 覆盖：design.md 每个决策是否都在蓝图里有对应实现位置？
-2. 模块定位：新建模块/文件的目录位置是否符合项目既有惯例？
-3. 接口设计：每个 service / hook / API 的接口形状是否合理？参数粒度、返回值结构、是否有遗漏的关键操作（stats / list / clear 等）
-4. 数据流：从 UI 触发到数据持久化（或回流）的完整链条是否清晰？错误如何冒泡？loading 状态由谁管？
-5. 集成点：与既有代码的接驳（路由、i18n、错误处理、日志）是否完整？
-6. Build 顺序：依赖关系是否合理？能否独立测试每一步？有循环依赖吗？
-7. Bootstrap 完整性：若 design.md TDD 决策为「建立」，architecture 是否含 bootstrap 步骤（依赖安装 + 配置 + 第一个 smoke test）？bootstrap task 是否明确标"不走 TDD"？
-
-任一项有问题 → 直接回复指出，我会改后再 signal。
-全部 OK → 运行 feat-flow approve 进 Stage 3。
-```
-
-## Context Delta Capture（Gate 通过后执行）
-
-用户审批通过后，写入 `docs/feat-flows/<flow_id>/context-delta.md`（创建新文件）。
-
-**范围 1：architecture.md 引入的模式**
-
-对 architecture.md 建立的每个约定逐一判断：
-- 新建文件/目录约定 + glob 可确定 → path rule 候选（附推荐 glob）
-- 跨文件行为规则（scope 可确定为 root 或具体 package-path）→ CLAUDE.md 候选
-- 架构选型（有 alternative，跨多文件影响，难以反转）→ ADR 候选
-
-**范围 2：回顾 design.md 决策记录**
-
-仅扫 `**决策**:` 字段已填写（非 TBD）的条目。已在 design.md `ADR 候选` 节列入的条目**跳过**（不重复）。剩余条目用同一分类框架判断。
-
-写入格式（三类均为空时各节写 `(none identified)`，不跳过写入）：
-
-```markdown
-## Stage 2 — <flow_id>
-
-### CLAUDE.md candidates
-- "<规则文本>" — scope: root | <package-path> — source: <来源节>
-
-### Path rule candidates
-- glob: "<pattern>" | "<规则文本>" — source: <来源节>
-
-### ADR candidates
-- "<决策摘要：为什么 X 而非 Y>" — source: <来源节>
-```
+3. 写入新文件 `docs/feat-flows/<flow_id>/architecture.md`
 
 ## 输出规格
 
@@ -92,6 +40,9 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 
 ```markdown
 # 实施蓝图
+
+## 架构决策与权衡
+（architect 选定的方案 + 理由 + 主要替代方案为何不选；ADR 候选的主要来源）
 
 ## 模块定位
 （新建模块 / 文件清单 + 目录位置）
@@ -106,17 +57,73 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 （路由、i18n、错误处理、日志接驳）
 
 ## Build 顺序
-（按依赖排的高层步骤，含 bootstrap 若需要）
+（按依赖排的高层步骤，含基建若需要）
+```
+
+## 架构 & 复用审查（独立批判，Gate 前必跑）
+
+architecture.md 写好后、呈给开发者前，派一个**独立**的 `general-purpose` 子代理（**非 code-architect 本人**）对蓝图做**对抗式审查**（立场：默认怀疑——"这个真的需要吗？有没有更简单的、能复用现有代码的做法？"）。这是"架构不合理 / 没复用现有代码 / 过度工程"的**最早、最便宜捕获点**——代码还没写，改蓝图零成本（等到 Stage 5 木已成舟再发现就是大返工）。
+
+传入：
+- architecture.md 全量
+- design.md（需求 + 决策记录，作评判基准——已对齐决策不质疑）
+- 相关 ADR 路径列表
+- 让它自己 grep / Read 现有代码库
+
+审查维度：
+1. **复用缺失（重点）**：蓝图新建的模块 / util / 模式，代码库里是否已有可复用的？grep 现有代码确认，别重造轮子。
+2. **模块定位**：新建文件的目录位置是否贴合项目既有结构惯例？
+3. **过度工程**："这个真的需要吗？" 有没有更简单的等价方案？抽象是否超前于需求？
+4. **架构合理性 / 故障模式**：数据流、错误处理、边界是否周全？有无循环依赖？
+5. **ADR 合规**：蓝图是否违反既有 ADR？issue 引 ADR ID。
+
+输出分两级：
+- 🔴 **阻塞项**：该复用却没复用 / 架构不可行 / 违反 ADR / 严重过度工程。**呈开发者前必须先回改 architecture.md**（与 architect 再 dispatch 一轮，或主 session 直接修），改完重跑相关维度确认。
+- 🟡 **建议项**：可选优化，并入开发者审批清单供裁决，不强制改。
+
+> 这一步独立于开发者 Gate：独立审查抓 AI 视角的硬伤（尤其复用），开发者 Gate 抓人的领域判断，两者互补不替代。
+
+## Context 变化捕获（写入 context-delta.md）
+
+只**收集**本 stage 引入的 context 候选，**不分类、不写 CLAUDE.md/ADR**——分类路由 + 冲突检测是 Stage 6 `handle-one-directive` 的职责，此处提前分类是重复劳动。
+
+收集两类：
+- architecture.md 引入的新约定 / 模式 / 架构选型
+- design.md 决策记录中 `**决策**:` 已填写、且未在「ADR 候选」节列入的条目
+
+写入 `docs/feat-flows/<flow_id>/context-delta.md`（新文件）。无候选时写「（无）」，不跳过——此节是 Stage 6 验证本 stage 已执行的标记。
+
+```markdown
+## Stage 2 — <flow_id>
+
+- <一句话描述> — 来源: <来源节>[；被否决替代: <X> 为何不选]
+```
+
+## 开发者审批清单（Gate 前主动呈现）
+
+完成 architecture.md（含架构审查阻塞项已回改）+ context-delta.md 后，向开发者呈现以下 7 点 **+ 独立架构审查的建议项**供逐项审：
+
+```
+请按以下 7 点审 architecture.md：
+
+1. 覆盖：design.md 每个决策是否都在蓝图里有对应实现位置？
+2. 模块定位：新建模块/文件的目录位置是否符合项目既有惯例？
+3. 接口设计：每个 service / hook / API 的接口形状是否合理？参数粒度、返回值结构、是否有遗漏的关键操作（stats / list / clear 等）
+4. 数据流：从 UI 触发到数据持久化（或回流）的完整链条是否清晰？错误如何冒泡？loading 状态由谁管？
+5. 集成点：与既有代码的接驳（路由、i18n、错误处理、日志）是否完整？
+6. Build 顺序：依赖关系是否合理？能否独立测试每一步？有循环依赖吗？
+7. TDD 基建完整性：若 design.md TDD 决策为「建立」，architecture 是否含基建步骤（依赖安装 + 配置 + 第一个 smoke test）？基建 task 是否明确标"不走 TDD"？
 ```
 
 ## 完成条件
 
-- `architecture.md` 存在且 5 节齐全
+- `architecture.md` 存在且各节齐全
 - 与 design.md 无未解冲突
-- 用户审批 7 点已主动呈现
+- **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
+- 开发者审批 7 点 + 架构审查建议项已主动呈现
 
 ## Signal
 
-**触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
+**触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
 **动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-3`（内容必须精确匹配，引擎会校验）。

@@ -54,9 +54,8 @@ ok "git $(git --version | awk '{print $3}')"
 #   writing-plans               → obra/superpowers
 #   subagent-driven-development → obra/superpowers
 #   receiving-code-review       → obra/superpowers
-#   optimize-claude-context     → darian-deng/agent-skills
-#   adr-manage                  → darian-deng/agent-skills
-REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review optimize-claude-context adr-manage"
+#   optimize-claude-context     → darian-deng/agent-skills（含 ADR 路由：Stage 6 经 handle-one-directive 写 ADR）
+REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review optimize-claude-context"
 MISSING_SKILLS=""
 
 for skill in $REQUIRED_SKILLS; do
@@ -90,9 +89,6 @@ if [ -n "$MISSING_SKILLS" ]; then
       optimize-claude-context)
         cmd "npx skills add darian-deng/agent-skills@optimize-claude-context -g -y"
         ;;
-      adr-manage)
-        cmd "npx skills add darian-deng/agent-skills@adr-manage -g -y"
-        ;;
     esac
   done
 
@@ -100,13 +96,14 @@ if [ -n "$MISSING_SKILLS" ]; then
   exit $FAIL
 fi
 
-# ── 5. feature-dev plugin (code-explorer / code-architect / code-reviewer) ──────
+# ── 5. feature-dev plugin (code-architect → Stage 2) ──────
+# Stage 2 架构审查 / Stage 5 集成+安全双视角审查都用内置 general-purpose 子代理，无需额外插件。
 if check_plugin "feature-dev"; then
   ok "plugin: feature-dev"
 else
   err "feature-dev plugin not detected in plugin cache."
   err "Install via: claude plugin install feature-dev@claude-plugins-official --scope user"
-  err "feat-flow will fail at Stage 1, 2, and 5 without this plugin."
+  err "feat-flow will fail at Stage 2 (code-architect) without this plugin."
   exit $FAIL
 fi
 

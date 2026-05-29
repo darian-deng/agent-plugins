@@ -315,6 +315,71 @@ describe('handlePreTool — write scope', () => {
   });
 });
 
+describe('handlePreTool — cwd ≠ repoRoot guard (subdir-write bug)', () => {
+  // repoRoot is always cwd or an ancestor (hasActiveFlow walks up). When the
+  // session cwd is a subdirectory, a RELATIVE file_path is resolved by the write
+  // tool against cwd — silently landing in the wrong place — while the scope check
+  // (which assumes repoRoot) validates the wrong path. The guard forces absolute paths.
+  function makeSubdirInput(
+    subdir: string,
+    toolName: string,
+    toolInput: Record<string, unknown>
+  ): PreToolInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      session_id: 'sess-1',
+      cwd: subdir,
+      tool_name: toolName,
+      tool_input: toolInput,
+    };
+  }
+
+  it('relative write from subdir cwd (unrestricted stage) → DENY with absolute-path instruction', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work'); // unrestricted — would otherwise silently misplace
+    const subdir = join(repo.repoRoot, 'packages', 'app');
+    mkdirSync(subdir, { recursive: true });
+    const out = await handlePreTool(
+      makeSubdirInput(subdir, 'Write', { file_path: 'docs/test-flow/test-flow-abc/design.md', content: 'x' })
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toContain(
+      join(repo.repoRoot, 'docs/test-flow/test-flow-abc/design.md')
+    );
+  });
+
+  it('absolute write from subdir cwd → not denied by cwd guard', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = join(repo.repoRoot, 'packages', 'app');
+    mkdirSync(subdir, { recursive: true });
+    const absPath = join(repo.repoRoot, 'src', 'main.ts');
+    const out = await handlePreTool(makeSubdirInput(subdir, 'Write', { file_path: absPath, content: 'x' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('relative write when cwd == repoRoot → unaffected by cwd guard', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work'); // unrestricted
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: 'src/main.ts', content: 'x' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('relative signal write from subdir cwd → DENY with absolute signal path', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = join(repo.repoRoot, 'sub');
+    mkdirSync(subdir, { recursive: true });
+    const out = await handlePreTool(
+      makeSubdirInput(subdir, 'Write', { file_path: '.ai-flow/test-flow/state/signal', content: 'review' })
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toContain(
+      join(repo.repoRoot, '.ai-flow/test-flow/state/signal')
+    );
+  });
+});
+
 describe('handlePreTool — context block enforcement', () => {
   it('context_blocked=true + write tool → DENY with /clear message', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);

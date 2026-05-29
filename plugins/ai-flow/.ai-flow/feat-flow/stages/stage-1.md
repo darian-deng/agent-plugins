@@ -1,10 +1,9 @@
 # Stage 1：需求确认
 
 > feat-flow 第 1/6 步 · [流程总览](../helper.md)
-> 后续：Stage 2 实施蓝图（Gate）
 > 当前 stage 目的：把模糊需求转成结构化的 design.md，含可测量 AC、UI 状态清单、决策记录、项目命令
 >
-> **元规则**：禁止 git commit。文档改动用 `git add` 暂存，Stage 4 起点统一提交。
+> **元规则**：禁止 git commit，stage-4 起点统一提交。
 
 ## 目标
 
@@ -12,68 +11,67 @@
 
 ## 入场动作（按顺序，主 session 执行）
 
-**工作目录规范**：ai-flow hook 依赖 session cwd 定位项目根目录。执行命令时：
-- 优先使用包管理器的 workspace/filter 参数或命令的 `-C <path>` 标志
-- 如果必须 `cd <子目录>`，必须在同一 Bash 调用内恢复：`cd <子目录> && <命令> && cd -`
-- 禁止跨多个 Bash 调用保持非项目根目录的 cwd
+1. **需求源摄入**
+   - 引擎注入的「需求」可能只是一句话，也可能指向一份 PRD 文件 / URL / 飞书文档
+   - 若指向外部来源 → **先完整读取再进入后续动作**：本地文件直接 Read；URL 用 tavily-extract；飞书文档用 lark-doc
+   - 把来源（路径 / URL / 链接）记到 design.md「外部参考」节，确保 /clear 后仍能回溯
 
-1. **ADR 一次性扫描**
-   - `ls docs/adr/` 列标题（不存在跳过）
-   - 与 requirement 相关性筛 ≤5 篇，读后注入 system context
-   - 后续给推荐答案时引用已有 ADR 决策，避免重复问用户
-
-2. **强制代码探索**
-   - dispatch ≥1 个 `feature-dev:code-explorer` subagent
-   - 等结构化报告
+2. **ADR 查阅**
+   - 执行 `references/adr-scan.md`
 
 3. **项目命令探测**
    - 读 `package.json` scripts / `pyproject.toml` / `Makefile` 等
-   - 提取：单元测试 / 集成测试 / Lint / Typecheck 命令
-   - 写到 design.md「项目命令」节
-   - 检测不到 → 明确询问用户，**禁止凭推测填**
+   - 提取：单元测试 / 集成测试 / Lint / Typecheck 命令，写到 design.md「项目命令」节
+   - 检测不到 → 明确询问开发者，**禁止凭推测填**
    - 不查 pre-commit hook（项目级基建职责，不归 feat-flow 管）
 
-4. **TDD bootstrap 检测**
+4. **TDD 基建检测**
    - 查项目是否有测试框架 + 测试目录
-   - 已有完整基建 → design.md 决策记录写 "TDD 基建：已有 [vitest/jest/...]"
-   - 无 / 部分 → 询问用户：本次 feature 是否顺带建立 TDD 基建？决策写到 design.md
+   - 已有完整基建 → 记到 design.md 决策记录「TDD 基建：已有 [vitest/jest/...]」
+   - 无 / 部分 → 此处不自动决定，留到 grill 的强制必问项确认（见下）
 
 ## 调用 grill-me 进行问询
 
-调用 `grill-me` skill 启动审讯式问询：一次一问 + 附推荐答案 + 能查代码先查。直到下列内容全部清晰：
+调用 `grill-me` skill 启动审讯式问询：一次一问 + 附推荐答案 + 能查代码先查。grill-me 自带按需探索代码的能力，**不需要额外强制代码探索**。直到下列内容全部清晰：
 
 - 功能边界（做什么、明确不做什么）
 - 技术约束（依赖、兼容性、性能要求）
 - 验收标准（每条必须可测量，标 `[auto]` 命令或 `[manual]` 步骤）
 
+**强制必问项**（无论 grill 如何展开都必须问到并记录决策）：
+- 若入场检测到 TDD 基建「无 / 部分」：本次 feature 是否顺带建立 TDD 基建？决策写到 design.md 决策记录
+- **产品安全**：从产品安全角度审视，本方案设计 / 产品设计是否存在漏洞？（权限绕过、数据泄露、状态被滥用、输入未校验、边界条件被利用等）必须主动思考并把结论 / 缓解措施记录到 design.md
+
 **问询纪律**：
-- 每 Q 与用户对齐后**立即增量更新 design.md**，不批量
-- 涉及外部技术选型 / 最新 API → dispatch 独立调研 subagent（Claude Code 内置的 `general-purpose` 类型，或调用 `tavily-search` 等专门 Web 调研 skill），禁止凭模型既有知识给推荐
+- 每个问题与开发者对齐后**立即增量更新 design.md**，不批量
+- 涉及外部技术选型，或依赖库在模型知识截止后可能变化的接口 → dispatch 独立调研 subagent（general-purpose 类型，或 tavily-search 等 Web 调研 skill），禁止凭模型既有知识给推荐
 - 涉及代码细节 → 主 session 直接 grep / read
-- load-bearing 决策被拒 / 反复对线时 → 当场提议 ADR 草稿写到 design.md「ADR 候选」节
+- 关键决策（影响下游多个 stage、难以反转）被开发者拒绝，或与开发者反复争论未达成一致 → 当场提议 ADR 草稿写到 design.md「ADR 候选」节
 
-## UI 设计来源对齐（若需求涉及 UI 必须执行）
+## UI 设计来源对齐（若需求涉及 UI）
 
-详见 `references/ui-protocol.md`。要点：
-- 不假设 Figma URL 覆盖所有状态——按六类维度（数据 / 加载 / 错误 / 交互 / 流程分支 / 响应式）逐项 gap closure
-- 每一项「未明确覆盖」必须**独立代码探索**（不依赖入场时的探索），找现有复用组件
-- 找到复用组件**仍需用户显式确认沿用**（不允许默认沿用）
+涉及任何 UI 改动（新页面、新组件、视觉调整）**必须读 `references/ui-protocol.md` 并逐步执行**：六类状态维度逐项 gap closure、每项未覆盖独立代码探索找现有复用组件、复用组件需开发者显式确认沿用。
 
-## 自审（写完 design.md 后必做）
+## 独立审计（写完 design.md 后必做）
 
-通读一遍，按 5 项 checklist 自查：
+dispatch 一个 fresh subagent（general-purpose 类型）对 design.md 做独立审计——自查有盲区，必须用独立上下文。传入 design.md 全文 + 下列 rubric：
 
-- [ ] 有无 placeholder（TBD / 待定 / `<具体值>` 等）？
-- [ ] 内部有无矛盾或前后不一致？
-- [ ] 有无范围漂移（讨论中超出原需求的内容混入）？
-- [ ] 有无歧义表述？
-- [ ] 每条 AC 是否能写成自动化测试或具体验证步骤？
+- placeholder 扫描（TBD / 待定 / `<具体值>` 等）
+- 内部矛盾或前后不一致
+- 范围漂移（讨论中超出原需求的内容混入）
+- 每条 AC 是否能写成自动化测试或具体验证步骤
+- design.md 信息是否足够下游 subagent 独立执行（不依赖本 session 对话历史）
+- 产品安全：方案设计 / 产品设计是否存在安全漏洞（权限、数据暴露、状态滥用、边界条件）
 
-发现问题 → 修正 → 再读。
+处理审计结论：
+- 审计指出问题 → 主 session 修正 design.md → 让审计员**再自审**一轮
+- 审计员与主 session 对某条结论分歧、无法当场达成一致 → **不私下消化**，列入 Gate 审批清单亮给开发者决定（design.md 已记录哪些是开发者决策项，分歧本就该回到开发者）
 
-## 用户反对意见处理协议
+不做 stage-5 那种多轮独立复核——Gate 即人类升级点。
 
-详见 `references/dissent-protocol.md`。要点：识别异议类型 → 严谨评估（B 类必须给真实理由不接受「感觉更好」）→ 上游影响检查（不允许 design.md 与本 stage 产物分裂）。
+## 前置产物修订（开发者异议 / AI 自查）
+
+详见 `references/revision-protocol.md`。开发者对产出有异议走入口 A，AI 自查发现前置漏 / 错走入口 B；均先评估对全部上游产物的影响并分级 L1/L2/L3，不反射性接受、不私下消化。
 
 ## 输出规格
 
@@ -94,7 +92,7 @@ design.md 骨架：
 ## 约束
 
 ## 外部参考
-（用户提供的链接 + 一句话用途；无则写"无"）
+（开发者提供的链接 / PRD 路径 / 飞书文档 + 一句话用途；无则写"无"）
 
 ## 项目命令
 | 用途 | 命令 |
@@ -124,12 +122,13 @@ design.md 骨架：
 ## 完成条件
 
 - `docs/feat-flows/<flow_id>/design.md` 存在且包含全部规定 section
+- 需求源（若为外部 PRD / URL / 文档）已记入「外部参考」节
 - 若涉及 UI：UI 状态清单 gap closure 完成（每项有归属来源）
-- TDD bootstrap 决策已记录
+- TDD 基建决策已记录
 - 项目命令 4 项已填（或明确标"无"）
-- 自审 5 项 checklist 通过
+- 独立审计通过；与审计员的分歧（如有）已列入 Gate 审批清单
 
 ## Signal
 
-**触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
+**触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
 **动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-2`（内容必须精确匹配，引擎会校验）。

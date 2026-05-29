@@ -1,4 +1,4 @@
-import { join, relative } from 'path';
+import { join, relative, resolve } from 'path';
 import type { PreToolInput } from './types.js';
 import {
   hasActiveFlow,
@@ -96,6 +96,26 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
 
   const fp = String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? '');
   if (!fp) return null;
+
+  // ─── cwd ≠ repoRoot guard (subdir-write protection) ───────────────────────────
+  // repoRoot is always cwd or an ancestor (hasActiveFlow walks up to find .ai-flow).
+  // When the session cwd is a subdirectory, a RELATIVE file_path is resolved by the
+  // write tool against cwd — so it silently lands at <cwd>/<fp> instead of the flow
+  // root, and the scope check below (which assumes repoRoot) would validate the wrong
+  // path. Write also auto-creates parent dirs, so the misplacement is silent. Force
+  // an absolute, repoRoot-anchored path before any path-based check runs.
+  if (!fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
+    await appendViolation(repoRoot, activeFlowName, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
+    return deny(
+      `feat-flow expects the working directory to be the flow root (${repoRoot}), but the current ` +
+      `cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' ` +
+      `would be written under the subdirectory — not the flow root — and Write would silently create ` +
+      `it there. Re-issue the write with an absolute path to the location you actually intend: ` +
+      `a flow artifact rooted at the flow root is ${join(repoRoot, fp)}; ` +
+      `a file under the current subdirectory is ${resolve(cwd, fp)}.`
+    );
+  }
+
   const absPath = resolvePath(repoRoot, fp);
 
   // ─── Signal interception ─────────────────────────────────────────────────────

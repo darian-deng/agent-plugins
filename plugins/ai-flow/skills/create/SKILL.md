@@ -156,7 +156,6 @@ Schema 约束：
 # Stage N：{阶段名}
 
 > {flow-name} 第 N/M 步 · [流程总览](../helper.md)
-> 后续：Stage N+1（{名} · Gate / 无 Gate）— 末步时改为「本 stage 是流程末步」
 > 当前 stage 目的：{一句话}
 >
 > **元规则**：{commit 政策——如「禁止 git commit。改动用 git add 暂存」或「本 stage 允许 commit，message 格式: <prefix>: <subject>」}

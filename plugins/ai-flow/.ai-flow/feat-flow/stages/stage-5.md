@@ -1,30 +1,31 @@
 # Stage 5：质量门
 
 > feat-flow 第 5/6 步 · [流程总览](../helper.md)
-> 后续：Stage 6 知识沉淀（无 Gate）
-> 当前 stage 目的：自动化验证（lint / typecheck / 测试）+ 3 轮互审，确保代码质量。**验证与审查合并在一个 stage**，避免传统拆分时的"修了一个又破另一个"套娃
->
-> **元规则**：允许 commit，但仅限修复用——验证失败修复（`fix: resolve verification errors`）或审查接受修复（`fix: address review finding`）。
+> 当前 stage 目的：全量自动化回归 + **组装级双视角审查**（集成与需求闭环 + 强制安全），抓只有改动全部组装后才显现的缺陷。**验证与审查合并在一个 stage**，避免传统拆分时的"修了一个又破另一个"套娃
 
 ## 目标
 
-确保 base_sha_code 之后的所有代码改动通过：
-- 自动化检查（lint / typecheck / 单元测试 / 集成测试）
-- 3 轮互审协议（reviewer ↔ author，最多 3 轮，分歧 escalate 开发者）
+**stage-5 只审「全部改动组装后才显现」的缺陷**——这是 Stage 1/2/4 任何单点都看不到的视角。逐函数局部 bug / 语法 / 边界已由 **Stage 4 每 task 的两段评审（规格 + 质量）覆盖，这里不重做**；架构与方案已由 Stage 2 + 其 Gate 定稿，这里不重判（发现真问题走 `references/revision-protocol.md`，不当常规审查项）。
+
+确保 base_sha_code 之后的所有改动通过：
+- **自动化回归**（lint / typecheck / 单元测试 / 集成测试）
+- **组装级双视角审查**：① 集成 & 需求闭环 ② 安全专项（**强制，不可跳过**）
+- 阻塞项经 **3 轮验证**确认修复到位（模型会幻觉，修复也会——独立审查者复核是核心防线）
+
+本 stage 只产生**修复类 commit**——验证修复（`fix: resolve verification errors`）或审查修复（`fix: address review finding`），不新增功能。
 
 ## 前置读取
 
 - `docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
-- `docs/feat-flows/<flow_id>/architecture.md`
+- `docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
+- `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 注释删除理由 / 前置修订）
 - `.ai-flow/feat-flow/state/base_sha_code` — Stage 4 起点 SHA
-- `docs/adr/` 相关 ADR（reviewer 引用用）
 
-## Phase A：自动化检查
+## 入场动作
 
-**工作目录规范**：ai-flow hook 依赖 session cwd 定位项目根目录。执行命令时：
-- 优先使用包管理器的 workspace/filter 参数或命令的 `-C <path>` 标志
-- 如果必须 `cd <子目录>`，必须在同一 Bash 调用内恢复：`cd <子目录> && <命令> && cd -`
-- 禁止跨多个 Bash 调用保持非项目根目录的 cwd
+**ADR 查阅**：执行 `references/adr-scan.md`，筛出与本次改动相关的 ADR，产出**相关 ADR 路径列表**——下文环节 B 两个视角的审查者都按需引用它（视角① 查"是否违反既有 ADR"、视角② 取安全相关 ADR）。无 `docs/adr/` 则列表为空，跳过。
+
+## 环节 A：自动化回归
 
 按 design.md 项目命令运行：
 - 单元测试：`<design.md 项目命令.单元测试>`
@@ -34,85 +35,118 @@
 
 **失败处理**：
 - 修代码（默认）
-- 若是既有测试 break + 怀疑测试在测 implementation detail → 应用「既有测试破坏纪律」（见下）
+- 若是既有测试被打破 + 怀疑测试在测**实现细节** → 应用「既有测试破坏纪律」（见下）
 - 修复后 `git add . && git commit -m "fix: resolve verification errors"`
 - 重跑直到全过
 
 ### 既有测试破坏纪律
 
-**默认假设**：本次改动是 regression，要修代码。
+**默认假设**：本次改动是回归，要修代码。
 
-**例外**：若 author 认为既有测试在测 implementation detail 而非 behavior（违反 testability 原则），可提议改测试：
-- 必须在 review.md「测试调整」section 明确列出：哪条测试、为什么是测了实现细节、新测试如何覆盖原意图
-- 必须经 review subagent 复核（dispatch 时附"测试调整复核"任务）
-- 复核通过才允许改测试
+**例外**：若主 session 认为既有测试在测**实现细节**而非**行为**（违反可测试性原则），可提议改测试：
+- 必须在 review.md「测试调整记录」节明确列出：哪条测试、为什么是测了实现细节、新测试如何覆盖原意图
+- 改完测试可继续环节 A，但该调整**留待环节 B 的视角① 复核**（派发视角① 时明确要求验证「测试调整记录」每条是否成立）
+- 若视角① 判定调整不成立 → 当作阻塞项回退
 
-**绝对禁止**：通过修改测试 assert 让测试"通过"而不解释为什么。
+**绝对禁止**：通过修改测试断言让测试"通过"而不解释为什么。
 
-## Phase B：代码审查（3 轮互审，硬上限）
+## 环节 B：组装级双视角审查
 
-### 轮 1：dispatch `feature-dev:code-reviewer` subagent
+两个视角**并行派发**，各自聚焦组装后才显现的缺陷，互不重叠。两个审查者都用内置 `general-purpose` 子代理（**能跑 git**）——主 session 只给 base SHA，让审查者自己 `git diff <base>..HEAD` / `git log` / 按需 Read 文件（业界实证：审查者自己沿调用链查，远胜被动接收一坨 diff 文本）。
+
+> 为什么不用专用安全/审查插件 agent：官方生态里没有"有文档、可验证调用、且是安全专项"的 subagent——`code-review` 插件是 PR 导向且把安全列为忽略项，`security-guidance` 是被动 hooks，`code-modernization:security-auditor` 是无文档的插件内部 agent（无法可靠调用）。故用 general-purpose **执行公认的 OWASP/CWE 标准**：被背书的是标准本身，不是 agent 外壳。
+
+> base SHA 取法：`cat .ai-flow/feat-flow/state/base_sha_code`。下文 `<base>` 均指此值。
+
+### 视角①：集成 & 需求闭环审查（必跑）
+
+派一个 `general-purpose` 子代理作审查者，让它**以资深工程师的视角**审查。它的职责**不是**逐函数找 bug（那是 Stage 4 每 task 两段评审已做的，重做既浪费又可能给出打架结论），而是审"全部改动组装后才显现"的问题。
 
 传入：
-- `git diff $(cat .ai-flow/feat-flow/state/base_sha_code) HEAD`
-- design.md 全量（含决策记录——已对齐决策不得再质疑）
-- architecture.md
+- `<base>` 值（让它自己跑 `git diff <base>..HEAD`、`git log`、按需 Read 改动文件全文）
+- design.md 全量（需求 + 决策记录 + AC——已对齐决策不得再质疑）
+- architecture.md（架构基线 + 集成点清单）
 - 相关 ADR 路径列表
-- **不传 plan.md**（避免审查被实施过程影响）
+- task-reports.md（跨 task 元信息：新术语 / 注释删除理由 / 前置修订）
+- **不传 plan.md**（避免审查被实施过程带偏）
 
-要求 reviewer：
-- 每 issue 附 ≤5 行代码片段证据
-- confidence ≥ 80（feature-dev:code-reviewer 自带过滤）
-- **硬性 checklist**：
-  1. 改动函数所在文件的相邻 ±20 行注释是否仍准确？（抓注释 drift）
-  2. 跨 task 一致性：术语 / 命名是否一致？数据结构跨文件是否对齐？
-  3. ADR 合规：本次代码改动是否违反既有 ADR？issue 必须引 ADR ID 作证据
-  4. 删除的注释 ≥3 行：implementer 是否在 task report 写了理由？理由是否充分？
+审查维度（**全是组装级**）：
+1. **需求闭环**：组装后的系统端到端满足 design.md 每条 AC 吗？有没有 AC 没被任何 task 覆盖、或被实现成另一个意思？
+2. **跨 task 一致性**：术语 / 命名跨文件一致？数据结构跨模块对齐？task 之间的接口契约吻合？
+3. **集成接驳**：与既有代码的接驳点（路由 / i18n / 错误处理 / 日志 / 鉴权）真的接上了？architecture.md 列的集成点有无遗漏？
+4. **跨 task 资源 / 时序**：多 task 路径汇合后才显现的问题——新的竞态 / 死锁、N+1 查询、重复请求、性能退化。**只看多 task 汇合处**，不做通用性能审查（那是过早优化）。
+5. **注释 / context 漂移**：改动函数相邻 ±20 行注释是否仍准确？删除的注释 ≥3 行，implementer 在 task-reports.md 写了理由吗、是否充分？
+6. **ADR 合规**：本次改动是否违反既有 ADR？问题必须引 ADR ID 作证据。
+7. **测试调整复核（若 review.md 有「测试调整记录」）**：逐条验证——被改的测试是否真在测实现细节而非行为？新测试是否仍覆盖原意图？不成立则列为阻塞项。
+8. 局部 bug 只在上述视角下**顺手撞见**才报，不主动地毯式扫。
 
-### 轮 1：主 session 按 receiving-code-review 纪律逐条处理
+输出**分两级**（每条 ≤5 行片段证据）：
+- 🔴 **阻塞项**：需求未闭环 / 跨 task 不一致 / 集成断裂 / 违反 ADR / 高置信度真 bug。必须修。
+- 🟡 **建议项**：架构优化、更好的复用、惯用法改进等——**允许激进提**（不设高置信度门槛），但**非阻塞**，呈开发者裁决，不进修复循环。
 
-调用 `receiving-code-review` skill（或参照其纪律）。要点：
-- **严禁** "You're absolutely right!" / "Great point!" / 任何 thanks 类表演性同意
-- 每条先 VERIFY against codebase reality
+### 视角②：安全专项审查（强制，不可跳过）
+
+派一个 `general-purpose` 子代理作**对抗式安全审查者**，**按公认的 OWASP Top 10 + CWE 标准**逐项核（不是自创方法论——OWASP/CWE 就是业界安全审计通用标准，这里只是让 general-purpose 执行它）。立场：**假设代码恶意，直到证明无害**。无论改动类型，**每次都跑**——安全是最高代价缺陷类，跨模块可利用性只有组装后才看得全。
+
+传入：`<base>` 值 + design.md（技术栈 / 项目命令）+ architecture.md（集成点 / 鉴权架构，判 IDOR / 越权要靠它）+ 安全相关 ADR 路径列表。让它自己 `git diff <base>..HEAD` 圈定改动范围 + grep 代码追 source→sink + 按技术栈跑依赖审计（`npm audit` / `pip-audit` / 等）。审查范围 = `base..HEAD` 的改动及其可达路径，不审历史遗留代码。
+
+按 **OWASP Web Top 10 + 隐私**逐项核（注意**不是** OWASP-for-LLM 那套）：
+- 注入（SQL / 命令 / NoSQL / LDAP / 模板）——每个用户可控输入追到 sink
+- 认证 / 授权 / IDOR / 越权（敏感路由 / 操作的鉴权检查、所有权校验）
+- 密钥 / 凭证硬编码、敏感配置泄露
+- **用户隐私 / PII 泄露**（日志、响应体、第三方传输）
+- SSRF / 不安全反序列化 / XSS / CSRF（Web 场景）
+- 弱加密 / 不安全随机
+- 依赖 CVE（跑审计工具）
+
+每条问题：严重度（Critical / High / Medium）+ CWE 编号 + **可利用场景（source→sink 论证，不空喊风险）** + 修复建议。
+
+- **Critical / High = 阻塞**，合并前必须修。
+- Medium → 建议项，由开发者裁决。
+
+### 综合处理（主 session，按 receiving-code-review 纪律）
+
+两个视角都返回后，主 session 调用 `receiving-code-review` skill 逐条处理：
+
+- **严禁** "You're absolutely right!" / "Great point!" / 任何致谢类表演性同意
+- 每条先**对照代码实际核验**，再决定接受还是反驳
+- **去重**：两个视角指向同一处时合并为一条
 - 三种特殊处置：
-  - **YAGNI 检查**：reviewer 提"应该实现 X / 完善 Y" 类 → 先 grep 该功能是否真有调用方，无调用 → pushback "YAGNI"
-  - **架构级冲突**：若 reviewer issue 挑战 design.md 已记录的决策（非 implementation 细节）→ **直接列入 review.md「待开发者决策（架构级）」，不进 3 轮循环**
-  - **既有测试质疑**：reviewer 建议改测试 → 应用既有测试破坏纪律
-- **处理顺序**：clarify 不清楚的 → blocking → simple fixes → complex fixes，每条修完单独跑测试
-- accept → 修代码，commit `fix: address review finding`，记 review.md「已解决」
-- pushback → review.md「分歧」记反证（≤5 行片段）
+  - **YAGNI 检查**：审查者提"应该实现 X / 完善 Y" 类 → 先 grep 该功能是否真有调用方，无调用 → 以「YAGNI」反驳
+  - **架构级冲突**：若问题挑战 design.md 已记录的决策（非实现细节）→ **直接列入 review.md「待开发者决策（架构级）」，不进 3 轮循环**
+  - **既有测试质疑**：建议改测试 → 应用既有测试破坏纪律
+- **处理顺序**：先澄清不清楚的 → 阻断项（安全 Critical/High + 视角① 阻塞）→ 简单修复（拼写 / import）→ 复杂修复（重构 / 逻辑），每条修完单独跑测试
+- 接受 → 修代码，commit `fix: address review finding`，记 review.md「已解决」
+- 反驳 → review.md「已反驳」记反证（≤5 行片段）
+- 🟡 **建议项 + Medium 安全项** → review.md「建议（非阻塞）」，呈开发者，不强制修
 
-### 轮 2：SendMessage 同一 reviewer subagent
+### 阻塞项的验证（3 轮硬上限）
 
-发送：已处理结果 + pushback 反证
+阻塞项修完后，让**对应视角的审查者**验证修复真的到位（模型会幻觉，修复也会）。**「视角派发 + 综合处理」记为轮 1**，本节是轮 2、轮 3，合计硬上限 3 轮：
 
-reviewer 用 `git diff` 验证每个 accept 项的修复 + 重新评估 pushback 项 → 返回：验证通过 / 撤回 pushback / 仍坚持。
-
-### 轮 3（仅当有剩余分歧）：SendMessage 发分歧项 + 双方完整立场
-
-reviewer 给最终理由。主 agent 仍不认同 → review.md 标「需开发者决策 + 双方立场」。
-
-**3 轮后任何剩余分歧 → 停下来等开发者，不再循环。**
+- **轮 2**：把"已接受项的处理结果 + 反驳项的反证"发给对应视角的审查者，让它重跑 `git diff <base>..HEAD`（已含修复 commit）核验 → 返回：验证通过 / 撤回意见 / 仍坚持。
+- **轮 3（仅剩余分歧）**：发分歧项 + 双方完整立场，审查者给最终理由。主 session 仍不认同 → review.md 标「需开发者决策 + 双方立场」。
+- **3 轮后任何剩余分歧 → 停下来等开发者，不再循环。**
 
 ### 自查前置 stage 问题（Stage 5 期间随时可能触发）
 
-reviewer 或主 session 在 Stage 5 期间自查发现前置 stage 漏写 / 错了 → 走 `references/upstream-revision-protocol.md`：
+任一视角的审查者或主 session 自查发现前置 stage 漏写 / 错了 → 走 `references/revision-protocol.md`（入口 B）：
 - L1（推翻决策）→ 停下问开发者，建议 abort
-- L2（漏写补全）→ 暂停 Stage 5，回更新前置文档，让用户确认，再回 Stage 5 继续
+- L2（漏写补全）→ 暂停 Stage 5，回更新前置文档，让开发者确认，再回 Stage 5 继续
 - L3（小修）→ inline 修文档，review.md 加注记
 
-注：reviewer 挑战 design.md 已记录决策的「架构级冲突」处理（见前文轮 1）是本协议的特例。
+注：问题挑战 design.md 已记录决策的「架构级冲突」处理（见综合处理）是本协议的特例。
 
 ### /clear 后的恢复
 
-互审中途 /clear（reviewer subagent agent ID session-scoped 会丢失）→ 新 session 重启 Stage 5：
+审查中途 /clear（审查者子代理 agent ID session-scoped 会丢失）→ 新 session 重启 Stage 5：
 
-1. 已 commit 的修复 → reviewer 看到当前 HEAD 不会再 flag
-2. review.md 累积的「已解决 / 已反驳 / 分歧」段保留——新 reviewer 启动时把现有 review.md 作为「上次审查的状态」一并传入
-3. 用 fresh reviewer 接力（**不是同一个 reviewer subagent**），从轮 1 重审，依靠 review.md 的累积上下文避免重复劳动
-4. 已记录的 pushback 反证 → 新 reviewer 直接评估反证是否成立，不重新提相同 issue
+1. 已 commit 的修复 → 新审查者跑 `git diff <base>..HEAD` 看到的是当前 HEAD，不会再报已修项
+2. review.md 累积的「已解决 / 已反驳 / 待开发者决策 / 建议」段保留——重派审查者时把现有 review.md 作为「上次审查的状态」一并传入
+3. 用 fresh 审查者接力（**不是同一个子代理**），两个视角都重派，依靠 review.md 累积上下文避免重复劳动
+4. 已记录的反驳反证 → 新审查者直接评估反证是否成立，不重新提相同问题；review.md 已记录的「建议（非阻塞）」项也**不重复提出**（建议项不改代码，fresh 审查者跑 diff 看不到，靠 review.md 去重）
 
-**前提**：每轮处理后必须**立即**写 review.md（accept / pushback / 分歧三类都即时落盘），不允许积累在主 session 内存。
+**前提**：每轮处理后必须**立即**写 review.md（各类都即时落盘），不允许积累在主 session 内存。
 
 ### review.md 结构
 
@@ -122,7 +156,7 @@ reviewer 或主 session 在 Stage 5 期间自查发现前置 stage 漏写 / 错�
 ## 审查范围
 BASE_SHA_CODE: <SHA>
 
-## 问题处理
+## 集成 & 需求闭环（视角①）
 
 ### 已解决
 - <问题描述>：<修复方式> — 证据：`<≤5 行片段>`
@@ -130,10 +164,21 @@ BASE_SHA_CODE: <SHA>
 ### 已反驳
 - <问题描述>：<反证：≤5 行片段>
 
-### 待开发者决策（架构级）
-- <问题描述>：reviewer 立场 + author 立场
+## 安全（视角②）
 
-### 测试调整记录
+### 已解决（Critical / High）
+- <问题描述> [CWE-xxx]：<修复方式> — 证据：`<≤5 行片段>`
+
+### 已反驳
+- <问题描述>：<反证：≤5 行片段>
+
+## 待开发者决策（架构级）
+- <问题描述>：审查者立场 + 主 session 立场
+
+## 建议（非阻塞）
+- <视角① 建议项 / Medium 安全项> — 来源视角 + 一句话理由
+
+## 测试调整记录
 - <如有> 改测试的位置 + 理由 + 复核者意见
 
 ## 结论
@@ -142,32 +187,33 @@ BASE_SHA_CODE: <SHA>
 
 ## 完成条件
 
-- 自动化检查全过（最后一个 commit 后跑一次确认）
-- review.md 存在且完整
-- 所有「已解决」类问题已修复 + commit
+- 自动化回归全过（最后一个 commit 后跑一次确认）
+- **视角① 与视角② 都已跑**（安全视角强制，不可跳过）
+- review.md 存在且完整（**含安全节**）
+- 所有阻塞项（视角① 阻塞 + 安全 Critical/High）已修复 + commit
 - 「待开发者决策」类问题由开发者拍板后已应用
-- `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `(none identified)`）
+- 建议项已呈开发者（非阻塞，无需全部修）
+- `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `（无）`）
 
-## Context Delta Capture（完成条件满足后执行）
+## Context 变化捕获（完成条件满足后执行）
 
-检视 review.md 已解决项。三条件**全部满足**才写入：
+只**收集**本 stage 引入的 context 候选，**不分类、不写 CLAUDE.md/ADR**——分类路由 + 冲突检测是 Stage 6 的职责，此处提前分类是重复劳动。
 
-1. 修复方式是修改**代码行为模式**（而非修局部 bug）
-2. 属于**项目专有约定**（非语言/框架通用 best practice）
+检视 review.md 已解决项，命中以下**全部**才收集：
+
+1. 修复改的是**代码行为模式**（而非一次性局部 bug）
+2. 命中 helper「注释与 context 归置」的 4 类之一（缘由 / 否定 / 约定 / 边界），即值得进 context 层而非仅代码注释
 3. 通过 linter / formatter / hook 配置**无法机械化执行**
 
-满足条目追加到 `docs/feat-flows/<flow_id>/context-delta.md`。
-
-**不论是否有候选，都必须追加 `## Stage 5` 节**（无候选时写 `(none identified)`）。此节是 S6 验证 S5 已执行的唯一标记。
+写入 `docs/feat-flows/<flow_id>/context-delta.md`。**不论是否有候选，都必须追加 `## Stage 5` 节**（无候选时写「（无）」）——此节是 Stage 6 验证本 stage 已执行的唯一标记。
 
 ```markdown
 ## Stage 5 — <flow_id>
 
-### CLAUDE.md/rules candidates
-- "<规则文本>" — source: review.md §<已解决项描述>
+- <一句话描述> — 来源: review.md §<已解决项描述>
 ```
 
 ## Signal
 
-**触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
+**触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
 **动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-6`（内容必须精确匹配，引擎会校验）。

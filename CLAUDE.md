@@ -24,6 +24,15 @@ plugins/
 
 ## ai-flow 开发规范
 
+### 三层内容，别搞混
+
+ai-flow 的内容分三层，改之前先认清：
+- `src/**` — TS 引擎源码（**改引擎逻辑只动这里**，需 build）
+- `dist/**` — 编译产物（CI 生成，**永不手动读写**；要理解引擎逻辑读 `src/`，不要读 `dist/` 或 marketplace 缓存等任何非 source-of-truth 副本——它们可能滞后，照着推理会得出过时的错误结论）
+- `.ai-flow/<flow>/**` — flow 定义（stage 提示词 / config.json / references，纯内容、不编译；改提示词只动这里，走 `/ai-flow:update`）
+
+src 访问受阻时，解决访问或询问，**不要退而读 dist/缓存**。
+
 ### dist/ 由 CI 生成，不提交到仓库
 
 `plugins/ai-flow/dist/` 已加入 `.gitignore`。本地开发时 build 仅用于验证，不需要提交 `dist/`。
