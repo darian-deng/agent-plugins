@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from 'fs';
+import { randomBytes } from 'crypto';
 import { join, dirname } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 
@@ -40,8 +41,11 @@ export async function readActiveState(repoRoot: string, flowName: string): Promi
 }
 
 export async function writeActiveState(repoRoot: string, flowName: string, state: ActiveState): Promise<void> {
-  mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
-  writeFileSync(statePath(repoRoot, flowName, 'active.json'), JSON.stringify(state, null, 2));
+  const dir = stateDir(repoRoot, flowName);
+  mkdirSync(dir, { recursive: true });
+  const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString('hex')}.tmp`);
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, statePath(repoRoot, flowName, 'active.json'));
 }
 
 export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
@@ -63,24 +67,35 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
   }
 }
 
-export async function isGateActive(repoRoot: string, flowName: string): Promise<boolean> {
-  return existsSync(statePath(repoRoot, flowName, 'gate-token'));
-}
-
-export async function writeGateToken(repoRoot: string, flowName: string, token: string): Promise<void> {
-  mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
-  writeFileSync(statePath(repoRoot, flowName, 'gate-token'), token);
-}
-
-export async function deleteGateToken(repoRoot: string, flowName: string): Promise<void> {
-  const path = statePath(repoRoot, flowName, 'gate-token');
-  if (existsSync(path)) unlinkSync(path);
-}
-
-export async function readGateToken(repoRoot: string, flowName: string): Promise<string | null> {
-  const path = statePath(repoRoot, flowName, 'gate-token');
+export function readSignal(repoRoot: string, flowName: string): string | null {
+  const path = statePath(repoRoot, flowName, 'signal');
   if (!existsSync(path)) return null;
-  return readFileSync(path, 'utf-8').trim();
+  try {
+    return readFileSync(path, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+}
+
+export function writeSignalFile(repoRoot: string, flowName: string, content: string): void {
+  const dir = stateDir(repoRoot, flowName);
+  mkdirSync(dir, { recursive: true });
+  const tmp = statePath(repoRoot, flowName, `signal.${randomBytes(4).toString('hex')}.tmp`);
+  writeFileSync(tmp, content);
+  renameSync(tmp, statePath(repoRoot, flowName, 'signal'));
+}
+
+export function isGatePending(signal: string | null, config: FlowConfig, currentStageId: string): boolean {
+  if (!signal) return false;
+  const stage = config.stages.find((s) => s.id === currentStageId);
+  if (!stage) return false;
+  if (!stage.completion.gate) return false;
+  const expected = nextStage(config, currentStageId);
+  if (expected !== null) {
+    return signal === expected;
+  }
+  // terminal stage: signal must be 'flow-complete'
+  return signal === 'flow-complete';
 }
 
 export async function appendTransition(repoRoot: string, flowName: string, message: string): Promise<void> {
@@ -113,10 +128,6 @@ export function signalPath(repoRoot: string, flowName: string): string {
 
 export function activeJsonPath(repoRoot: string, flowName: string): string {
   return statePath(repoRoot, flowName, 'active.json');
-}
-
-export function gateTokenPath(repoRoot: string, flowName: string): string {
-  return statePath(repoRoot, flowName, 'gate-token');
 }
 
 export function scriptsDir(repoRoot: string, flowName: string): string {

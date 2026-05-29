@@ -54,4 +54,4 @@
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入任意内容。
+**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-4`（内容必须精确匹配，引擎会校验）。

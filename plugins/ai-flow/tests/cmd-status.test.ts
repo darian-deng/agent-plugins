@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'child_process';
 import { handleStatus } from '../src/lib/commands/status.js';
-import { createFlowTestRepo, writeActiveState, writeGateToken, MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
 
 let cleanups: Array<() => void> = [];
 
@@ -42,8 +42,16 @@ describe('handleStatus', () => {
     expect(ctx).toContain('build the feature');
   });
 
-  it('active flow, gate active → shows approve instruction but NOT the token value', async () => {
-    const repo = makeRepo();
+  it('active flow, gate active → shows approve instruction', async () => {
+    const repo = createFlowTestRepo('test-flow', {
+      schema_version: '1.0',
+      name: 'test-flow',
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: { gate: true } },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
+      ],
+    });
+    cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
@@ -51,15 +59,12 @@ describe('handleStatus', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    writeGateToken(repo.repoRoot, 'test-flow', 'tok-12345');
+    // signal == nextStage('review') + gate: true → gate pending
+    writeSignal(repo.repoRoot, 'test-flow', 'review');
     const result = await handleStatus(repo.repoRoot, 'test-flow');
     expect(result.action).toBe('allow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
     expect(ctx).toMatch(/gate|approve/i);
-    // Token value must NOT be in additionalContext (AI-visible) — security invariant
-    expect(ctx).not.toContain('tok-12345');
-    // But user should be told how to retrieve it via a bash command they run manually
-    expect(ctx).toContain('gate-token');
   });
 
   it('context warning state shown if warned: true', async () => {

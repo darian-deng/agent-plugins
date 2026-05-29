@@ -7,9 +7,9 @@ import {
   readActiveState,
   writeActiveState,
   hasActiveFlow,
-  isGateActive,
-  writeGateToken,
-  deleteGateToken,
+  readSignal,
+  writeSignalFile,
+  isGatePending,
   appendTransition,
   nextStage,
 } from '../src/lib/state.js';
@@ -40,6 +40,7 @@ function makeActiveState(overrides?: Partial<ActiveState>): ActiveState {
     last_session_id: null,
     context_size: 0,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    context_blocked: false,
     ...overrides,
   };
 }
@@ -123,23 +124,35 @@ describe('hasActiveFlow', () => {
   });
 });
 
-describe('isGateActive / writeGateToken / deleteGateToken', () => {
-  it('isGateActive returns false when no gate-token', async () => {
+describe('readSignal / writeSignalFile / isGatePending', () => {
+  it('readSignal returns null when no signal file', () => {
     const root = makeTmp();
-    expect(await isGateActive(root, 'test-flow')).toBe(false);
+    expect(readSignal(root, 'test-flow')).toBeNull();
   });
 
-  it('writeGateToken + isGateActive = true', async () => {
+  it('writeSignalFile + readSignal roundtrip', () => {
     const root = makeTmp();
-    await writeGateToken(root, 'test-flow', 'tok-abc');
-    expect(await isGateActive(root, 'test-flow')).toBe(true);
+    writeSignalFile(root, 'test-flow', 'review');
+    expect(readSignal(root, 'test-flow')).toBe('review');
   });
 
-  it('deleteGateToken + isGateActive = false', async () => {
-    const root = makeTmp();
-    await writeGateToken(root, 'test-flow', 'tok-abc');
-    await deleteGateToken(root, 'test-flow');
-    expect(await isGateActive(root, 'test-flow')).toBe(false);
+  it('isGatePending: signal == nextStage + gate=true → true', () => {
+    // MINIMAL_CONFIG: work has no gate, review has gate: true
+    // isGatePending for review stage + signal='flow-complete' (review is terminal)
+    expect(isGatePending('flow-complete', MINIMAL_CONFIG, 'review')).toBe(true);
+  });
+
+  it('isGatePending: signal null → false', () => {
+    expect(isGatePending(null, MINIMAL_CONFIG, 'review')).toBe(false);
+  });
+
+  it('isGatePending: signal wrong content → false', () => {
+    expect(isGatePending('wrong', MINIMAL_CONFIG, 'review')).toBe(false);
+  });
+
+  it('isGatePending: stage has no gate → false', () => {
+    // work stage has no gate
+    expect(isGatePending('review', MINIMAL_CONFIG, 'work')).toBe(false);
   });
 });
 

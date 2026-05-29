@@ -1,10 +1,18 @@
-import { readFileSync, existsSync, unlinkSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput } from './types.js';
-import { hasActiveFlow, writeActiveState, isGateActive, readGateToken, appendHookLog, signalPath } from './state.js';
+import {
+  hasActiveFlow,
+  writeActiveState,
+  readSignal,
+  isGatePending,
+  nextStage,
+  appendHookLog,
+} from './state.js';
 import { truncateError } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
+import { advanceStage } from './advance-stage.js';
 
 
 export async function handleSessionStart(
@@ -39,62 +47,90 @@ export async function handleSessionStart(
   const config = await loadFlowConfig(repoRoot, flowName);
   const stageCfg = getStageConfig(config, state.current_stage);
 
-  const lines: string[] = [
-    `Flow '${flowName}' is active.`,
-    `flow_id: ${state.flow_id}`,
-    `current_stage: ${state.current_stage}`,
-    `requirement: ${state.requirement}`,
-  ];
+  // ─── Session Recovery State Matrix ───────────────────────────────────────────
+  // Read current signal state
+  const signal = readSignal(repoRoot, flowName);
+  const expectedNext = nextStage(config, state.current_stage);
 
-  let systemMessage: string | undefined;
+  // Determine expected signal content for non-terminal stage
+  const expectedSignalContent = expectedNext !== null ? expectedNext : 'flow-complete';
 
-  const gateActive = await isGateActive(repoRoot, flowName);
+  // S1: signal matches expected next stage content
+  const isSignalValid = signal !== null && signal === expectedSignalContent;
 
-  // Clean up any signal file left over from the previous stage's ADVANCE.
-  // Prevents a new session from seeing a stale signal and skipping the current stage.
-  if (!gateActive) {
-    const sig = signalPath(repoRoot, flowName);
-    try { if (existsSync(sig)) unlinkSync(sig); } catch { /* non-fatal */ }
+  // S2: flow-complete signal at terminal stage
+  const isFlowComplete = signal === 'flow-complete' && expectedNext === null;
+
+  // S1 + gate: gate pending
+  if (isGatePending(signal, config, state.current_stage)) {
+    await appendHookLog(repoRoot, flowName, `SESSION_GATE_PENDING stage=${state.current_stage}`);
+    const lines: string[] = [
+      `[ai-flow] 流程 '${flowName}' 恢复中，Stage '${state.current_stage}' 已提交，等待用户确认。`,
+      ``,
+      `Signal 已写入但用户尚未执行 approve。`,
+      `提醒用户检查 '${state.current_stage}' 的产物后执行：feat-flow approve`,
+      ``,
+      `如需修改，继续讨论，完成后重新写入 signal。`,
+      `不要开始下一阶段工作。`,
+    ];
+    return { additionalContext: lines.join('\n') };
   }
 
-  if (gateActive) {
-    const token = await readGateToken(repoRoot, flowName);
-    const approveCmd = token ? `${flowName} approve ${token}` : `${flowName} approve <token>`;
-    lines.push('', `Gate pending — run to approve: ${approveCmd}`);
-    // Re-surface the token so the model can give the user the exact command,
-    // especially after /clear or session restart when the original system message is gone.
-    systemMessage = `[feat-flow] Gate pending for stage '${state.current_stage}'.\nRun: ${approveCmd}`;
-  } else {
-    const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
-    if (existsSync(promptPath)) {
-      try {
-        lines.push('', '---', '', readFileSync(promptPath, 'utf-8'));
-      } catch { /* non-fatal */ }
-    }
-    systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
+  // S2: flow-complete signal at terminal stage (no gate) — self-heal
+  if (isFlowComplete && !stageCfg.completion.gate) {
+    await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
+    const result = await advanceStage(repoRoot, flowName);
+    return { additionalContext: result.additionalContext };
   }
 
-  // For both startup and /clear: the model must acknowledge the flow on its
-  // very first response so the user sees the flow is active.
-  // startup: announce and wait for user direction.
-  // clear/compact: announce and immediately continue the task.
-  if (!gateActive) {
-    if (isClear) {
-      lines.unshift(
-        `INSTRUCTION (context was just cleared via /clear):`,
-        `Your FIRST response must begin with a one-line status: "Resuming ${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
-        `Then immediately continue the task from where you left off — do NOT ask the user what to do next.`,
-        ``,
-      );
-    } else if (input.source === 'startup') {
-      lines.unshift(
-        `INSTRUCTION (new session, active flow detected):`,
-        `Your FIRST response must begin with a one-line status: "${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
-        `Then briefly describe the current stage goal and ask the user how to proceed.`,
-        ``,
-      );
-    }
+  // S1 + none/script: self-heal advance
+  if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
+    await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
+    const result = await advanceStage(repoRoot, flowName);
+    return { additionalContext: result.additionalContext };
   }
+
+  // S0 (no signal), S3 (stale/invalid content), or invalid → Normal recovery
+  // Inject current stage prompt
+  await appendHookLog(repoRoot, flowName, `SESSION_NORMAL stage=${state.current_stage}`);
+
+  const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+  let promptContent = '';
+  if (existsSync(promptPath)) {
+    try {
+      promptContent = readFileSync(promptPath, 'utf-8');
+    } catch { /* non-fatal */ }
+  }
+
+  const lines: string[] = [];
+
+  if (isClear) {
+    lines.push(
+      `INSTRUCTION (context was just cleared via /clear):`,
+      `Your FIRST response must begin with a one-line status: "Resuming ${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
+      `Then immediately continue the task from where you left off — do NOT ask the user what to do next.`,
+      ``,
+    );
+  } else if (input.source === 'startup') {
+    lines.push(
+      `INSTRUCTION (new session, active flow detected):`,
+      `Your FIRST response must begin with a one-line status: "${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
+      `Then briefly describe the current stage goal and ask the user how to proceed.`,
+      ``,
+    );
+  }
+
+  lines.push(
+    `[ai-flow] 流程 '${flowName}' 恢复中，当前处于 '${state.current_stage}'。`,
+    ``,
+    `════════════════════════════════`,
+    promptContent,
+    `════════════════════════════════`,
+    ``,
+    `阶段完成后，将 '${expectedSignalContent}' 写入 signal 文件触发推进。`,
+  );
+
+  const systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
 
   return { additionalContext: lines.join('\n'), systemMessage };
   } catch (e) {

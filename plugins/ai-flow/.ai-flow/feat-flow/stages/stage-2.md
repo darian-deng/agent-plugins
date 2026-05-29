@@ -51,7 +51,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 7. Bootstrap 完整性：若 design.md TDD 决策为「建立」，architecture 是否含 bootstrap 步骤（依赖安装 + 配置 + 第一个 smoke test）？bootstrap task 是否明确标"不走 TDD"？
 
 任一项有问题 → 直接回复指出，我会改后再 signal。
-全部 OK → 运行 feat-flow approve <token> 进 Stage 3。
+全部 OK → 运行 feat-flow approve 进 Stage 3。
 ```
 
 ## Context Delta Capture（Gate 通过后执行）
@@ -119,4 +119,4 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入任意内容。
+**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-3`（内容必须精确匹配，引擎会校验）。

@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'child_process';
 import { handleUserPrompt } from '../src/lib/userprompt-handler.js';
-import { readActiveState, isGateActive } from '../src/lib/state.js';
-import { createFlowTestRepo, writeActiveState, writeGateToken, MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { readActiveState } from '../src/lib/state.js';
+import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
 import type { UserPromptInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -70,8 +70,16 @@ describe('handleUserPrompt — routing', () => {
     expect(o.additionalContext).toMatch(/unknown|valid/i);
   });
 
-  it('test-flow approve → routes to approve handler', async () => {
-    const repo = makeRepo();
+  it('test-flow approve → routes to approve handler (no token needed)', async () => {
+    const repo = createFlowTestRepo('test-flow', {
+      schema_version: '1.0',
+      name: 'test-flow',
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: { gate: true } },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
+      ],
+    });
+    cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
@@ -79,13 +87,14 @@ describe('handleUserPrompt — routing', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    writeGateToken(repo.repoRoot, 'test-flow', 'mytoken');
-    const out = await handleUserPrompt(makeInput('test-flow approve mytoken', repo.repoRoot));
+    // signal must contain nextStageId 'review' for gate to be pending
+    writeSignal(repo.repoRoot, 'test-flow', 'review');
+    const out = await handleUserPrompt(makeInput('test-flow approve', repo.repoRoot));
     const o = out.hookSpecificOutput as { additionalContext?: string };
     expect(o.additionalContext).toContain('review');
   });
 
-  it('test-flow abort → routes to abort handler', async () => {
+  it('test-flow abort (no --confirm) → routes to abort handler, returns confirmation prompt', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -94,9 +103,13 @@ describe('handleUserPrompt — routing', () => {
       current_stage: 'work',
       base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
     });
-    await handleUserPrompt(makeInput('test-flow abort', repo.repoRoot));
+    const out = await handleUserPrompt(makeInput('test-flow abort', repo.repoRoot));
+    // abort without --confirm returns a deny + confirmation prompt, state is unchanged
+    const hookOut = out.hookSpecificOutput as { permissionDecision?: string; additionalContext?: string };
+    const hasConfirmMsg = hookOut.permissionDecision === 'deny' || (hookOut.additionalContext ?? '').includes('--confirm');
+    expect(hasConfirmMsg).toBe(true);
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state).toBeNull();
+    expect(state).not.toBeNull(); // state preserved — abort did not execute
   });
 
   it('test-flow status → routes to status handler', async () => {
@@ -133,20 +146,6 @@ describe('handleUserPrompt — routing', () => {
     const out = await handleUserPrompt(makeInput('test-flow foobar', repo.repoRoot));
     const o = out.hookSpecificOutput as { additionalContext?: string };
     expect(o.additionalContext).not.toMatch(/operation blocked/i);
-  });
-
-  it('non-gate message when gate active → clears gate (deletes gate-token) + allows', async () => {
-    const repo = makeRepo();
-    writeActiveState(repo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'test',
-      current_stage: 'work',
-      base_sha: 'abc',
-    });
-    writeGateToken(repo.repoRoot, 'test-flow', 'tok-abc');
-    await handleUserPrompt(makeInput('please explain the current stage', repo.repoRoot));
-    expect(await isGateActive(repo.repoRoot, 'test-flow')).toBe(false);
   });
 
   it('flow name not in .ai-flow/ → soft error mentioning /ai-flow', async () => {

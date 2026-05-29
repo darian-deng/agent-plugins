@@ -1,10 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { handleSessionStart } from '../src/lib/session-handler.js';
 import { readActiveState } from '../src/lib/state.js';
-import { createFlowTestRepo, writeActiveState, writeGateToken, MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
 import type { SessionStartInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -52,7 +52,23 @@ describe('handleSessionStart', () => {
     expect(out!.additionalContext).toContain('Stage: work');
   });
 
-  it('active flow with gate → injects gate status', async () => {
+  it('active flow with gate pending (S1 + gate) → additionalContext mentions approve', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'review', // review has gate: true in MINIMAL_CONFIG
+      base_sha: 'abc',
+    });
+    // MINIMAL_CONFIG: review is last stage (terminal), so signal must be 'flow-complete'
+    writeSignal(repo.repoRoot, 'test-flow', 'flow-complete');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out!.additionalContext).toMatch(/gate|approve/i);
+  });
+
+  it('S1 + none completion (self-heal) → stage advances, next stage injected', async () => {
+    // work stage has completion: {} (no gate), signal = 'review' = nextStage
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -61,9 +77,60 @@ describe('handleSessionStart', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    writeGateToken(repo.repoRoot, 'test-flow', 'tok-abc');
+    writeSignal(repo.repoRoot, 'test-flow', 'review');
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
-    expect(out!.additionalContext).toMatch(/gate|approve/i);
+    expect(out).not.toBeNull();
+    // Stage should have advanced to 'review'
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
+    // Should inject next stage prompt
+    expect(out!.additionalContext).toContain('review');
+  });
+
+  it('flow-complete signal at terminal (S2 self-heal) → active.json deleted', async () => {
+    const repo = createFlowTestRepo('test-flow', {
+      schema_version: '1.0',
+      name: 'test-flow',
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: {} },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
+      ],
+    });
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'review', // last stage
+      base_sha: 'abc',
+    });
+    writeSignal(repo.repoRoot, 'test-flow', 'flow-complete');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).toBeNull();
+    expect(out!.additionalContext).toMatch(/complete|完成/i);
+  });
+
+  it('stale signal (S3) → normal recovery, current stage injected', async () => {
+    // Signal content doesn't match nextStage → treat as normal recovery
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    // Write stale/wrong signal content
+    writeSignal(repo.repoRoot, 'test-flow', 'stale-content');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    // Should stay at 'work', inject current stage prompt
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('work');
+    expect(out!.additionalContext).toContain('work');
+    expect(out!.additionalContext).toContain('Stage: work');
   });
 
   it('new session → context_warning reset in state', async () => {

@@ -1,14 +1,14 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { readActiveState, deleteGateToken, appendTransition } from '../state.js';
+import { readActiveState, appendTransition } from '../state.js';
 import type { CommandResult } from '../types.js';
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' }).trim();
 }
 
-export async function handleAbort(repoRoot: string, flowName: string, args: string): Promise<CommandResult> {
+export async function handleAbort(repoRoot: string, flowName: string, args: string = ''): Promise<CommandResult> {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { action: 'deny', reason: 'No active flow to abort.' };
@@ -77,7 +77,6 @@ export async function handleAbort(repoRoot: string, flowName: string, args: stri
   // Only reach here if the entire git sequence succeeded.
   const activeJsonPath = join(repoRoot, '.ai-flow', flowName, 'state', 'active.json');
   if (existsSync(activeJsonPath)) unlinkSync(activeJsonPath);
-  await deleteGateToken(repoRoot, flowName);
   await appendTransition(repoRoot, flowName, `ABORTED branch=${branchName}`);
 
   const headNote = (!originalBranch || originalBranch === 'HEAD')

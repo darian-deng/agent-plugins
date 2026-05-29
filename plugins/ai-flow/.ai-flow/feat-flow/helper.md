@@ -28,7 +28,7 @@
 
 ```sh
 feat-flow start <自然语言需求描述>   # 启动新 flow，引擎生成 flow_id (<日期>-<rand4>)
-feat-flow approve <token>           # 通过当前 Gate
+feat-flow approve                    # 通过当前 Gate
 feat-flow abort                     # 中止当前 flow（创建快照到 docs/feat-flow/<flow_id>/）
 feat-flow resume                    # 在新 session 中恢复 flow
 feat-flow status                    # 查看当前 stage 和状态
@@ -60,9 +60,21 @@ docs/feat-flows/<flow_id>/
 .ai-flow/feat-flow/state/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
 ├── base_sha_code            # Stage 4 起点 commit SHA（用于 Stage 5 diff）
-├── signal                   # AI → 引擎 完成信号（用 Write 工具写）
+├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
-└── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_ISSUED / ADVANCED）
+└── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）
+
+**signal 文件语义**：内容不是任意文本，而是精确的推进申请标识：
+- stage-1 完成 → 写 `stage-2`；stage-2 完成 → 写 `stage-3`；以此类推
+- 最后一个 stage（stage-6）完成 → 写 `flow-complete`
+- 引擎会校验内容，内容不匹配会拒绝写入
+- signal 存在且内容匹配 = 当前 stage 已申请推进
+
+写入后有两种行为，由 stage 配置决定：
+- **有 Gate 配置的 stage**：引擎暂停，等待用户 `feat-flow approve`；AI 向用户呈现产物摘要并等待确认
+- **无 Gate 配置的 stage**：引擎立即推进，AI 无需等待用户确认
+
+session 恢复时引擎会读取 signal 内容自动识别当前状态（gate 等待、自愈推进或正常恢复）
 
 docs/adr/                    # Stage 6 写入；首次跑会 bootstrap
 <deepest-common-ancestor>/CLAUDE.md  # Stage 6 写入（monorepo 兼容路径解析）

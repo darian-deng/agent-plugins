@@ -73,10 +73,10 @@ export function writeActiveState(
   writeFileSync(join(stateDir, 'active.json'), JSON.stringify(full, null, 2));
 }
 
-export function writeGateToken(repoRoot: string, flowName: string, token: string): void {
+export function writeSignal(repoRoot: string, flowName: string, content: string): void {
   const stateDir = join(repoRoot, '.ai-flow', flowName, 'state');
   mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, 'gate-token'), token);
+  writeFileSync(join(stateDir, 'signal'), content);
 }
 
 export function readActiveState(repoRoot: string, flowName: string): ActiveState {

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit: typecheck ai-flow (fast, catches TS errors before they land)
+set -e
+
+AIFLOW_DIR="plugins/ai-flow"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+if git diff --cached --name-only | grep -q "^$AIFLOW_DIR/"; then
+  echo "[pre-commit] ai-flow changes detected — running typecheck..."
+  cd "$REPO_ROOT/$AIFLOW_DIR"
+  npm run typecheck
+  echo "[pre-commit] typecheck passed ✓"
+fi

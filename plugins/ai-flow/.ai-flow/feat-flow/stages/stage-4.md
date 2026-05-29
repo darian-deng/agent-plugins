@@ -212,4 +212,5 @@ implementer 或主 session 在 Stage 4 期间自查发现前置 stage 漏写 / �
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入任意内容。
+**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `stage-5`（内容必须精确匹配，引擎会校验）。
+**写入后**：引擎立即推进至 Stage 5，无需用户 approve。

@@ -24,7 +24,7 @@ describe('handleStart', () => {
     const repo = makeRepo();
     const result = await handleStart(repo.repoRoot, 'no-such-flow', 'do something', 'sess-1', 0);
     expect(result.action).toBe('deny');
-    expect(result.reason).toMatch(/ai-flow/i);
+    expect((result as { action: 'deny'; reason: string }).reason).toMatch(/ai-flow/i);
   });
 
   it('empty requirement string → error', async () => {

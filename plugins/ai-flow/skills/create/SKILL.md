@@ -183,7 +183,10 @@ Schema 约束：
 
 ## Signal
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/{flow-name}/state/signal` 写入任意内容（Bash 写入会被引擎拒绝，必须用 Write）。
+**动作**：用 Write 工具向 `.ai-flow/{flow-name}/state/signal` 写入该 stage 对应的推进标识（Bash 写入会被引擎拒绝，必须用 Write）：
+- 非最后一个 stage：写入**下一个 stage 的 ID**（如当前是 `stage-2`，写入 `stage-3`）
+- 最后一个 stage：写入 `flow-complete`
+- 引擎会校验内容，写错会被拒绝
 ```
 
 单个 stage 文件 token 目标 ≤ 800（约 600 字）。

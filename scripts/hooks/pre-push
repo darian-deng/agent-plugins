@@ -1,0 +1,27 @@
+#!/bin/sh
+# Pre-push: full test suite for ai-flow (catches regressions before push)
+# git pre-push receives $1=remote-name $2=remote-url; SHA pairs come on stdin.
+set -e
+
+AIFLOW_DIR="plugins/ai-flow"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+CHANGED=""
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch: diff from common ancestor with main, or from root commit if none
+    BASE=$(git merge-base "$local_sha" origin/main 2>/dev/null \
+      || git rev-parse --verify origin/main 2>/dev/null \
+      || git rev-list --max-parents=0 "$local_sha")
+    CHANGED="$CHANGED$(git diff --name-only "$BASE".."$local_sha" 2>/dev/null || true)"
+  else
+    CHANGED="$CHANGED$(git diff --name-only "$remote_sha".."$local_sha" 2>/dev/null || true)"
+  fi
+done
+
+if echo "$CHANGED" | grep -q "^$AIFLOW_DIR/"; then
+  echo "[pre-push] ai-flow changes detected — running tests..."
+  cd "$REPO_ROOT/$AIFLOW_DIR"
+  npm test
+  echo "[pre-push] all tests passed ✓"
+fi
