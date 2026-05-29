@@ -1,5 +1,4 @@
 import { discoverFlows } from './flow-config-loader.js';
-import { isGateActive, deleteGateToken } from './state.js';
 import { parseFlowCommand, VALID_COMMANDS, escapeRegex } from './commands/router.js';
 import { handleStart } from './commands/start.js';
 import { handleApprove } from './commands/approve.js';
@@ -45,20 +44,11 @@ export async function handleUserPrompt(input) {
     const knownFlows = await discoverFlows(repoRoot);
     const parsed = parseFlowCommand(prompt.trim(), knownFlows);
     if (!parsed) {
-        // Check if any active flow has a gate that should be cleared by non-command messages
-        for (const flowName of knownFlows) {
-            if (await isGateActive(repoRoot, flowName)) {
-                await deleteGateToken(repoRoot, flowName);
-            }
-        }
         return makeOutput();
     }
     const { flowName, subCmd, args } = parsed;
-    // non-command message check for active gates
+    // non-command message: unknown subcommand
     if (!subCmd || !VALID_COMMANDS.includes(subCmd)) {
-        if (await isGateActive(repoRoot, flowName)) {
-            await deleteGateToken(repoRoot, flowName);
-        }
         if (!subCmd) {
             return resultToHookOutput(await handleHelp(repoRoot, flowName), flowName);
         }

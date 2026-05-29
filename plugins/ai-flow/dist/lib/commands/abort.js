@@ -1,11 +1,11 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { readActiveState, deleteGateToken, appendTransition } from '../state.js';
+import { readActiveState, appendTransition } from '../state.js';
 function git(args, cwd) {
     return execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' }).trim();
 }
-export async function handleAbort(repoRoot, flowName, args) {
+export async function handleAbort(repoRoot, flowName, args = '') {
     const state = await readActiveState(repoRoot, flowName);
     if (!state) {
         return { action: 'deny', reason: 'No active flow to abort.' };
@@ -68,7 +68,6 @@ export async function handleAbort(repoRoot, flowName, args) {
     const activeJsonPath = join(repoRoot, '.ai-flow', flowName, 'state', 'active.json');
     if (existsSync(activeJsonPath))
         unlinkSync(activeJsonPath);
-    await deleteGateToken(repoRoot, flowName);
     await appendTransition(repoRoot, flowName, `ABORTED branch=${branchName}`);
     const headNote = (!originalBranch || originalBranch === 'HEAD')
         ? `\nNote: you were in detached HEAD state; HEAD is now on '${branchName}'.`

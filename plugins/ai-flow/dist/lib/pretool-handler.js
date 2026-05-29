@@ -1,8 +1,6 @@
-import { join, relative } from 'path';
-import { randomBytes } from 'crypto';
-import { unlinkSync, existsSync } from 'fs';
-import { hasActiveFlow, writeActiveState, writeGateToken, appendTransition, appendViolation, appendHookLog, nextStage, gateTokenPath, signalPath } from './state.js';
-import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
+import { join, relative, resolve } from 'path';
+import { hasActiveFlow, appendViolation, appendHookLog, nextStage, signalPath, } from './state.js';
+import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
 import { truncateError } from './format.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
@@ -35,17 +33,14 @@ export async function handlePreTool(input) {
         // ─── Bash interception ────────────────────────────────────────────────────────
         if (tool_name === 'Bash') {
             const command = String(tool_input['command'] ?? '');
-            const gateToken = gateTokenPath(repoRoot, activeFlowName);
             const signal = signalPath(repoRoot, activeFlowName);
             const activeJson = join(repoRoot, '.ai-flow', activeFlowName, 'state', 'active.json');
-            const scriptsDir = join(repoRoot, '.ai-flow', activeFlowName, 'scripts');
-            if (command.includes(gateToken))
-                return deny('gate-token is read-protected. The token was shown to the user via system message.');
+            const scripts = join(repoRoot, '.ai-flow', activeFlowName, 'scripts');
             if (command.includes(signal))
                 return deny('Direct Bash writes to signal are blocked. Use the Write tool to signal stage completion.');
             if (command.includes(activeJson))
                 return deny('Direct modification of active.json is blocked (control plane protection).');
-            if (command.includes(scriptsDir))
+            if (command.includes(scripts))
                 return deny('Modification of scripts/ via Bash is blocked. Ask the user to replace scripts manually.');
             return null;
         }
@@ -55,8 +50,17 @@ export async function handlePreTool(input) {
             if (!fp)
                 return null;
             const abs = resolvePath(repoRoot, fp);
-            if (abs === gateTokenPath(repoRoot, activeFlowName)) {
-                return deny('gate-token is read-protected. The token was shown to the user via system message.');
+            // Stage file ordering: deny reads of future stage files
+            const targetStageId = getStageByPromptPath(config, activeFlowName, abs);
+            if (targetStageId !== null) {
+                const currentIdx = stageIndex(config, state.current_stage);
+                if (currentIdx === -1)
+                    return null; // unknown current stage — fail open, don't lock AI out
+                const targetIdx = stageIndex(config, targetStageId);
+                if (targetIdx > currentIdx) {
+                    return deny(`Stage file '${targetStageId}' is ahead of the current stage '${state.current_stage}'. ` +
+                        `You may only read stage files for the current stage or earlier stages.`);
+                }
             }
             return null;
         }
@@ -65,11 +69,38 @@ export async function handlePreTool(input) {
         const fp = String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? '');
         if (!fp)
             return null;
+        // ─── cwd ≠ repoRoot guard (subdir-write protection) ───────────────────────────
+        // repoRoot is always cwd or an ancestor (hasActiveFlow walks up to find .ai-flow).
+        // When the session cwd is a subdirectory, a RELATIVE file_path is resolved by the
+        // write tool against cwd — so it silently lands at <cwd>/<fp> instead of the flow
+        // root, and the scope check below (which assumes repoRoot) would validate the wrong
+        // path. Write also auto-creates parent dirs, so the misplacement is silent. Force
+        // an absolute, repoRoot-anchored path before any path-based check runs.
+        if (!fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
+            await appendViolation(repoRoot, activeFlowName, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
+            return deny(`feat-flow expects the working directory to be the flow root (${repoRoot}), but the current ` +
+                `cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' ` +
+                `would be written under the subdirectory — not the flow root — and Write would silently create ` +
+                `it there. Re-issue the write with an absolute path to the location you actually intend: ` +
+                `a flow artifact rooted at the flow root is ${join(repoRoot, fp)}; ` +
+                `a file under the current subdirectory is ${resolve(cwd, fp)}.`);
+        }
         const absPath = resolvePath(repoRoot, fp);
         // ─── Signal interception ─────────────────────────────────────────────────────
         if (absPath === signalPath(repoRoot, activeFlowName)) {
             await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
             const stageCfg = getStageConfig(config, state.current_stage);
+            const signalContent = String(tool_input['content'] ?? '').trim();
+            // Determine expected signal content
+            const next = nextStage(config, state.current_stage);
+            const expectedContent = next !== null ? next : 'flow-complete';
+            // Validate signal content
+            if (signalContent !== expectedContent) {
+                await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INVALID expected=${expectedContent} got=${signalContent}`);
+                return deny(`Invalid signal content. Expected '${expectedContent}' for stage '${state.current_stage}'. ` +
+                    `Got: '${signalContent}'. Write exactly '${expectedContent}' to the signal file.`);
+            }
+            // Script validation (if configured)
             if (stageCfg.completion.script) {
                 const flowDir = join(repoRoot, '.ai-flow', activeFlowName);
                 const scriptOpts = stageCfg.completion.script.timeout_ms !== undefined
@@ -81,44 +112,18 @@ export async function handlePreTool(input) {
                     return deny(`Script validation failed:\n${scriptResult.reason}\n\nFix the issues and try again.`);
                 }
             }
+            // Gate type: ALLOW (PostToolUse will detect gate via signal content and handle pending state)
             if (stageCfg.completion.gate) {
-                const token = randomBytes(16).toString('hex');
-                await writeGateToken(repoRoot, activeFlowName, token);
-                await appendTransition(repoRoot, activeFlowName, `GATE_PENDING stage=${state.current_stage}`);
-                await appendHookLog(repoRoot, activeFlowName, `GATE_ISSUED stage=${state.current_stage} token=${token.slice(0, 8)}...`);
-                return deny(`Gate checkpoint for stage '${state.current_stage}'. AI has determined this stage is complete.\n` +
-                    `User notification and approval command have been sent via system message.\n` +
-                    `Do NOT output "${activeFlowName} approve" in your response. ` +
-                    `Just acknowledge the gate is pending and direct the user to check the system message above.`, `**${activeFlowName} Stage \`${state.current_stage}\` 已完成，等待人工确认。**\n` +
-                    `- 如确认本 stage 产物符合预期 → 执行: ${activeFlowName} approve ${token}\n` +
-                    `- 如认为需要继续完善 → 继续讨论，完成后重新触发`);
-            }
-            const next = nextStage(config, state.current_stage);
-            if (!next) {
-                // Last stage — complete the flow
-                const activeJsonPath = join(repoRoot, '.ai-flow', activeFlowName, 'state', 'active.json');
-                if (existsSync(activeJsonPath))
-                    unlinkSync(activeJsonPath);
-                await appendTransition(repoRoot, activeFlowName, `COMPLETED flow_id=${state.flow_id}`);
-                await appendHookLog(repoRoot, activeFlowName, `COMPLETED flow_id=${state.flow_id}`);
+                await appendHookLog(repoRoot, activeFlowName, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
                 return allow();
             }
-            const updated = { ...state, current_stage: next };
-            await writeActiveState(repoRoot, activeFlowName, updated);
-            await appendTransition(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
-            await appendHookLog(repoRoot, activeFlowName, `ADVANCED ${state.current_stage} → ${next}`);
-            // Signal file is cleaned by session-handler on next session startup.
-            // Return allow() so the Write succeeds silently — no "Error:" shown to the developer.
+            // None/script type (non-gate): ALLOW — PostToolUse will advance stage and inject next prompt
+            await appendHookLog(repoRoot, activeFlowName, `SIGNAL_ALLOW stage=${state.current_stage}`);
             return allow();
         }
         // ─── Control plane protection ─────────────────────────────────────────────────
         const rel = relative(repoRoot, absPath);
         const flowBase = join('.ai-flow', activeFlowName);
-        // gate-token direct write
-        if (absPath === gateTokenPath(repoRoot, activeFlowName)) {
-            await appendViolation(repoRoot, activeFlowName, `BLOCKED direct write to gate-token: ${fp}`);
-            return deny('Direct writes to gate-token are blocked.');
-        }
         // active.json direct write
         if (rel === join(flowBase, 'state', 'active.json')) {
             await appendViolation(repoRoot, activeFlowName, `BLOCKED direct write to active.json`);
@@ -143,7 +148,11 @@ export async function handlePreTool(input) {
         const stageCfg = getStageConfig(config, state.current_stage);
         if (stageCfg.write_scope === 'docs_only') {
             const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
-            const allowed = docsPaths.some((p) => rel.startsWith(p) || absPath.startsWith(join(repoRoot, p)));
+            // Normalize: ensure trailing slash to prevent "docs/feat-flows-evil" matching "docs/feat-flows"
+            const allowed = docsPaths.some((p) => {
+                const norm = p.endsWith('/') ? p : p + '/';
+                return rel.startsWith(norm) || absPath.startsWith(join(repoRoot, norm));
+            });
             if (!allowed) {
                 await appendViolation(repoRoot, activeFlowName, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
                 return deny(`Write scope violation: stage '${state.current_stage}' is docs_only.\n` +

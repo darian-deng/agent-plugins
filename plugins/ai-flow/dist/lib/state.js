@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from 'fs';
+import { randomBytes } from 'crypto';
 import { join, dirname } from 'path';
 function statePath(repoRoot, flowName, file) {
     return join(repoRoot, '.ai-flow', flowName, 'state', file);
@@ -18,8 +19,11 @@ export async function readActiveState(repoRoot, flowName) {
     }
 }
 export async function writeActiveState(repoRoot, flowName, state) {
-    mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
-    writeFileSync(statePath(repoRoot, flowName, 'active.json'), JSON.stringify(state, null, 2));
+    const dir = stateDir(repoRoot, flowName);
+    mkdirSync(dir, { recursive: true });
+    const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString('hex')}.tmp`);
+    writeFileSync(tmp, JSON.stringify(state, null, 2));
+    renameSync(tmp, statePath(repoRoot, flowName, 'active.json'));
 }
 export async function hasActiveFlow(cwd) {
     // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
@@ -42,23 +46,38 @@ export async function hasActiveFlow(cwd) {
         dir = parent;
     }
 }
-export async function isGateActive(repoRoot, flowName) {
-    return existsSync(statePath(repoRoot, flowName, 'gate-token'));
-}
-export async function writeGateToken(repoRoot, flowName, token) {
-    mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
-    writeFileSync(statePath(repoRoot, flowName, 'gate-token'), token);
-}
-export async function deleteGateToken(repoRoot, flowName) {
-    const path = statePath(repoRoot, flowName, 'gate-token');
-    if (existsSync(path))
-        unlinkSync(path);
-}
-export async function readGateToken(repoRoot, flowName) {
-    const path = statePath(repoRoot, flowName, 'gate-token');
+export function readSignal(repoRoot, flowName) {
+    const path = statePath(repoRoot, flowName, 'signal');
     if (!existsSync(path))
         return null;
-    return readFileSync(path, 'utf-8').trim();
+    try {
+        return readFileSync(path, 'utf-8').trim();
+    }
+    catch {
+        return null;
+    }
+}
+export function writeSignalFile(repoRoot, flowName, content) {
+    const dir = stateDir(repoRoot, flowName);
+    mkdirSync(dir, { recursive: true });
+    const tmp = statePath(repoRoot, flowName, `signal.${randomBytes(4).toString('hex')}.tmp`);
+    writeFileSync(tmp, content);
+    renameSync(tmp, statePath(repoRoot, flowName, 'signal'));
+}
+export function isGatePending(signal, config, currentStageId) {
+    if (!signal)
+        return false;
+    const stage = config.stages.find((s) => s.id === currentStageId);
+    if (!stage)
+        return false;
+    if (!stage.completion.gate)
+        return false;
+    const expected = nextStage(config, currentStageId);
+    if (expected !== null) {
+        return signal === expected;
+    }
+    // terminal stage: signal must be 'flow-complete'
+    return signal === 'flow-complete';
 }
 export async function appendTransition(repoRoot, flowName, message) {
     const path = statePath(repoRoot, flowName, 'transitions.log');
@@ -86,9 +105,6 @@ export function signalPath(repoRoot, flowName) {
 }
 export function activeJsonPath(repoRoot, flowName) {
     return statePath(repoRoot, flowName, 'active.json');
-}
-export function gateTokenPath(repoRoot, flowName) {
-    return statePath(repoRoot, flowName, 'gate-token');
 }
 export function scriptsDir(repoRoot, flowName) {
     return join(repoRoot, '.ai-flow', flowName, 'scripts');

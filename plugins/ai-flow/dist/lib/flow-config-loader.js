@@ -57,4 +57,21 @@ export function getStageConfig(config, stageId) {
 export function resolveDocsPaths(paths, flowId) {
     return paths.map((p) => p.replace(/\{flow_id\}/g, flowId));
 }
+export function stageIndex(config, stageId) {
+    return config.stages.findIndex((s) => s.id === stageId);
+}
+export function getStageByPromptPath(config, flowName, filePath) {
+    // filePath is absolute, like /root/.ai-flow/flowName/stages/work.md
+    // stage.prompt is relative like 'stages/work.md'
+    for (const stage of config.stages) {
+        // Normalize the prompt path to just the basename portion after flowName
+        const promptSuffix = stage.prompt.replace(/\\/g, '/');
+        // Check if filePath ends with /.ai-flow/{flowName}/{stage.prompt}
+        const expectedSuffix = `.ai-flow/${flowName}/${promptSuffix}`;
+        if (filePath.replace(/\\/g, '/').endsWith(expectedSuffix)) {
+            return stage.id;
+        }
+    }
+    return null;
+}
 //# sourceMappingURL=flow-config-loader.js.map
