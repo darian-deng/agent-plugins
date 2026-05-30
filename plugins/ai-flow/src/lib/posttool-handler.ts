@@ -104,8 +104,8 @@ export async function handlePostTool(
     return {
       additionalContext:
         `[ai-flow] Context 已达 ${pct}%（block 阈值 ${blockAt}%）。` +
-        `完成当前最小原子操作后停止，不要开始新任务。` +
-        `向开发者说明停止原因：context 已超过 block 阈值，请运行 /clear 后重入继续（ai-flow 进度已持久化）。`,
+        `后续所有 write 工具将被自动拒绝（context 保护已激活），不要再尝试任何工具调用。` +
+        `请立即停止当前工作，向开发者说明原因：context 已超过 block 阈值，请运行 /clear 后重入继续（ai-flow 进度已持久化）。`,
     };
   }
 
