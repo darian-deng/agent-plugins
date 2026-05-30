@@ -4,7 +4,7 @@
 > 末步：本 stage 是流程末步
 > 当前 stage 目的：让本次 flow 让项目 context 净正向——增 + 修 + 退役三类操作平衡（不是只增不减）
 >
-> **元规则**：禁止 git commit。写入用 git add 暂存，开发者最后自决提交。
+> **元规则**：禁止 git commit。
 
 ## 目标
 
@@ -63,16 +63,15 @@
 - **遇到 `CONFLICT`**：当场展示给开发者（附双方内容 + 来源），等待决策后继续处理下一条
 - **遇到 `LAYER SPLIT`**：当场展示选项 A/B/C，等待开发者选择后继续
 - **遇到 `ADR OVERLAP DETECTED`**（ADR 候选与既有 ADR 语义重叠）：当场展示选项 A（原地更新既有 ADR）/ B（新建 ADR + 把旧的标 supersede），等待开发者选择后继续——**这是「退役 / supersede」的触发点，不可跳过**
-- 每次写入后立即 `git add`
 
 所有候选处理完毕后：
-1. 在 design.md 末尾追加「Stage 6 沉淀记录」，`git add`
+1. 在 design.md 末尾追加「Stage 6 沉淀记录」
 2. 向开发者呈现汇总表
 
 ### 汇总表格式（严格遵守）
 
 ```
-Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
+Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 
 | 操作 | 文件 | 改动和原因 |
 |------|------|----------|
@@ -81,8 +80,8 @@ Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
 ⚠️ 仅供参考（无需回复）
 - [ADR 关键术语冲突提示，简述潜在冲突]
 
-查看所有改动：git diff --cached
-撤回某文件：git restore --staged <路径>
+查看所有改动：git diff HEAD
+撤回某文件：git restore <路径>
 
 确认无误后告知，flow 将结束。
 ```
@@ -98,7 +97,7 @@ Stage 6 知识沉淀完成。所有改动已 git add 暂存，未 commit。
 
 - A2 context-delta.md 完整性验证通过
 - 环节 B 所有候选项已处理（handle-one-directive 逐条完成）
-- 所有写入已 git add 暂存
+- 所有写入已完成
 - 开发者已确认汇总表
 - design.md 末尾已追加「Stage 6 沉淀记录」
 
@@ -120,9 +119,9 @@ feat-flow 流程完成。
   → 用 `git log <BASE_SHA_CODE>..HEAD` 看 commit 列表
   → 用 `git show <commit>` 单看某 task
 
-知识沉淀（Stage 6）：用 git add 暂存，未 commit
-  → 用 `git diff --cached` 看本 stage 写入了什么
-  → 审阅后按团队流程手动 commit + push
+知识沉淀（Stage 6）：写入完成，未 commit
+  → 用 `git diff HEAD` 看本 stage 写入了什么
+  → 审阅后按团队流程手动 git add + commit + push
 ```
 
 注：`BASE_SHA_CODE` 在 `.ai-flow/feat-flow/state/base_sha_code` 文件中。
