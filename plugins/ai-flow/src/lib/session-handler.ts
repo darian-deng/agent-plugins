@@ -9,7 +9,7 @@ import {
   nextStage,
   appendHookLog,
 } from './state.js';
-import { truncateError } from './format.js';
+import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
@@ -41,6 +41,8 @@ export async function handleSessionStart(
   if (isNewSession || isClear) {
     updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
     updated.context_blocked = false;
+    // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
+    updated.first_prompt_handled = false;
   }
   await writeActiveState(repoRoot, flowName, updated);
 
@@ -67,16 +69,23 @@ export async function handleSessionStart(
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {
     await appendHookLog(repoRoot, flowName, `SESSION_GATE_PENDING stage=${state.current_stage}`);
+    const statusLine = flowStatusLine({
+      flowName,
+      stageId: state.current_stage,
+      flowId: state.flow_id,
+      gatePending: true,
+      recovered: true,
+    });
     const lines: string[] = [
       `[ai-flow] 流程 '${flowName}' 恢复中，Stage '${state.current_stage}' 已提交，等待用户确认。`,
       ``,
       `Signal 已写入但用户尚未执行 approve。`,
-      `提醒用户检查 '${state.current_stage}' 的产物后执行：feat-flow approve`,
+      `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve`,
       ``,
       `如需修改，继续讨论，完成后重新写入 signal。`,
       `不要开始下一阶段工作。`,
     ];
-    return { additionalContext: pathsPreamble + lines.join('\n') };
+    return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
   }
 
   // S2: flow-complete signal at terminal stage (no gate) — self-heal
@@ -90,7 +99,12 @@ export async function handleSessionStart(
   if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
     await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
     const result = await advanceStage(repoRoot, flowName);
-    return { additionalContext: pathsPreamble + result.additionalContext };
+    // expectedNext is the stage we just advanced into (it was the signal value)
+    const base = { additionalContext: pathsPreamble + result.additionalContext };
+    if (!result.terminal && expectedNext) {
+      return { ...base, systemMessage: flowStatusLine({ flowName, stageId: expectedNext, flowId: state.flow_id, gatePending: false, recovered: false }) };
+    }
+    return base;
   }
 
   // S0 (no signal), S3 (stale/invalid content), or invalid → Normal recovery
@@ -105,25 +119,15 @@ export async function handleSessionStart(
     } catch { /* non-fatal */ }
   }
 
-  const lines: string[] = [];
+  const statusLine = flowStatusLine({
+    flowName,
+    stageId: state.current_stage,
+    flowId: state.flow_id,
+    gatePending: false,
+    recovered: true,
+  });
 
-  if (isClear) {
-    lines.push(
-      `INSTRUCTION (context was just cleared via /clear):`,
-      `Your FIRST response must begin with a one-line status: "Resuming ${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
-      `Then immediately continue the task from where you left off — do NOT ask the user what to do next.`,
-      ``,
-    );
-  } else if (input.source === 'startup') {
-    lines.push(
-      `INSTRUCTION (new session, active flow detected):`,
-      `Your FIRST response must begin with a one-line status: "${flowName} · ${state.current_stage} · flow ${state.flow_id}"`,
-      `Then briefly describe the current stage goal and ask the user how to proceed.`,
-      ``,
-    );
-  }
-
-  lines.push(
+  const lines: string[] = [
     `[ai-flow] 流程 '${flowName}' 恢复中，当前处于 '${state.current_stage}'。`,
     ``,
     `════════════════════════════════`,
@@ -131,11 +135,9 @@ export async function handleSessionStart(
     `════════════════════════════════`,
     ``,
     `阶段完成后，将 '${expectedSignalContent}' 写入 signal 文件触发推进。`,
-  );
+  ];
 
-  const systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
-
-  return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage };
+  return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
   } catch (e) {
     try {
       await appendHookLog(repoRoot, flowName, `ERROR session: ${truncateError(e)}`);

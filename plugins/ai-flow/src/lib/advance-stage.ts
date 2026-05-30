@@ -50,7 +50,9 @@ export async function advanceStage(repoRoot: string, flowName: string): Promise<
     };
   }
 
-  const updated = { ...state, current_stage: next };
+  // Reset first_prompt_handled so Layer 2 re-injects guidance on the first
+  // non-command prompt in the newly entered stage (e.g. after approve).
+  const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
   await appendTransition(repoRoot, flowName, `ADVANCED ${current} → ${next}`);
   await appendHookLog(repoRoot, flowName, `ADVANCED ${current} → ${next}`);

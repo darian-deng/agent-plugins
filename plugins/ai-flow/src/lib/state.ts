@@ -20,6 +20,14 @@ export interface ActiveState {
   context_size: number;
   context_warning: ContextWarning;
   context_blocked: boolean;
+  /**
+   * Whether this session's first non-command user prompt has already been
+   * given the resume guidance (Layer 2 in userprompt-handler). Reset to false
+   * by SessionStart on a new session / clear / compact so the next prompt is
+   * re-guided. Absent on flows created before this field existed — treat
+   * undefined as "not yet handled".
+   */
+  first_prompt_handled?: boolean;
 }
 
 function statePath(repoRoot: string, flowName: string, file: string): string {

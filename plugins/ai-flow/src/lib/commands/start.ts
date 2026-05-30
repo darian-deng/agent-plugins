@@ -102,6 +102,7 @@ export async function handleStart(
     context_size: DEFAULT_CONTEXT_WINDOW,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     context_blocked: false,
+    first_prompt_handled: false,
   };
 
   await writeActiveState(repoRoot, flowName, state);

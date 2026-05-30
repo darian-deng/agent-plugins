@@ -1,4 +1,6 @@
-import { discoverFlows } from './flow-config-loader.js';
+import { join } from 'path';
+import { discoverFlows, loadFlowConfig } from './flow-config-loader.js';
+import { flowStatusLine } from './format.js';
 import { parseFlowCommand, VALID_COMMANDS, escapeRegex } from './commands/router.js';
 import { handleStart } from './commands/start.js';
 import { handleApprove } from './commands/approve.js';
@@ -6,7 +8,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { hasActiveFlow, findRepoRoot } from './state.js';
+import { hasActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -54,6 +56,43 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
 
   if (!parsed) {
+    // Layer 2: first-prompt resume guidance — inject once per session per active flow
+    if (active && !(active.state.first_prompt_handled ?? false)) {
+      // Gather gate info BEFORE writing first_prompt_handled, so a config load
+      // failure doesn't cause us to mark handled with incomplete information.
+      let gatePending = false;
+      try {
+        const config = await loadFlowConfig(active.repoRoot, active.flowName);
+        const signal = readSignal(active.repoRoot, active.flowName);
+        gatePending = isGatePending(signal, config, active.state.current_stage);
+      } catch { /* non-fatal — guidance still injected without gate info */ }
+
+      const updatedState = { ...active.state, first_prompt_handled: true };
+      await writeActiveState(active.repoRoot, active.flowName, updatedState);
+
+      const flowRoot = join(active.repoRoot, '.ai-flow', active.flowName);
+      const statusLine = flowStatusLine({
+        flowName: active.flowName,
+        stageId: active.state.current_stage,
+        flowId: active.state.flow_id,
+        gatePending,
+        recovered: false,
+      });
+
+      const guidance = [
+        `[ai-flow:resume-guidance]`,
+        `当前处于流程：${statusLine}`,
+        ``,
+        `你的第一句回复必须以如下一行状态开头，让开发者确认仍在流程内：`,
+        `"${statusLine}"`,
+        ``,
+        `然后判断本条消息的意图，二选一：`,
+        `· 若是「继续/推进当前阶段/approve/讨论当前 stage 产物」→ 按当前 stage 状态直接接续，不另起炉灶。`,
+        `· 若是一个看起来独立的新任务 → 先读 ${flowRoot} 下 active.json、当前 stage 产物、references/、helper.md 掌握 flow 背景，判断它与当前 flow 的关系，再动手；全程保持 flow 约束（gate 待确认时勿擅自推进 stage，write_scope 限制仍生效）。`,
+      ].join('\n');
+
+      return makeOutput(guidance);
+    }
     return makeOutput();
   }
 
