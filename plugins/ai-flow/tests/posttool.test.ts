@@ -143,7 +143,7 @@ describe('handlePostTool — block_at_pct', () => {
     });
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 65));
     expect(out).not.toBeNull();
-    expect(out!.additionalContext).toMatch(/CONTEXT BLOCKED/i);
+    expect(out!.additionalContext).toContain('write 工具将被自动拒绝');
     expect(out!.additionalContext).toContain('65%');
   });
 
@@ -173,7 +173,7 @@ describe('handlePostTool — block_at_pct', () => {
       context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
     });
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 70));
-    expect(out!.additionalContext).toMatch(/CONTEXT BLOCKED/i);
+    expect(out!.additionalContext).toContain('write 工具将被自动拒绝');
   });
 
   it('no block_at_pct in config → block never triggers even at 100%', async () => {
