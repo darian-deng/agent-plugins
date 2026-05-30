@@ -122,7 +122,7 @@ export async function handlePostTool(
 
   return {
     additionalContext:
-      `Context at ${pct}%. When you finish the current task, run /clear — state is persisted and progress won't be lost.`,
+      `[ai-flow] Context at ${pct}% (warn threshold: ${warnAt}%). Continue working normally — do NOT stop or interrupt current work. The user can run /clear at any convenient break point; state is persisted and no progress will be lost.`,
   };
 
   } catch (e) {
