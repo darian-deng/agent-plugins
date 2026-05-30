@@ -61,6 +61,9 @@ export async function handleSessionStart(
   // S2: flow-complete signal at terminal stage
   const isFlowComplete = signal === 'flow-complete' && expectedNext === null;
 
+  const flowRoot = join(repoRoot, '.ai-flow', flowName);
+  const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {
     await appendHookLog(repoRoot, flowName, `SESSION_GATE_PENDING stage=${state.current_stage}`);
@@ -73,21 +76,21 @@ export async function handleSessionStart(
       `如需修改，继续讨论，完成后重新写入 signal。`,
       `不要开始下一阶段工作。`,
     ];
-    return { additionalContext: lines.join('\n') };
+    return { additionalContext: pathsPreamble + lines.join('\n') };
   }
 
   // S2: flow-complete signal at terminal stage (no gate) — self-heal
   if (isFlowComplete && !stageCfg.completion.gate) {
     await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
     const result = await advanceStage(repoRoot, flowName);
-    return { additionalContext: result.additionalContext };
+    return { additionalContext: pathsPreamble + result.additionalContext };
   }
 
   // S1 + none/script: self-heal advance
   if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
     await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
     const result = await advanceStage(repoRoot, flowName);
-    return { additionalContext: result.additionalContext };
+    return { additionalContext: pathsPreamble + result.additionalContext };
   }
 
   // S0 (no signal), S3 (stale/invalid content), or invalid → Normal recovery
@@ -132,7 +135,7 @@ export async function handleSessionStart(
 
   const systemMessage = `[feat-flow] Active | stage: ${state.current_stage} | flow: ${state.flow_id}`;
 
-  return { additionalContext: lines.join('\n'), systemMessage };
+  return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage };
   } catch (e) {
     try {
       await appendHookLog(repoRoot, flowName, `ERROR session: ${truncateError(e)}`);

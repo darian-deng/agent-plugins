@@ -48,6 +48,16 @@ export async function writeActiveState(repoRoot: string, flowName: string, state
   renameSync(tmp, statePath(repoRoot, flowName, 'active.json'));
 }
 
+export function findRepoRoot(cwd: string): string | null {
+  let dir = cwd;
+  while (true) {
+    if (existsSync(join(dir, '.ai-flow'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
   // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
   let dir = cwd;

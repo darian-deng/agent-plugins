@@ -113,7 +113,9 @@ export async function handleStart(
     stageContent = readFileSync(promptPath, 'utf-8');
   }
 
+  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const ctx =
+    `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n` +
     `Flow '${flowName}' started!\n\n` +
     `flow_id: ${flowId}\nrequirement: ${requirement.trim()}\ncurrent_stage: ${firstStage.id}\n\n` +
     stageContent;

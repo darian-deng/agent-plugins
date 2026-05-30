@@ -6,6 +6,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
+import { hasActiveFlow, findRepoRoot } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -44,7 +45,10 @@ function resultToHookOutput(result: { action: string; reason?: string; additiona
 
 export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutput> {
   const { cwd, prompt, session_id } = input;
-  const repoRoot = cwd;
+  // Walk up from cwd to find the real repo root (where .ai-flow lives).
+  // Active flow gives us repoRoot directly; otherwise walk up to find .ai-flow.
+  const active = await hasActiveFlow(cwd).catch(() => null);
+  const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
 
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);

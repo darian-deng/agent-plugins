@@ -1,3 +1,4 @@
+import { join } from 'path';
 import {
   readActiveState,
   readSignal,
@@ -37,5 +38,7 @@ export async function handleApprove(
   await appendHookLog(repoRoot, flowName, `APPROVED stage=${state.current_stage}`);
 
   const result = await advanceStage(repoRoot, flowName);
-  return { action: 'allow', additionalContext: result.additionalContext };
+  const flowRoot = join(repoRoot, '.ai-flow', flowName);
+  const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+  return { action: 'allow', additionalContext: pathsPreamble + result.additionalContext };
 }

@@ -67,7 +67,9 @@ export async function handlePostTool(
         // none/script completion (terminal or non-terminal) — route through advanceStage
         await appendHookLog(repoRoot, flowName, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
         const result = await advanceStage(repoRoot, flowName);
-        return { additionalContext: result.additionalContext };
+        const flowRoot = join(repoRoot, '.ai-flow', flowName);
+        const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+        return { additionalContext: pathsPreamble + result.additionalContext };
       }
     }
     // Signal content doesn't match expected — fall through to context monitoring

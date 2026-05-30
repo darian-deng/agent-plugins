@@ -93,7 +93,9 @@ export async function handleResume(
     stageContent = readFileSync(promptPath, 'utf-8');
   }
 
+  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const ctx =
+    `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n` +
     `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
     `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
     stageContent;
