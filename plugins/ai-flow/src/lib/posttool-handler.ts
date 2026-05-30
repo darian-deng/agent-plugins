@@ -103,8 +103,9 @@ export async function handlePostTool(
     }
     return {
       additionalContext:
-        `CONTEXT BLOCKED at ${pct}% (threshold: ${blockAt}%). ` +
-        `All write tools are now denied. Run /clear to continue — state is persisted and progress won't be lost.`,
+        `[ai-flow] Context 已达 ${pct}%（block 阈值 ${blockAt}%）。` +
+        `完成当前最小原子操作后停止，不要开始新任务。` +
+        `向开发者说明停止原因：context 已超过 block 阈值，请运行 /clear 后重入继续（ai-flow 进度已持久化）。`,
     };
   }
 
@@ -122,7 +123,10 @@ export async function handlePostTool(
 
   return {
     additionalContext:
-      `[ai-flow] Context at ${pct}% (warn threshold: ${warnAt}%). Continue working normally — do NOT stop or interrupt current work. The user can run /clear at any convenient break point; state is persisted and no progress will be lost.`,
+      `[ai-flow] Context 当前 ${pct}%（warn 阈值 ${warnAt}%）。` +
+      `请向开发者输出一条醒目提醒（用 > 引用块或加粗），内容：` +
+      `"⚠️ Context 已达 ${pct}%。如需高质量执行，可 Ctrl+C 停止任务 → /clear → 重入后从断点继续（ai-flow 进度已持久化）。"` +
+      `输出提醒后继续正常执行当前工作，不要中断或停止。`,
   };
 
   } catch (e) {
