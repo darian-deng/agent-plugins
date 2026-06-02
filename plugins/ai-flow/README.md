@@ -29,7 +29,7 @@ claude plugin install ai-flow@darian-agent-plugins --scope user
 
 安装后，在 Claude Code 中运行 `/ai-flow:create`，描述你需要什么样的工作流，AI 会帮你设计阶段结构、推荐完成条件和审批门，对齐确认后自动生成所有配置文件。
 
-对于软件功能开发，ai-flow 内置了一套 8 阶段工作流模板（需求确认 → 代码探索 → 方案选型 → 实施计划 → 代码实施 → 全量验证 → 代码审查 → 知识沉淀）。运行 `/ai-flow:add` 安装内置模板即可立即使用。
+对于软件功能开发，ai-flow 内置了一套 6 阶段工作流模板（需求确认 → 实施蓝图 → 实施计划 → 代码实施 → 质量门 → 知识沉淀）。运行 `/ai-flow:add` 安装内置模板即可立即使用。
 
 ### 运行工作流
 
@@ -110,10 +110,10 @@ workflow you need. AI will think through the stage structure, recommend
 completion conditions and approval gates, and generate all configuration files
 once you confirm the design.
 
-For software feature development, ai-flow ships with a built-in 8-stage
-workflow template: requirements → exploration → architecture → planning →
-implementation → verification → review → governance. Run `/ai-flow:add`
-and choose to install the built-in template to get started immediately.
+For software feature development, ai-flow ships with a built-in 6-stage
+workflow template: requirements → blueprint → planning → implementation →
+quality gate → governance. Run `/ai-flow:add` and choose to install the
+built-in template to get started immediately.
 
 ### Running a workflow
 
