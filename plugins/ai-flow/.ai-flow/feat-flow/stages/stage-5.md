@@ -19,7 +19,7 @@
 - `docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
 - `docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
 - `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 注释删除理由 / 前置修订）
-- `.ai-flow/feat-flow/state/base_sha_code` — Stage 4 起点 SHA
+- `.ai-flow/feat-flow/state/base_sha_code` — Stage 4 起点 SHA（用 `tail -1` 读取；文件两行：第一行 flow_id，第二行 SHA）
 
 ## 入场动作
 
@@ -56,7 +56,7 @@
 
 > 为什么不用专用安全/审查插件 agent：官方生态里没有"有文档、可验证调用、且是安全专项"的 subagent——`code-review` 插件是 PR 导向且把安全列为忽略项，`security-guidance` 是被动 hooks，`code-modernization:security-auditor` 是无文档的插件内部 agent（无法可靠调用）。故用 general-purpose **执行公认的 OWASP/CWE 标准**：被背书的是标准本身，不是 agent 外壳。
 
-> base SHA 取法：`cat .ai-flow/feat-flow/state/base_sha_code`。下文 `<base>` 均指此值。
+> base SHA 取法：`tail -1 .ai-flow/feat-flow/state/base_sha_code`。下文 `<base>` 均指此值。
 
 ### 视角①：集成 & 需求闭环审查（必跑）
 
@@ -88,7 +88,26 @@
 
 派一个 `general-purpose` 子代理作**对抗式安全审查者**，**按公认的 OWASP Top 10 + CWE 标准**逐项核（不是自创方法论——OWASP/CWE 就是业界安全审计通用标准，这里只是让 general-purpose 执行它）。立场：**假设代码恶意，直到证明无害**。无论改动类型，**每次都跑**——安全是最高代价缺陷类，跨模块可利用性只有组装后才看得全。
 
-传入：`<base>` 值 + design.md（技术栈 / 项目命令）+ architecture.md（集成点 / 鉴权架构，判 IDOR / 越权要靠它）+ 安全相关 ADR 路径列表。让它自己 `git diff <base>..HEAD` 圈定改动范围 + grep 代码追 source→sink + 按技术栈跑依赖审计（`npm audit` / `pip-audit` / 等）。审查范围 = `base..HEAD` 的改动及其可达路径，不审历史遗留代码。
+传入：`<base>` 值 + design.md（技术栈 / 项目命令）+ architecture.md（集成点 / 鉴权架构，判 IDOR / 越权要靠它）+ 安全相关 ADR 路径列表。让它自己 `git diff <base>..HEAD` 圈定改动范围 + grep 代码追 source→sink。审查范围 = `base..HEAD` 的改动及其可达路径，不审历史遗留代码。
+
+**依赖审计（条件执行，不跳过 OWASP 其他项）**：先判断本次改动是否新增了包依赖，再决定是否跑审计工具：
+
+```bash
+# 找依赖清单文件（排除 lock 文件）中是否有新增行
+# 覆盖主流生态：JS/TS、Python、Rust、Go、Ruby、Java/Kotlin、PHP、.NET
+BASE_SHA=$(tail -1 .ai-flow/feat-flow/state/base_sha_code)
+MANIFEST_RE="package\.json$|requirements[^/]*\.txt$|Pipfile$|pyproject\.toml$|Cargo\.toml$|go\.mod$|Gemfile$|pom\.xml$|build\.gradle(\.kts)?$|\.csproj$|composer\.json$"
+ADDED_DEPS=$(git diff "$BASE_SHA"..HEAD --name-only \
+  | grep -E "$MANIFEST_RE" \
+  | while IFS= read -r f; do
+      git diff "$BASE_SHA"..HEAD -- "$f" | grep '^+' | grep -v '^+++'
+    done \
+  | head -5)
+echo "${ADDED_DEPS:-NONE}"
+```
+
+- **`ADDED_DEPS` 非 `NONE`（有新增行）** → 按项目技术栈跑审计（`npm audit --audit-level=high` / `pip-audit` / `cargo audit` / 等）
+- **`ADDED_DEPS` 为 `NONE`**（只删除 / 版本降级 / 无依赖文件变动）→ **跳过依赖审计**，明确写「依赖审计：本次改动未新增包依赖，跳过」
 
 按 **OWASP Web Top 10 + 隐私**逐项核（注意**不是** OWASP-for-LLM 那套）：
 - 注入（SQL / 命令 / NoSQL / LDAP / 模板）——每个用户可控输入追到 sink
@@ -97,7 +116,7 @@
 - **用户隐私 / PII 泄露**（日志、响应体、第三方传输）
 - SSRF / 不安全反序列化 / XSS / CSRF（Web 场景）
 - 弱加密 / 不安全随机
-- 依赖 CVE（跑审计工具）
+- 依赖 CVE（**仅当本次 diff 新增了包依赖时**跑审计工具；否则跳过并写「依赖审计：本次改动未新增包依赖，跳过」）
 
 每条问题：严重度（Critical / High / Medium）+ CWE 编号 + **可利用场景（source→sink 论证，不空喊风险）** + 修复建议。
 

@@ -60,7 +60,7 @@ docs/feat-flows/<flow_id>/
 
 .ai-flow/feat-flow/state/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
-├── base_sha_code            # Stage 4 起点 commit SHA（用于 Stage 5 diff）
+├── base_sha_code            # 两行：第一行 flow_id（跨 flow 污染检测），第二行 commit SHA（Stage 5/6 diff 基准）
 ├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
 └── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）

@@ -15,10 +15,17 @@ design.md / architecture.md **不在主 session 读取**——它们作为路径
 
 ## 入场动作
 
-**先判首次进入还是 /clear 重入**：检查 `.ai-flow/feat-flow/state/base_sha_code` 是否存在、plan.md 是否已有 `[x]`。
+**先判首次进入还是 /clear 重入**：
 
-- **base_sha_code 已存在，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——`git rev-parse HEAD > base_sha_code` 会用当前 HEAD 覆盖原起点，污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环。其中遇到**已 commit 但无 `**审查**` 行的 task → 一律重跑两段评审**（无法区分「没审」还是「审了没回填」，重跑安全）。Step 0 的分支复核仍要做。
-- **都没有** → 首次进入，按 Step 0 → 3 顺序走。
+```bash
+# 读当前 flow_id（active.json 永远存在于此刻）
+CURRENT_FLOW_ID=$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json'))['flow_id'])")
+# 读 base_sha_code 第一行：新格式存 flow_id，旧格式存 SHA——两者都不等于 CURRENT_FLOW_ID 时视为首次进入
+FILE_FLOW_ID=$(head -1 .ai-flow/feat-flow/state/base_sha_code 2>/dev/null || echo "NONE")
+```
+
+- **`FILE_FLOW_ID == CURRENT_FLOW_ID`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——覆写 base_sha_code 会污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环。其中遇到**已 commit 但无 `**审查**` 行的 task → 一律重跑两段评审**（无法区分「没审」还是「审了没回填」，重跑安全）。Step 0 的分支复核仍要做。
+- **`FILE_FLOW_ID != CURRENT_FLOW_ID`（含文件不存在）且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。若文件已存在但 flow_id 不匹配，输出提示：`⚠️ base_sha_code 属于 flow <FILE_FLOW_ID>，当前 flow 为 <CURRENT_FLOW_ID>，视为首次进入并覆写`。
 
 **Step 0：分支 + 工作树预检（任何 commit 之前）**
 
@@ -35,10 +42,14 @@ git status --porcelain
 ```sh
 git add docs/feat-flows/<flow_id>/
 git commit -m "docs: <feature> stage1-3 outputs"
-git rev-parse HEAD > .ai-flow/feat-flow/state/base_sha_code
+# 写两行：第一行 flow_id（用于跨 flow 污染检测），第二行 SHA（供 Stage 5/6 作 diff 起点）
+printf "%s\n%s\n" \
+  "$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json'))['flow_id'])")" \
+  "$(git rev-parse HEAD)" \
+  > .ai-flow/feat-flow/state/base_sha_code
 ```
 
-把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 供 Stage 5 当 diff 起点（只看代码、不看 docs）。
+把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 供 Stage 5/6 当 diff 起点（只看代码、不看 docs）。第一行的 `flow_id` 防止多 flow 顺序运行时读到上个 flow 的基准 SHA。
 
 **Step 2：初始化 task-reports.md**
 

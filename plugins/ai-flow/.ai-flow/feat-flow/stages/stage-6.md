@@ -30,7 +30,7 @@
 
 ### A1. 解析写入根目录（monorepo 兼容）
 
-- 列本次 flow 涉及的所有改动文件路径（`git diff $(cat .ai-flow/feat-flow/state/base_sha_code) HEAD --name-only`）
+- 列本次 flow 涉及的所有改动文件路径（`git diff $(tail -1 .ai-flow/feat-flow/state/base_sha_code) HEAD --name-only`）
 - 计算「最深公共祖先目录」
 - CLAUDE.md / rules 写入对象 = **该目录**的 CLAUDE.md（不是 root，除非根才是公共祖先）
 
