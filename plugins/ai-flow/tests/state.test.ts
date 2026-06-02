@@ -14,7 +14,7 @@ import {
   nextStage,
 } from '../src/lib/state.js';
 import type { ActiveState } from '../src/lib/state.js';
-import { MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { MINIMAL_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
 
 let tmpDirs: string[] = [];
 
@@ -153,6 +153,25 @@ describe('readSignal / writeSignalFile / isGatePending', () => {
   it('isGatePending: stage has no gate → false', () => {
     // work stage has no gate
     expect(isGatePending('review', MINIMAL_CONFIG, 'work')).toBe(false);
+  });
+
+  // ── New signal protocol: AI writes 'done', hook computes the rest ──
+  it('isGatePending: signal=done + gate stage → true', () => {
+    expect(isGatePending('done', MINIMAL_CONFIG, 'review')).toBe(true);
+  });
+
+  it('isGatePending: signal=done + non-gate stage → false', () => {
+    expect(isGatePending('done', MINIMAL_CONFIG, 'work')).toBe(false);
+  });
+
+  it('isGatePending: signal=done + non-terminal gate stage → true', () => {
+    // GATED_CONFIG: work has gate=true and is non-terminal
+    expect(isGatePending('done', GATED_CONFIG, 'work')).toBe(true);
+  });
+
+  it('isGatePending: old stage-id signal + gate stage → true (backward compat)', () => {
+    // GATED_CONFIG: work→review, signal='review' is the old protocol
+    expect(isGatePending('review', GATED_CONFIG, 'work')).toBe(true);
   });
 });
 

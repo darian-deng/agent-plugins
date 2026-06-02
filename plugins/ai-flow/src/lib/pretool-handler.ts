@@ -5,7 +5,6 @@ import {
   appendTransition,
   appendViolation,
   appendHookLog,
-  nextStage,
   signalPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
@@ -124,16 +123,12 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     const stageCfg = getStageConfig(config, state.current_stage);
     const signalContent = String(tool_input['content'] ?? '').trim();
 
-    // Determine expected signal content
-    const next = nextStage(config, state.current_stage);
-    const expectedContent = next !== null ? next : 'flow-complete';
-
-    // Validate signal content
-    if (signalContent !== expectedContent) {
-      await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INVALID expected=${expectedContent} got=${signalContent}`);
+    // Validate signal content: AI must always write exactly 'done'
+    if (signalContent !== 'done') {
+      await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INVALID expected=done got=${signalContent}`);
       return deny(
-        `Invalid signal content. Expected '${expectedContent}' for stage '${state.current_stage}'. ` +
-        `Got: '${signalContent}'. Write exactly '${expectedContent}' to the signal file.`
+        `Invalid signal content for stage '${state.current_stage}'. ` +
+        `Write exactly 'done' to the signal file to trigger stage completion. Got: '${signalContent}'.`
       );
     }
 

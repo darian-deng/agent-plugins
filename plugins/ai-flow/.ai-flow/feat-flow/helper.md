@@ -65,11 +65,10 @@ docs/feat-flows/<flow_id>/
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
 └── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）
 
-**signal 文件语义**：内容不是任意文本，而是精确的推进申请标识：
-- stage-1 完成 → 写 `stage-2`；stage-2 完成 → 写 `stage-3`；以此类推
-- 最后一个 stage（stage-6）完成 → 写 `flow-complete`
-- 引擎会校验内容，内容不匹配会拒绝写入
-- signal 存在且内容匹配 = 当前 stage 已申请推进
+**signal 文件语义**：AI 统一写入固定关键词 `done`，引擎自动计算下一步：
+- 任意 stage 完成（包括最后一个 stage）→ 写 `done`
+- 引擎会拒绝非 `done` 的写入（幻觉防护：AI 不需要知道 stage id）
+- signal 存在且为 `done` = 当前 stage 已申请推进
 
 写入后有两种行为，由 stage 配置决定：
 - **有 Gate 配置的 stage**：引擎暂停，等待开发者 `feat-flow approve`；AI 向开发者呈现产物摘要并等待确认

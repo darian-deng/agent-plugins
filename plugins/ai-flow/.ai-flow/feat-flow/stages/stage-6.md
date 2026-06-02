@@ -104,7 +104,7 @@ Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `flow-complete`（内容必须精确匹配，引擎会校验）。
+**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动完成流程）。
 
 完成后向开发者报告（**精确区分已 commit / 暂存待提交**）：
 

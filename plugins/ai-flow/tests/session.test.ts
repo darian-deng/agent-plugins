@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { handleSessionStart } from '../src/lib/session-handler.js';
 import { readActiveState } from '../src/lib/state.js';
-import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
 import type { SessionStartInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -67,8 +67,8 @@ describe('handleSessionStart', () => {
     expect(out!.additionalContext).toMatch(/gate|approve/i);
   });
 
-  it('S1 + none completion (self-heal) → stage advances, next stage injected', async () => {
-    // work stage has completion: {} (no gate), signal = 'review' = nextStage
+  it("S1 self-heal: signal='done' + non-gate stage → stage advances, next stage injected", async () => {
+    // Crash scenario: AI wrote 'done' but posttool didn't process it yet
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -77,13 +77,11 @@ describe('handleSessionStart', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    writeSignal(repo.repoRoot, 'test-flow', 'review');
+    writeSignal(repo.repoRoot, 'test-flow', 'done');
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
     expect(out).not.toBeNull();
-    // Stage should have advanced to 'review'
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
-    // Should inject next stage prompt
     expect(out!.additionalContext).toContain('review');
   });
 
@@ -294,5 +292,38 @@ describe('handleSessionStart', () => {
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toContain('test-flow');
+  });
+
+  // ── New protocol: AI writes 'done', session self-heal handles it ──
+
+  it("signal='done' + non-gate stage → self-heal advances to next stage", async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'build', current_stage: 'work', base_sha: 'abc',
+    });
+    writeSignal(repo.repoRoot, 'test-flow', 'done');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
+    expect(out!.additionalContext).toContain('review');
+  });
+
+  it("signal='done' + gate stage → session shows gate pending recovery", async () => {
+    // GATED_CONFIG: work has gate=true
+    const repo = createFlowTestRepo('test-flow', GATED_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'build', current_stage: 'work', base_sha: 'abc',
+    });
+    writeSignal(repo.repoRoot, 'test-flow', 'done');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toMatch(/gate|approve/i);
+    // Stage should NOT have advanced
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('work');
   });
 });

@@ -52,23 +52,16 @@ describe('handlePreTool — no active flow', () => {
   });
 });
 
-describe('handlePreTool — signal interception (new signal-content semantics)', () => {
-  it('gate stage: write correct nextStageId to signal → ALLOW, no gate-token created', async () => {
+describe('handlePreTool — signal interception (done protocol)', () => {
+  it("non-gate stage: write 'done' to signal → ALLOW", async () => {
     const repo = makeRepo();
-    activateFlow(repo.repoRoot, 'work'); // work has no gate, next is review
+    activateFlow(repo.repoRoot, 'work');
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    // MINIMAL_CONFIG work stage has no gate, completion: {}
-    // nextStage = 'review'
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'review' }));
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('allow');
-    // No gate-token should be created
-    const gateTokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
-    expect(existsSync(gateTokenPath)).toBe(false);
   });
 
-  it('gate stage (completion.gate=true): write correct nextStageId to signal → ALLOW (no deny)', async () => {
-    const repo = makeRepo();
-    // Use GATED_CONFIG: work stage has gate: true, next is review
+  it("gate stage: write 'done' to signal → ALLOW", async () => {
     const gatedRepo = createFlowTestRepo('test-flow', {
       schema_version: '1.0',
       name: 'test-flow',
@@ -79,38 +72,15 @@ describe('handlePreTool — signal interception (new signal-content semantics)',
     });
     cleanups.push(gatedRepo.cleanup);
     writeActiveState(gatedRepo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'test',
-      current_stage: 'work',
-      base_sha: 'abc',
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'work', base_sha: 'abc',
     });
     const signalPath = join(gatedRepo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(gatedRepo.repoRoot, 'Write', { file_path: signalPath, content: 'review' }));
-    expect(out?.permissionDecision).toBe('allow');
-    // No gate-token
-    const gateTokenPath = join(gatedRepo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
-    expect(existsSync(gateTokenPath)).toBe(false);
-  });
-
-  it('non-terminal stage with none: write correct nextStageId → ALLOW', async () => {
-    const repo = makeRepo();
-    activateFlow(repo.repoRoot, 'work');
-    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'review' }));
+    const out = await handlePreTool(makeInput(gatedRepo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('allow');
   });
 
-  it('non-terminal stage: write wrong content → DENY with expected content hint', async () => {
-    const repo = makeRepo();
-    activateFlow(repo.repoRoot, 'work');
-    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
-    expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toContain('review');
-  });
-
-  it('terminal stage: write flow-complete → ALLOW (posttool handles completion)', async () => {
+  it("terminal stage: write 'done' → ALLOW (posttool handles completion)", async () => {
     const repo = createFlowTestRepo('test-flow', {
       schema_version: '1.0',
       name: 'test-flow',
@@ -121,41 +91,41 @@ describe('handlePreTool — signal interception (new signal-content semantics)',
     });
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'test',
-      current_stage: 'review',
-      base_sha: 'abc',
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'review', base_sha: 'abc',
+    });
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+  });
+
+  it("write anything other than 'done' to signal → DENY with hint", async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'stage-2' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toContain('done');
+  });
+
+  it("write 'flow-complete' (old protocol) to signal → DENY with hint", async () => {
+    const repo = createFlowTestRepo('test-flow', {
+      schema_version: '1.0',
+      name: 'test-flow',
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: {} },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
+      ],
+    });
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'review', base_sha: 'abc',
     });
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'flow-complete' }));
-    expect(out?.permissionDecision).toBe('allow');
-    // active.json still exists — posttool will handle the completion
-    const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state).not.toBeNull();
-  });
-
-  it('terminal stage: write wrong content → DENY', async () => {
-    const repo = createFlowTestRepo('test-flow', {
-      schema_version: '1.0',
-      name: 'test-flow',
-      stages: [
-        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: {} },
-        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
-      ],
-    });
-    cleanups.push(repo.cleanup);
-    writeActiveState(repo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'test',
-      current_stage: 'review',
-      base_sha: 'abc',
-    });
-    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toContain('flow-complete');
+    expect(out?.permissionDecisionReason).toContain('done');
   });
 
   it('script passes + gate configured → ALLOW, no gate-token created', async () => {
@@ -193,7 +163,7 @@ describe('handlePreTool — signal interception (new signal-content semantics)',
     writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), '#!/bin/sh\nexit 0\n');
     chmodSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), 0o755);
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'review' }));
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('allow');
     const gateTokenPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'gate-token');
     expect(existsSync(gateTokenPath)).toBe(false);
@@ -216,7 +186,7 @@ describe('handlePreTool — signal interception (new signal-content semantics)',
     );
     chmodSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh'), 0o755);
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
-    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'review' }));
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
     expect(out?.permissionDecision).toBe('deny');
     expect(out?.permissionDecisionReason).toMatch(/validation failed/i);
   });

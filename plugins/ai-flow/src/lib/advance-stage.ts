@@ -54,6 +54,9 @@ export async function advanceStage(repoRoot: string, flowName: string): Promise<
   // non-command prompt in the newly entered stage (e.g. after approve).
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
+  // Clear signal so the new stage starts without a stale trigger
+  const sigFile = signalPath(repoRoot, flowName);
+  if (existsSync(sigFile)) unlinkSync(sigFile);
   await appendTransition(repoRoot, flowName, `ADVANCED ${current} → ${next}`);
   await appendHookLog(repoRoot, flowName, `ADVANCED ${current} → ${next}`);
 

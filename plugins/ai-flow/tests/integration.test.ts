@@ -70,15 +70,15 @@ describe('Integration: none stage — pretool → file write → posttool → st
     });
     const sig = signalPath(repo.repoRoot, 'test-flow');
 
-    // PreToolUse: validate signal content
-    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'review'));
+    // PreToolUse: validate signal write is allowed
+    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'done'));
     expect(pre?.permissionDecision).toBe('allow');
 
-    // Simulate Claude Code writing the file after PreToolUse allows
-    writeFileSync(sig, 'review');
+    // Simulate Claude Code writing 'done'
+    writeFileSync(sig, 'done');
 
-    // PostToolUse: detect signal → advance stage
-    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'review'));
+    // PostToolUse: detect 'done' → advance stage
+    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'done'));
     expect(post?.additionalContext).toMatch(/review|Stage/i);
 
     const state = await readActiveState(repo.repoRoot, 'test-flow');
@@ -98,16 +98,16 @@ describe('Integration: gate stage — pretool allows, posttool holds for approve
     });
     const sig = signalPath(repo.repoRoot, 'test-flow');
 
-    // PreToolUse: gate stage returns allow (no Error: red header)
-    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'flow-complete'));
+    // PreToolUse: gate stage returns allow
+    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'done'));
     expect(pre?.permissionDecision).toBe('allow');
-    expect(pre?.systemMessage).toBeUndefined(); // no systemMessage in new design
+    expect(pre?.systemMessage).toBeUndefined();
 
     // Simulate file write
-    writeFileSync(sig, 'flow-complete');
+    writeFileSync(sig, 'done');
 
-    // PostToolUse: detects gate → gate-pending additionalContext, no stage advance
-    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'flow-complete'));
+    // PostToolUse: detects 'done' + gate → rewrites signal, gate-pending, no stage advance
+    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'done'));
     expect(post?.additionalContext).toMatch(/approve|等待|gate/i);
 
     // active.json still exists, current_stage unchanged — gate is pending
@@ -135,12 +135,12 @@ describe('Integration: terminal stage — flow-complete removes active.json and 
     });
     const sig = signalPath(repo.repoRoot, 'test-flow');
 
-    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'flow-complete'));
+    const pre = await handlePreTool(preTool(repo.repoRoot, sig, 'done'));
     expect(pre?.permissionDecision).toBe('allow');
 
-    writeFileSync(sig, 'flow-complete');
+    writeFileSync(sig, 'done');
 
-    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'flow-complete'));
+    const post = await handlePostTool(postTool(repo.repoRoot, sig, 'done'));
     expect(post?.additionalContext).toMatch(/完成|complete|done/i);
 
     // Both state files cleaned up
@@ -181,8 +181,8 @@ describe('Integration: session recovery self-heal (S1 + none completion)', () =>
       flow_id: 'test-flow-abc', flow_name: 'test-flow',
       requirement: 'test', current_stage: 'work', base_sha: 'abc',
     });
-    // signal written (nextStage = review) but PostToolUse never ran (crash scenario)
-    writeSignal(repo.repoRoot, 'test-flow', 'review');
+    // AI wrote 'done' but PostToolUse never ran (crash scenario)
+    writeSignal(repo.repoRoot, 'test-flow', 'done');
 
     const out = await handleSessionStart(sessionInput(repo.repoRoot));
     // Self-heal: advance to review and inject its prompt

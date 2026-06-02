@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { handlePostTool } from '../src/lib/posttool-handler.js';
 import { readActiveState, signalPath } from '../src/lib/state.js';
-import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, BLOCKING_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, BLOCKING_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
 import type { PostToolInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -207,7 +207,7 @@ function makeSignalInput(repoRoot: string, toolName: string, filePath: string, c
 }
 
 describe('handlePostTool — signal detection', () => {
-  it('signal write + none completion → stage advances, additionalContext contains next stage prompt', async () => {
+  it("signal='done' via non-gate stage → stage advances, additionalContext contains next stage prompt", async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -216,42 +216,38 @@ describe('handlePostTool — signal detection', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    // Signal file was written with 'review' (the next stage)
     const sig = signalPath(repo.repoRoot, 'test-flow');
     const { writeFileSync, mkdirSync } = await import('fs');
     mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
-    writeFileSync(sig, 'review');
-    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'review'));
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toContain('review');
-    // Stage should have advanced
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
   });
 
-  it('signal write + gate completion → additionalContext contains gate pending message', async () => {
-    // review stage has gate: true in MINIMAL_CONFIG
+  it("signal='done' via gate stage → additionalContext contains gate pending message", async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
       requirement: 'test',
-      current_stage: 'review', // gate stage, terminal
+      current_stage: 'review',
       base_sha: 'abc',
     });
     const sig = signalPath(repo.repoRoot, 'test-flow');
     const { writeFileSync, mkdirSync } = await import('fs');
     mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
-    writeFileSync(sig, 'flow-complete');
-    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'flow-complete'));
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toMatch(/approve|gate|confirm/i);
-    // Stage should NOT advance (gate pending, user must approve)
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
   });
 
-  it('signal write flow-complete at terminal (none completion) → active.json deleted', async () => {
+  it("signal='done' at terminal no-gate stage → active.json deleted", async () => {
     const repo = createFlowTestRepo('test-flow', {
       schema_version: '1.0',
       name: 'test-flow',
@@ -265,14 +261,14 @@ describe('handlePostTool — signal detection', () => {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
       requirement: 'test',
-      current_stage: 'review', // last stage, no gate
+      current_stage: 'review',
       base_sha: 'abc',
     });
     const sig = signalPath(repo.repoRoot, 'test-flow');
     const { writeFileSync, mkdirSync } = await import('fs');
     mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
-    writeFileSync(sig, 'flow-complete');
-    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'flow-complete'));
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toMatch(/complete|完成/i);
     const state = await readActiveState(repo.repoRoot, 'test-flow');
@@ -296,5 +292,95 @@ describe('handlePostTool — signal detection', () => {
     // Stage unchanged
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('work');
+  });
+
+  // ── New protocol: AI writes 'done' ──────────────────────────────────────
+
+  it("signal='done' + non-gate stage → advances stage, signal cleared", async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test',
+      current_stage: 'work', base_sha: 'abc',
+    });
+    const sig = signalPath(repo.repoRoot, 'test-flow');
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('review');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
+    // Signal cleared after advance
+    expect(existsSync(sig)).toBe(false);
+  });
+
+  it("signal='done' + gate stage → signal rewritten to next-stage-id, gate pending returned", async () => {
+    // GATED_CONFIG: work has gate=true, next is 'review'
+    const repo = createFlowTestRepo('test-flow', GATED_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test',
+      current_stage: 'work', base_sha: 'abc',
+    });
+    const sig = signalPath(repo.repoRoot, 'test-flow');
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toMatch(/approve|gate|confirm/i);
+    // Signal rewritten to next stage id (not 'done')
+    expect(readFileSync(sig, 'utf-8').trim()).toBe('review');
+    // Stage NOT advanced
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('work');
+  });
+
+  it("signal='done' + terminal gate stage → signal rewritten to 'flow-complete', gate pending returned", async () => {
+    // MINIMAL_CONFIG: review is terminal with gate=true
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test',
+      current_stage: 'review', base_sha: 'abc',
+    });
+    const sig = signalPath(repo.repoRoot, 'test-flow');
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toMatch(/approve|gate|confirm/i);
+    // Signal rewritten to 'flow-complete'
+    expect(readFileSync(sig, 'utf-8').trim()).toBe('flow-complete');
+    // Stage NOT advanced
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
+  });
+
+  it("signal='done' + terminal no-gate stage → flow completes, active.json deleted", async () => {
+    const noGateTerminalConfig = {
+      schema_version: '1.0' as const,
+      name: 'test-flow',
+      stages: [
+        { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted' as const, completion: {} },
+        { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted' as const, completion: {} },
+      ],
+    };
+    const repo = createFlowTestRepo('test-flow', noGateTerminalConfig);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test',
+      current_stage: 'review', base_sha: 'abc',
+    });
+    const sig = signalPath(repo.repoRoot, 'test-flow');
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    writeFileSync(sig, 'done');
+    const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toMatch(/complete|完成/i);
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state).toBeNull();
   });
 });

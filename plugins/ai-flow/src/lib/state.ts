@@ -108,11 +108,13 @@ export function isGatePending(signal: string | null, config: FlowConfig, current
   const stage = config.stages.find((s) => s.id === currentStageId);
   if (!stage) return false;
   if (!stage.completion.gate) return false;
+  // New protocol: AI writes 'done'; hook rewrites to stage-id/flow-complete later
+  if (signal === 'done') return true;
+  // Backward compat: posttool already rewrote signal to stage-id or 'flow-complete'
   const expected = nextStage(config, currentStageId);
   if (expected !== null) {
     return signal === expected;
   }
-  // terminal stage: signal must be 'flow-complete'
   return signal === 'flow-complete';
 }
 

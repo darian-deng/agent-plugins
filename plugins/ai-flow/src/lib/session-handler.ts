@@ -57,8 +57,8 @@ export async function handleSessionStart(
   // Determine expected signal content for non-terminal stage
   const expectedSignalContent = expectedNext !== null ? expectedNext : 'flow-complete';
 
-  // S1: signal matches expected next stage content
-  const isSignalValid = signal !== null && signal === expectedSignalContent;
+  // S1: AI wrote 'done' but posttool/advance hadn't processed it yet (crash recovery)
+  const isSignalValid = signal === 'done';
 
   // S2: flow-complete signal at terminal stage
   const isFlowComplete = signal === 'flow-complete' && expectedNext === null;
@@ -134,7 +134,7 @@ export async function handleSessionStart(
     promptContent,
     `════════════════════════════════`,
     ``,
-    `阶段完成后，将 '${expectedSignalContent}' 写入 signal 文件触发推进。`,
+    `阶段完成后，将 'done' 写入 signal 文件触发推进（引擎自动计算下一步）。`,
   ];
 
   return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
