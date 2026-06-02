@@ -4254,6 +4254,7 @@ function isGatePending(signal, config, currentStageId) {
   const stage = config.stages.find((s) => s.id === currentStageId);
   if (!stage) return false;
   if (!stage.completion.gate) return false;
+  if (signal === "done") return true;
   const expected = nextStage(config, currentStageId);
   if (expected !== null) {
     return signal === expected;
@@ -4474,6 +4475,8 @@ async function advanceStage(repoRoot, flowName) {
   }
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
+  const sigFile = signalPath(repoRoot, flowName);
+  if (existsSync5(sigFile)) unlinkSync(sigFile);
   await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);

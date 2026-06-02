@@ -69,6 +69,7 @@ function isGatePending(signal, config, currentStageId) {
   const stage = config.stages.find((s) => s.id === currentStageId);
   if (!stage) return false;
   if (!stage.completion.gate) return false;
+  if (signal === "done") return true;
   const expected = nextStage(config, currentStageId);
   if (expected !== null) {
     return signal === expected;
@@ -4274,6 +4275,8 @@ async function advanceStage(repoRoot, flowName) {
   }
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
+  const sigFile = signalPath(repoRoot, flowName);
+  if (existsSync3(sigFile)) unlinkSync(sigFile);
   await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
@@ -4322,7 +4325,7 @@ async function handleSessionStart(input2) {
     const signal = readSignal(repoRoot, flowName);
     const expectedNext = nextStage(config, state.current_stage);
     const expectedSignalContent = expectedNext !== null ? expectedNext : "flow-complete";
-    const isSignalValid = signal !== null && signal === expectedSignalContent;
+    const isSignalValid = signal === "done";
     const isFlowComplete = signal === "flow-complete" && expectedNext === null;
     const flowRoot = join4(repoRoot, ".ai-flow", flowName);
     const pathsPreamble = `[ai-flow:paths]
@@ -4387,7 +4390,7 @@ flow_root: ${flowRoot}
       promptContent,
       `\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`,
       ``,
-      `\u9636\u6BB5\u5B8C\u6210\u540E\uFF0C\u5C06 '${expectedSignalContent}' \u5199\u5165 signal \u6587\u4EF6\u89E6\u53D1\u63A8\u8FDB\u3002`
+      `\u9636\u6BB5\u5B8C\u6210\u540E\uFF0C\u5C06 'done' \u5199\u5165 signal \u6587\u4EF6\u89E6\u53D1\u63A8\u8FDB\uFF08\u5F15\u64CE\u81EA\u52A8\u8BA1\u7B97\u4E0B\u4E00\u6B65\uFF09\u3002`
     ];
     return { additionalContext: pathsPreamble + lines.join("\n"), systemMessage: statusLine };
   } catch (e) {

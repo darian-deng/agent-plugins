@@ -63,6 +63,13 @@ function readSignal(repoRoot, flowName) {
     return null;
   }
 }
+function writeSignalFile(repoRoot, flowName, content) {
+  const dir = stateDir(repoRoot, flowName);
+  mkdirSync(dir, { recursive: true });
+  const tmp = statePath(repoRoot, flowName, `signal.${randomBytes(4).toString("hex")}.tmp`);
+  writeFileSync(tmp, content);
+  renameSync(tmp, statePath(repoRoot, flowName, "signal"));
+}
 async function appendTransition(repoRoot, flowName, message) {
   const path = statePath(repoRoot, flowName, "transitions.log");
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
@@ -4280,6 +4287,8 @@ async function advanceStage(repoRoot, flowName) {
   }
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
+  const sigFile = signalPath(repoRoot, flowName);
+  if (existsSync4(sigFile)) unlinkSync(sigFile);
   await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
@@ -4318,16 +4327,16 @@ async function handlePostTool(input2) {
     const sig = signalPath(repoRoot, flowName);
     if (fp === sig) {
       const signalContent = readSignal(repoRoot, flowName);
-      if (signalContent) {
+      if (signalContent === "done") {
         const config = await loadFlowConfig(repoRoot, flowName);
         const stageCfg = getStageConfig(config, state.current_stage);
         const next = nextStage(config, state.current_stage);
-        const expectedContent = next !== null ? next : "flow-complete";
-        if (signalContent === expectedContent) {
-          if (stageCfg.completion.gate) {
-            await appendHookLog(repoRoot, flowName, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
-            return {
-              additionalContext: `[ai-flow] Stage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u3002
+        const normalizedSignal = next !== null ? next : "flow-complete";
+        if (stageCfg.completion.gate) {
+          writeSignalFile(repoRoot, flowName, normalizedSignal);
+          await appendHookLog(repoRoot, flowName, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
+          return {
+            additionalContext: `[ai-flow] Stage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u3002
 
 \u5411\u7528\u6237\u5448\u73B0\u672C\u9636\u6BB5\u7684\u5BA1\u67E5\u6458\u8981\uFF1A
 - \u5177\u4F53\u4EA4\u4ED8\u4E86\u4EC0\u4E48\uFF08\u5F15\u7528\u5B9E\u9645\u4EA7\u7269\uFF0C\u4E0D\u8981\u6CDB\u6CDB\u800C\u8C08\uFF09
@@ -4339,18 +4348,17 @@ async function handlePostTool(input2) {
   \u9700\u8981\u8C03\u6574 \u2192 \u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u89E6\u53D1
 
 \u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u7684\u4EFB\u4F55\u5DE5\u4F5C\u3002`
-            };
-          }
-          await appendHookLog(repoRoot, flowName, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
-          const result = await advanceStage(repoRoot, flowName);
-          const flowRoot = join5(repoRoot, ".ai-flow", flowName);
-          const pathsPreamble = `[ai-flow:paths]
+          };
+        }
+        await appendHookLog(repoRoot, flowName, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
+        const result = await advanceStage(repoRoot, flowName);
+        const flowRoot = join5(repoRoot, ".ai-flow", flowName);
+        const pathsPreamble = `[ai-flow:paths]
 project_root: ${repoRoot}
 flow_root: ${flowRoot}
 
 `;
-          return { additionalContext: pathsPreamble + result.additionalContext };
-        }
+        return { additionalContext: pathsPreamble + result.additionalContext };
       }
     }
     let flowContextCfg;
