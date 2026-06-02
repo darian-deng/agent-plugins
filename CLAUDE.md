@@ -50,6 +50,7 @@ npm run build   # 本地验证编译无误即可，不用 git add dist/
    - `plugins/ai-flow/package.json` → `"version"`
    - `plugins/ai-flow/.claude-plugin/plugin.json` → `"version"`
    - **不需要手动改** `.claude-plugin/marketplace.json`：CI 从 plugin.json 读版本并自动同步
+   - **提交前用 `git diff` 确认两个文件都已改**：版本号必须在 `git add` 之前写入磁盘，否则 staging 拿到的仍是旧版本，CI 也会同步错误版本到 marketplace.json
 3. `npm run build` 验证无编译错误
 4. 提交 `src/` + 版本号变更（**不提交 dist/**）
 5. push 到 main — CI 自动 build、同步 marketplace.json 版本、commit dist/
