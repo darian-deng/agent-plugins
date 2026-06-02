@@ -19,7 +19,7 @@
 - `docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
 - `docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
 - `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 注释删除理由 / 前置修订）
-- `.ai-flow/feat-flow/state/base_sha_code` — Stage 4 起点 SHA（用 `tail -1` 读取；文件两行：第一行 flow_id，第二行 SHA）
+- `.ai-flow/feat-flow/state/active.json` 中的 `base_sha_code` 字段 — Stage 4 起点 SHA
 
 ## 入场动作
 
@@ -56,7 +56,7 @@
 
 > 为什么不用专用安全/审查插件 agent：官方生态里没有"有文档、可验证调用、且是安全专项"的 subagent——`code-review` 插件是 PR 导向且把安全列为忽略项，`security-guidance` 是被动 hooks，`code-modernization:security-auditor` 是无文档的插件内部 agent（无法可靠调用）。故用 general-purpose **执行公认的 OWASP/CWE 标准**：被背书的是标准本身，不是 agent 外壳。
 
-> base SHA 取法：`tail -1 .ai-flow/feat-flow/state/base_sha_code`。下文 `<base>` 均指此值。
+> base SHA 取法：`python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code', '') or (print('ERROR: base_sha_code 缺失', end='') or '')"`。若字段缺失（极罕见：flow 跨版本续跑），Stage 4 Step 1 需重新执行。下文 `<base>` 均指此值。
 
 ### 视角①：集成 & 需求闭环审查（必跑）
 
@@ -95,7 +95,15 @@
 ```bash
 # 找依赖清单文件（排除 lock 文件）中是否有新增行
 # 覆盖主流生态：JS/TS、Python、Rust、Go、Ruby、Java/Kotlin、PHP、.NET
-BASE_SHA=$(tail -1 .ai-flow/feat-flow/state/base_sha_code)
+BASE_SHA=$(python3 -c "
+import json, sys
+d = json.load(open('.ai-flow/feat-flow/state/active.json'))
+sha = d.get('base_sha_code')
+if not sha:
+    print('ERROR: base_sha_code 未在 active.json 中找到，Stage 4 Step 1 可能未完成', file=sys.stderr)
+    sys.exit(1)
+print(sha)
+")
 MANIFEST_RE="package\.json$|requirements[^/]*\.txt$|Pipfile$|pyproject\.toml$|Cargo\.toml$|go\.mod$|Gemfile$|pom\.xml$|build\.gradle(\.kts)?$|\.csproj$|composer\.json$"
 ADDED_DEPS=$(git diff "$BASE_SHA"..HEAD --name-only \
   | grep -E "$MANIFEST_RE" \

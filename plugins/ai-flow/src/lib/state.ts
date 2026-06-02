@@ -28,6 +28,15 @@ export interface ActiveState {
    * undefined as "not yet handled".
    */
   first_prompt_handled?: boolean;
+  /**
+   * Git SHA of the "Stage 1-3 docs" commit created at the start of Stage 4.
+   * Stage 5 and Stage 6 use this as the diff base to scope reviews to only
+   * the code changes of the current flow. Set by Stage 4 Step 1; absent until
+   * then. Stored here (not as a separate file) so it is naturally flow-scoped:
+   * a new flow gets a fresh active.json with no base_sha_code, eliminating
+   * cross-flow pollution.
+   */
+  base_sha_code?: string;
 }
 
 function statePath(repoRoot: string, flowName: string, file: string): string {

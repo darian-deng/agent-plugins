@@ -30,7 +30,12 @@
 
 ### A1. 解析写入根目录（monorepo 兼容）
 
-- 列本次 flow 涉及的所有改动文件路径（`git diff $(tail -1 .ai-flow/feat-flow/state/base_sha_code) HEAD --name-only`）
+- 列本次 flow 涉及的所有改动文件路径：
+  ```bash
+  BASE_SHA=$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code',''))")
+  [ -z "$BASE_SHA" ] && { echo "ERROR: base_sha_code 缺失"; exit 1; }
+  git diff "$BASE_SHA" HEAD --name-only
+  ```
 - 计算「最深公共祖先目录」
 - CLAUDE.md / rules 写入对象 = **该目录**的 CLAUDE.md（不是 root，除非根才是公共祖先）
 
@@ -124,4 +129,4 @@ feat-flow 流程完成。
   → 审阅后按团队流程手动 git add + commit + push
 ```
 
-注：`BASE_SHA_CODE` 在 `.ai-flow/feat-flow/state/base_sha_code` 文件中。
+注：`BASE_SHA_CODE` 取自 `python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code',''))"` 或运行 `feat-flow status`。

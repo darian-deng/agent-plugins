@@ -59,8 +59,7 @@ docs/feat-flows/<flow_id>/
 └── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取）
 
 .ai-flow/feat-flow/state/
-├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等）
-├── base_sha_code            # 两行：第一行 flow_id（跨 flow 污染检测），第二行 commit SHA（Stage 5/6 diff 基准）
+├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等；含 base_sha_code 字段：Stage 4 起点 SHA，天然 flow-scoped）
 ├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
 └── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）
@@ -116,7 +115,7 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 
 详见 `docs/feat-flows/feat-flow-design/design.md` 第九节。简要：
 
-- SDD 默认 implementer-prompt 改为精选来源（Curated Sources）模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）
+- SDD 默认 implementer-prompt 改为精选来源（Curated Sources）模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）。具体到 dispatch prompt：plan 段里的代码块给指针不粘贴、red-green 步骤交给 `test-driven-development` skill 不内联、完整 task-report 模板不进 prompt（子代理只回精简形状）——TDD task 尤其严格执行这三条，防止 input 超重导致子代理首轮截断
 - NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答）
 
 ## 异常恢复

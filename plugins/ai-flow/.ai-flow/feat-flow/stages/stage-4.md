@@ -18,14 +18,19 @@ design.md / architecture.md **不在主 session 读取**——它们作为路径
 **先判首次进入还是 /clear 重入**：
 
 ```bash
-# 读当前 flow_id（active.json 永远存在于此刻）
-CURRENT_FLOW_ID=$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json'))['flow_id'])")
-# 读 base_sha_code 第一行：新格式存 flow_id，旧格式存 SHA——两者都不等于 CURRENT_FLOW_ID 时视为首次进入
-FILE_FLOW_ID=$(head -1 .ai-flow/feat-flow/state/base_sha_code 2>/dev/null || echo "NONE")
+# 检查 active.json 中是否已有 base_sha_code（Step 1 写入后才存在）
+HAS_BASE=$(python3 -c "
+import json
+try:
+    d = json.load(open('.ai-flow/feat-flow/state/active.json'))
+    print('yes' if d.get('base_sha_code') else 'no')
+except:
+    print('no')
+" 2>/dev/null)
 ```
 
-- **`FILE_FLOW_ID == CURRENT_FLOW_ID`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——覆写 base_sha_code 会污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环。其中遇到**已 commit 但无 `**审查**` 行的 task → 一律重跑两段评审**（无法区分「没审」还是「审了没回填」，重跑安全）。Step 0 的分支复核仍要做。
-- **`FILE_FLOW_ID != CURRENT_FLOW_ID`（含文件不存在）且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。若文件已存在但 flow_id 不匹配，输出提示：`⚠️ base_sha_code 属于 flow <FILE_FLOW_ID>，当前 flow 为 <CURRENT_FLOW_ID>，视为首次进入并覆写`。
+- **`HAS_BASE == yes`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——覆写 base_sha_code 会污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环。其中遇到**已 commit 但无 `**审查**` 行的 task → 一律重跑两段评审**（无法区分「没审」还是「审了没回填」，重跑安全）。Step 0 的分支复核仍要做。
+- **`HAS_BASE == no` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
 
 **Step 0：分支 + 工作树预检（任何 commit 之前）**
 
@@ -42,14 +47,20 @@ git status --porcelain
 ```sh
 git add docs/feat-flows/<flow_id>/
 git commit -m "docs: <feature> stage1-3 outputs"
-# 写两行：第一行 flow_id（用于跨 flow 污染检测），第二行 SHA（供 Stage 5/6 作 diff 起点）
-printf "%s\n%s\n" \
-  "$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json'))['flow_id'])")" \
-  "$(git rev-parse HEAD)" \
-  > .ai-flow/feat-flow/state/base_sha_code
+# 将 base_sha_code 写入 active.json（与 flow 生命周期绑定，自然 flow-scoped）
+python3 - << 'PYEOF'
+import json, os, subprocess
+path = '.ai-flow/feat-flow/state/active.json'
+data = json.load(open(path))
+data['base_sha_code'] = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
+tmp = path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(data, f, indent=2)
+os.rename(tmp, path)
+PYEOF
 ```
 
-把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 供 Stage 5/6 当 diff 起点（只看代码、不看 docs）。第一行的 `flow_id` 防止多 flow 顺序运行时读到上个 flow 的基准 SHA。
+把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 写入 active.json 作为 Stage 5/6 的 diff 起点（只看代码、不看 docs）。存入 active.json 而非独立文件，是因为 active.json 跟随 flow 的生命周期——新 flow 创建新 active.json，天然不会读到上个 flow 的基准 SHA。
 
 **Step 2：初始化 task-reports.md**
 
@@ -79,10 +90,17 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **子代理走 TDD**：若该 task 在 plan.md 标了走 TDD，implementer 子代理按 `test-driven-development` 实施。
 
+**TDD task 的 dispatch prompt 必须减重**（input 超重会让子代理在生成第一步工具调用前就被截断——红绿循环本身多步、plan 段又常内嵌测试/实现代码块，两者叠加最易在首轮挤爆上下文预算）。对标了 TDD 的 task，在常规〔精选来源〕之上再加这三条裁剪：
+- **不粘贴 plan 段里的代码块**：TDD 子代理的职责是先写测试、再让实现长出来；把成品代码当 input 喂进去既膨胀 prompt 又诱导跳过红绿直接抄。改为只给 plan.md **路径 + 该 task 的标题/编号 + `file:line` 锚点**，子代理自己 Read 对应段（含其中代码块）。
+- **不内联红绿步骤**：red-green-refactor 的过程已在 `test-driven-development` skill 里。prompt 只点名「按 test-driven-development 实施」+ 下面〔实施要求〕里 feat-flow 特有的几条增量（全量单测 / 不跑 lint·typecheck / 单 task 单 commit），不要把红→绿→重构在 prompt 里再叙述一遍。
+- **不塞完整 report 模板**：下面〔task report 格式〕是**主 session** 落盘用的模板，不是给子代理的输出契约。子代理只按〔实施要求〕末尾的**精简回报形状**返回，主 session 自己映射进完整模板。把 7 字段模板塞进 dispatch prompt 会让子代理一上来背上重输出契约，加剧首轮截断。
+
+非 TDD task 不受上述**后两条**约束（无红绿多步、无 report 模板泄漏风险）；**「不粘贴代码块」作为通用规则已在下面〔精选来源〕里适用于所有 task**，非 TDD task 同样遵守。
+
 **状态报告用中文**：implementer 用「完成 / 完成但有顾虑 / 受阻 / 需补充信息」四种状态报告（对应 SDD 的 DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT）。
 
 **每个 task 的 implementer prompt = 精选来源**（给指针，子代理按需读，不批量加载）：
-- 当前 task 完整文本（粘贴 plan.md 对应段）
+- 当前 task 的标题/编号 + 简短 AC 可内联；**task 段里的代码块不粘贴**，改给 plan.md 路径 + 该 task 锚点（标题/编号 + `file:line`），子代理自己 Read（代码块进 prompt = 最重的一项 input，且与 Curated Sources「给指针不灌内容」相悖）。TDD task 尤其严格，见上文三条裁剪
 - `docs/feat-flows/<flow_id>/design.md`、`architecture.md` 路径
 - `docs/feat-flows/<flow_id>/plan.md`（**仅供看前后 task 上下文，禁止跨 task 拿活**）
 - **该 task 相关的 ADR**：拿本 task 涉及的文件 / 模块，对照 Step 3 拿到的 ADR 索引（标题 + 状态）做相关性匹配，挑出相关 ADR 的**路径**（≤5 条）传给 implementer，由 implementer 按需读全文；主 session 自己不读 ADR 全文。每 task 各自选，不复用一份全局清单
@@ -98,6 +116,10 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
 - 单处一次性删除连续注释 ≥3 行，必须在 task report 写理由
 
+**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ 本 task 引入的新术语/模式（无则「无」）+ **注释删除：单处删除连续 ≥3 行注释的位置 + 理由（无则「无」）** + 顾虑或受阻原因（无则「无」）。下面〔task report 格式〕的其余字段（新增注释/context 候选/ADR 候选/前置修订）由**主 session** 在落盘时基于这份回报 + diff 自行补全，不要求子代理产出。
+
+**落盘保护（防止 /clear 丢失补全字段）**：子代理精简回报到手后，**立即**把原始精简回报作为 draft 追加到 task-reports.md，格式为 `## Task N: <标题> [draft]`（与正式版标题一致、加 `[draft]` 后缀），再读 diff 补全剩余字段。补全完成后，以 `## Task N: <标题>` 为锚点把整段 `[draft]` 替换为正式版本。这样即使 /clear 在补全过程中发生，精简回报和 commit SHA 已持久化，下次恢复可从 draft + diff 重建；恢复时若看到 `[draft]` 标记即知该 task 补全未完成。
+
 **两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。
 
 **知识沉淀**（task 到达 完成 / 完成但有顾虑 终态后做一次整体回顾——不是实施中随手记；完成但有顾虑 也要回顾）：
@@ -112,7 +134,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 ## task report 格式（每 task 完成后主 session 立即落盘）
 
-implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下面这段追加到 `task-reports.md`。无内容的字段填「无」：
+implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下面这段追加到 `task-reports.md`。无内容的字段填「无」。**这是主 session 的落盘模板，不是 dispatch prompt 的一部分——绝不整段塞进子代理 prompt**（子代理只按〔实施要求〕末尾的精简回报形状返回，主 session 据此 + diff 补全本模板各字段）：
 
 ```markdown
 ## Task N: <task 标题>
@@ -171,13 +193,13 @@ dispatch 第 N 个 task 前，主 session：读 `task-reports.md`（**从文件�
 ## 输出规格
 
 - plan.md 所有 task 标 `[x]`，每 task 一个 commit
-- `.ai-flow/feat-flow/state/base_sha_code` 存在
+- `active.json` 含 `base_sha_code` 字段（Step 1 写入）
 - `task-reports.md` 累积全部 task report（Stage 6 从此读 ADR 候选 / 新术语或模式 / context 候选）
 
 ## 完成条件
 
 - plan.md 所有 task 标 `[x]`
-- `base_sha_code` 存在
+- `active.json` 含 `base_sha_code` 字段
 - 全部 task 都有对应 commit
 - `task-reports.md` 含全部 task report（每 task 一段，含 `**审查**` 行）
 
