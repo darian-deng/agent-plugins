@@ -99,8 +99,19 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **状态报告用中文**：implementer 用「完成 / 完成但有顾虑 / 受阻 / 需补充信息」四种状态报告（对应 SDD 的 DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT）。
 
+**dispatch 前三项预处理**（每个 task 都做，不可省略）：
+
+1. **`read_first` 动态校验**：读 plan.md 该 task 的 `read_first` 列表，对每个路径执行 `ls <path>` 验证文件存在；用 `git diff HEAD~N --name-only` 确认前置 task 是否修改了这些文件（N = 已完成 task 数）。将有效路径列表连同"已被修改"标注注入 dispatch prompt。若文件不存在：检查 plan.md 中是否有前置 task 的 `Files: Create` 包含该路径——**有则判为预期前置产物**（在 dispatch prompt 中标注"此文件由前置 task 创建，若前置已完成应已存在"，不阻断）；**无则判为计划错误**（停下告知开发者，plan.md 可能有误，不继续 dispatch）。
+
+2. **`done` → `verify` 推导**：读 plan.md 该 task 的 `done` 字段。读 `design.md` 的**项目命令节**（单次读取，仅用于 verify 推导，不读 design.md 其他节），基于项目测试命令格式将 `done` 断言翻译成可直接运行的验证命令（例：`done` 含"返回 401"且测试命令为 `jest`→ `npx jest --testNamePattern="401"`）。将推导出的 verify 命令作为「本 task 实施完成后必须运行的验证」注入 dispatch prompt。
+
+3. **`contract` 注入**（仅对 `depends_on` 中**含有 `contract` 字段的 stub task** 的 task）：读这些 stub task 的 `contract` 字段，将其作为「前置契约约束——本 task 的 `done` 必须覆盖以下语义假设验证」注入 dispatch prompt。普通前置依赖（无 `contract` 字段）不触发此步骤。
+
 **每个 task 的 implementer prompt = 精选来源**（给指针，子代理按需读，不批量加载）：
-- 当前 task 的标题/编号 + 简短 AC 可内联；**task 段里的代码块不粘贴**，改给 plan.md 路径 + 该 task 锚点（标题/编号 + `file:line`），子代理自己 Read（代码块进 prompt = 最重的一项 input，且与 Curated Sources「给指针不灌内容」相悖）。TDD task 尤其严格，见上文三条裁剪
+- 当前 task 的标题/编号 + `done` 字段（行为级验收条件）+ 推导出的 verify 命令（来自预处理步骤 2）
+- plan.md 路径 + 该 task 的 `file:line` 锚点（子代理自己 Read，不在 prompt 里粘贴 task 段内容）
+- 已校验的 `read_first` 文件列表（来自预处理步骤 1）
+- 如有 `contract`：前置契约约束（来自预处理步骤 3）
 - `docs/feat-flows/<flow_id>/design.md`、`architecture.md` 路径
 - `docs/feat-flows/<flow_id>/plan.md`（**仅供看前后 task 上下文，禁止跨 task 拿活**）
 - **该 task 相关的 ADR**：拿本 task 涉及的文件 / 模块，对照 Step 3 拿到的 ADR 索引（标题 + 状态）做相关性匹配，挑出相关 ADR 的**路径**（≤5 条）传给 implementer，由 implementer 按需读全文；主 session 自己不读 ADR 全文。每 task 各自选，不复用一份全局清单
@@ -118,9 +129,14 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ 本 task 引入的新术语/模式（无则「无」）+ **注释删除：单处删除连续 ≥3 行注释的位置 + 理由（无则「无」）** + 顾虑或受阻原因（无则「无」）。下面〔task report 格式〕的其余字段（新增注释/context 候选/ADR 候选/前置修订）由**主 session** 在落盘时基于这份回报 + diff 自行补全，不要求子代理产出。
 
-**落盘保护（防止 /clear 丢失补全字段）**：子代理精简回报到手后，**立即**把原始精简回报作为 draft 追加到 task-reports.md，格式为 `## Task N: <标题> [draft]`（与正式版标题一致、加 `[draft]` 后缀），再读 diff 补全剩余字段。补全完成后，以 `## Task N: <标题>` 为锚点把整段 `[draft]` 替换为正式版本。这样即使 /clear 在补全过程中发生，精简回报和 commit SHA 已持久化，下次恢复可从 draft + diff 重建；恢复时若看到 `[draft]` 标记即知该 task 补全未完成。
+**落盘保护（防止 /clear 丢失补全字段）**：子代理精简回报到手后，**立即**把原始精简回报作为 draft 追加到 task-reports.md，格式为 `## Task N: <标题> [draft]`（与正式版标题一致、加 `[draft]` 后缀），再读 diff 补全剩余字段。补全完成后，以 `## Task N:` 前缀（不含标题全文）为锚点把整段 `[draft]` 替换为正式版本。这样即使 /clear 在补全过程中发生，精简回报和 commit SHA 已持久化，下次恢复可从 draft + diff 重建；恢复时若看到 `[draft]` 标记即知该 task 补全未完成。
 
-**两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。
+**两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
+
+**规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
+- **文件范围越界**：commit diff 中是否包含不在本 task `Files` 字段范围内的文件修改？（可通过 `git show <sha> --name-only` 机械检查）
+- **行为越界**：diff 中是否存在与本 task `done` 语义无关的新增函数 / 方法（具体方法：对比 diff 中新增的函数/方法名是否超出 `done` 断言所描述的行为范围）？
+越界发现 → 规格 FAIL，要求 subagent revert 越界部分后重新 commit。
 
 **知识沉淀**（task 到达 完成 / 完成但有顾虑 终态后做一次整体回顾——不是实施中随手记；完成但有顾虑 也要回顾）：
 

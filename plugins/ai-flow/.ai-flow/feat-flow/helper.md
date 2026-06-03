@@ -42,7 +42,7 @@ feat-flow help                      # 查看本文档
 |----|------|------|---------|
 | stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grill-me + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查） | ✅ | feature-dev:code-architect + general-purpose（架构审查） |
-| stage-3 | 实施计划 | ✅ | writing-plans |
+| stage-3 | 实施计划（AI 内部三轮 review，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | writing-plans + general-purpose（三轮内部 review） |
 | stage-4 | 代码实施 | ❌（无 Gate） | subagent-driven-development |
 | stage-5 | 质量门（回归 + 组装级双视角：集成闭环 + 强制安全） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review |
 | stage-6 | 知识沉淀（增 + 修 + 退役） | ❌（直接写入，汇总表确认） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
@@ -115,7 +115,8 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 
 详见 `docs/feat-flows/feat-flow-design/design.md` 第九节。简要：
 
-- SDD 默认 implementer-prompt 改为精选来源（Curated Sources）模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）。具体到 dispatch prompt：plan 段里的代码块给指针不粘贴、red-green 步骤交给 `test-driven-development` skill 不内联、完整 task-report 模板不进 prompt（子代理只回精简形状）——TDD task 尤其严格执行这三条，防止 input 超重导致子代理首轮截断
+- SDD 默认 implementer-prompt 改为精选来源（Curated Sources）模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）。具体到 dispatch prompt：plan.md 路径 + task 锚点（不粘贴 task 段内容）、red-green 步骤交给 `test-driven-development` skill 不内联、完整 task-report 模板不进 prompt（子代理只回精简形状）——TDD task 尤其严格执行这三条，防止 input 超重导致子代理首轮截断
+- Stage 3 plan.md 任务格式：不含代码块，每 task = `read_first`（动态校验后注入 dispatch）+ `done`（行为级断言，dispatch 时推导 verify 命令）+ 可选 `contract`（stub task 的语义契约，dispatch 填充 task 时注入）。粒度标准从时间估计改为「可独立验证的行为变化」
 - NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答）
 
 ## 异常恢复

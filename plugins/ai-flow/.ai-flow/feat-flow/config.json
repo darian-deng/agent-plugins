@@ -27,7 +27,7 @@
       "prompt": "stages/stage-3.md",
       "write_scope": "docs_only",
       "docs_paths": ["docs/feat-flows/"],
-      "completion": { "gate": true }
+      "completion": {}
     },
     {
       "id": "stage-4",

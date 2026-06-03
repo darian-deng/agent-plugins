@@ -33,15 +33,23 @@ ai-flow 的内容分三层，改之前先认清：
 
 src 访问受阻时，解决访问或询问，**不要退而读 dist/缓存**。
 
-### dist/ 由 CI 生成，不提交到仓库
+### 两套 build，用途不同
 
-`plugins/ai-flow/dist/` 已加入 `.gitignore`。本地开发时 build 仅用于验证，不需要提交 `dist/`。
-Push 到 main 后，GitHub Actions (`build-ai-flow.yml`) 自动编译并 force-commit `dist/` 到 main。
+| 命令 | 输出目录 | 用途 | gitignore |
+|------|----------|------|-----------|
+| `npm run build:local` | `dist-local/` | 本地开发、测试 hook 行为 | ✅ 已忽略 |
+| `npm run build` | `dist/` | **仅 CI 使用**，本地执行直接报错 | ✅ 已忽略 |
 
+**本地验证编译**：
 ```bash
 cd plugins/ai-flow
-npm run build   # 本地验证编译无误即可，不用 git add dist/
+npm run typecheck      # 最快：只做类型检查，不产生文件
+npm run build:local    # 需要实际运行 hook 时用，产物在 dist-local/
 ```
+
+**绝不要在本地跑 `npm run build`**——检测到非 CI 环境会直接报错退出。
+
+`dist/` 只由 CI 生成并 force-commit 到仓库，开发者不需要也不应该管它。
 
 ### 发布流程
 
@@ -51,8 +59,8 @@ npm run build   # 本地验证编译无误即可，不用 git add dist/
    - `plugins/ai-flow/.claude-plugin/plugin.json` → `"version"`
    - **不需要手动改** `.claude-plugin/marketplace.json`：CI 从 plugin.json 读版本并自动同步
    - **提交前用 `git diff` 确认两个文件都已改**：版本号必须在 `git add` 之前写入磁盘，否则 staging 拿到的仍是旧版本，CI 也会同步错误版本到 marketplace.json
-3. `npm run build` 验证无编译错误
-4. 提交 `src/` + 版本号变更（**不提交 dist/**）
+3. `npm run typecheck` 验证无类型错误（无需 build）
+4. 提交 `src/` + 版本号变更（**不提交 dist/ 或 dist-local/**）
 5. push 到 main — CI 自动 build、同步 marketplace.json 版本、commit dist/
 
 ### CI 行为说明
