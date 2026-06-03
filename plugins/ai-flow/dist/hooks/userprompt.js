@@ -4847,6 +4847,18 @@ async function handleUserPrompt(input2) {
     return makeOutput();
   }
   const { flowName, subCmd, args } = parsed;
+  const targetFlowState = await readActiveState(repoRoot, flowName).catch(() => null);
+  if (targetFlowState?.last_session_id && targetFlowState.last_session_id !== session_id) {
+    const shortOwner = targetFlowState.last_session_id.slice(0, 8);
+    const activeFile = activeJsonPath(repoRoot, flowName);
+    return resultToHookOutput({
+      action: "deny",
+      reason: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5F53\u524D\u7531 session '${shortOwner}...' \u63A7\u5236\uFF0C\u672C session \u4E0D\u53EF\u64CD\u4F5C\u3002
+\u6062\u590D\u6B65\u9AA4\uFF08\u8BEF\u62A5\u65F6\uFF09\uFF1A
+  1. \u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00 ${activeFile}\uFF0C\u5C06 "last_session_id" \u6539\u4E3A null \u5E76\u4FDD\u5B58\u3002
+  2. \u4FDD\u5B58\u5B8C\u6210\u540E\uFF0C\u5728\u672C session \u6267\u884C /clear\u3002`
+    });
+  }
   if (!subCmd || !VALID_COMMANDS.includes(subCmd)) {
     if (!subCmd) {
       return resultToHookOutput(await handleHelp(repoRoot, flowName), flowName);

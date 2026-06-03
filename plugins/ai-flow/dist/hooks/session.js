@@ -4307,11 +4307,36 @@ async function handleSessionStart(input2) {
   const { flowName, state, repoRoot } = active;
   try {
     await appendHookLog(repoRoot, flowName, `SESSION source=${input2.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
+    if (state.last_session_id && state.last_session_id !== session_id) {
+      const shortOwner = state.last_session_id.slice(0, 8);
+      const shortCurrent = session_id.slice(0, 8);
+      await appendHookLog(repoRoot, flowName, `SESSION_BLOCKED owner=${shortOwner} current=${shortCurrent}`);
+      const activeFile = activeJsonPath(repoRoot, flowName);
+      const statusLine2 = `\u26D4 [ai-flow:${flowName}] \u88AB session ${shortOwner}... \u9501\u5B9A`;
+      const lines2 = [
+        `[ai-flow] \u26A0\uFE0F \u6D41\u7A0B\u4E92\u65A5\u51B2\u7A81`,
+        ``,
+        `\u6D41\u7A0B '${flowName}' \u6B63\u7531 session '${shortOwner}...' \u63A7\u5236\u4E2D\u3002`,
+        `\u4E3A\u907F\u514D\u591A session \u5E76\u53D1\u5BFC\u81F4\u6D41\u7A0B\u63A7\u5236 bug\uFF0C**\u672C session \u4E0D\u5141\u8BB8\u4F7F\u7528\u4EFB\u4F55 ai-flow \u547D\u4EE4**\u3002`,
+        ``,
+        `\u8BF7\u544A\u77E5\u7528\u6237\uFF1A`,
+        `  \xB7 \u5982\u9700\u540C\u65F6\u8FDB\u884C\u5176\u4ED6\u5DE5\u4F5C\uFF0C\u8BF7\u7528 git worktree \u521B\u5EFA\u72EC\u7ACB\u5DE5\u4F5C\u7A7A\u95F4\uFF0C\u5728\u65B0 session \u4E2D\u64CD\u4F5C\u3002`,
+        `  \xB7 \u5982\u8BA4\u4E3A\u4E0A\u8FF0 session \u5DF2\u4E0D\u5B58\u5728\uFF08\u8BEF\u62A5\uFF09\uFF0C\u6062\u590D\u6B65\u9AA4\u5982\u4E0B\uFF08\u987A\u5E8F\u4E0D\u53EF\u98A0\u5012\uFF09\uFF1A`,
+        `    1. \u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00 ${activeFile}\uFF0C\u5C06 "last_session_id" \u6539\u4E3A null \u5E76\u4FDD\u5B58\u3002`,
+        `    2. \u4FDD\u5B58\u5B8C\u6210\u540E\uFF0C\u5728\u672C session \u6267\u884C /clear\u3002`
+      ];
+      return { additionalContext: lines2.join("\n"), systemMessage: statusLine2 };
+    }
     const isNewSession = state.last_session_id !== session_id;
     const isClear = input2.source === "compact" || input2.source === "clear";
+    const newHistoryIds = [...state.history_session_ids ?? []];
+    if (isNewSession && !newHistoryIds.includes(session_id)) {
+      newHistoryIds.push(session_id);
+    }
     const updated = {
       ...state,
       last_session_id: session_id,
+      history_session_ids: newHistoryIds,
       ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
     };
     if (isNewSession || isClear) {
