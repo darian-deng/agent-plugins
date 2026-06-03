@@ -101,6 +101,7 @@ export interface ActiveState {
   base_sha: string;
   started_at: string;
   last_session_id: string | null;
+  history_session_ids?: string[];
   context_size: number;
   context_warning: ContextWarning;
   context_blocked: boolean;

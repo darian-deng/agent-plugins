@@ -48,6 +48,18 @@
         ]
       }
     ],
-    "PreCompact": []
+    "PreCompact": [],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/sessionend.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

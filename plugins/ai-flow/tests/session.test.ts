@@ -133,13 +133,14 @@ describe('handleSessionStart', () => {
 
   it('new session → context_warning reset in state', async () => {
     const repo = makeRepo();
+    // last_session_id: null represents a cleanly ended prior session (SessionEnd cleared it)
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
       requirement: 'build',
       current_stage: 'work',
       base_sha: 'abc',
-      last_session_id: 'old-session',
+      last_session_id: null,
       context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
     });
     await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
@@ -181,13 +182,14 @@ describe('handleSessionStart', () => {
 
   it('last_session_id updated in active.json after session start', async () => {
     const repo = makeRepo();
+    // null = prior session ended cleanly; new session may claim ownership
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
       requirement: 'build',
       current_stage: 'work',
       base_sha: 'abc',
-      last_session_id: 'old-sess',
+      last_session_id: null,
     });
     await handleSessionStart(makeInput(repo.repoRoot, 'new-sess-123'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
@@ -247,13 +249,14 @@ describe('handleSessionStart', () => {
 
   it('new session → context_blocked reset to false in state', async () => {
     const repo = makeRepo();
+    // null = prior session ended cleanly; new session may claim ownership
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
       flow_name: 'test-flow',
       requirement: 'build',
       current_stage: 'work',
       base_sha: 'abc',
-      last_session_id: 'old-session',
+      last_session_id: null,
       context_blocked: true,
       context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z' },
     });
@@ -292,6 +295,84 @@ describe('handleSessionStart', () => {
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-new'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toContain('test-flow');
+  });
+
+  // ── Session mutex ──────────────────────────────────────────────────────────
+
+  it('different session owns flow → returns blocked response, state unchanged', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-session',
+    });
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'intruder-session'));
+    // Response should warn about conflict
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('owner-se'); // 8-char truncated owner id
+    expect(out!.additionalContext).toContain('last_session_id');
+    // State must NOT be modified — owner session id preserved and intruder not in history
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.last_session_id).toBe('owner-session');
+    expect(state!.history_session_ids ?? []).not.toContain('intruder-session');
+  });
+
+  it('same session re-enters → no mutex block', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-session',
+    });
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'owner-session'));
+    // Should not contain block message — use a stable marker, not the Chinese wording
+    expect(out!.additionalContext).not.toContain('last_session_id');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.last_session_id).toBe('owner-session');
+  });
+
+  it('history_session_ids accumulates across sessions', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: null,
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-a'));
+    // Simulate clean handoff: SessionEnd would set last_session_id to null
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      ...(await readActiveState(repo.repoRoot, 'test-flow'))!,
+      last_session_id: null,
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-b'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toContain('sess-a');
+    expect(state!.history_session_ids).toContain('sess-b');
+  });
+
+  it('same session re-entry does not duplicate in history_session_ids', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'sess-a',
+      history_session_ids: ['sess-a'],
+    });
+    await handleSessionStart(makeInput(repo.repoRoot, 'sess-a'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids!.filter((s) => s === 'sess-a').length).toBe(1);
   });
 
   // ── New protocol: AI writes 'done', session self-heal handles it ──

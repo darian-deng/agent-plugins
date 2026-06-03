@@ -8,7 +8,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { hasActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending } from './state.js';
+import { hasActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -97,6 +97,22 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   }
 
   const { flowName, subCmd, args } = parsed;
+
+  // Session ownership check: block non-owner sessions from issuing flow commands.
+  // Read the target flow's state directly so the check works even when the command
+  // targets a different flow than the one hasActiveFlow happened to return.
+  const targetFlowState = await readActiveState(repoRoot, flowName).catch(() => null);
+  if (targetFlowState?.last_session_id && targetFlowState.last_session_id !== session_id) {
+    const shortOwner = targetFlowState.last_session_id.slice(0, 8);
+    const activeFile = activeJsonPath(repoRoot, flowName);
+    return resultToHookOutput({
+      action: 'deny',
+      reason: `[ai-flow] 流程 '${flowName}' 当前由 session '${shortOwner}...' 控制，本 session 不可操作。\n` +
+        `恢复步骤（误报时）：\n` +
+        `  1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。\n` +
+        `  2. 保存完成后，在本 session 执行 /clear。`,
+    });
+  }
 
   // non-command message: unknown subcommand
   if (!subCmd || !VALID_COMMANDS.includes(subCmd as typeof VALID_COMMANDS[number])) {

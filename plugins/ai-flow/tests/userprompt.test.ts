@@ -158,4 +158,37 @@ describe('handleUserPrompt — routing', () => {
     // An unknown prefix should just pass through
     expect(o.permissionDecision).not.toBe('deny');
   });
+
+  // ── Session mutex enforcement ──────────────────────────────────────────────
+
+  it('non-owner session issues flow command → denied', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+    const out = await handleUserPrompt(makeInput('test-flow status', repo.repoRoot, 'intruder-sess'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
+    expect(o.permissionDecision).toBe('deny');
+    expect(o.permissionDecisionReason).toContain('owner-se'); // 8-char truncated owner id
+  });
+
+  it('owner session issues flow command → not denied', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+    const out = await handleUserPrompt(makeInput('test-flow status', repo.repoRoot, 'owner-sess'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+  });
 });

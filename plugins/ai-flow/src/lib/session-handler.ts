@@ -8,6 +8,7 @@ import {
   isGatePending,
   nextStage,
   appendHookLog,
+  activeJsonPath,
 } from './state.js';
 import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
@@ -28,14 +29,52 @@ export async function handleSessionStart(
   try {
   await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
 
+  // ── Session Mutex ─────────────────────────────────────────────────────────────
+  // If another session currently owns this flow, block this one from using ai-flow.
+  if (state.last_session_id && state.last_session_id !== session_id) {
+    const shortOwner = state.last_session_id.slice(0, 8);
+    const shortCurrent = session_id.slice(0, 8);
+    await appendHookLog(repoRoot, flowName, `SESSION_BLOCKED owner=${shortOwner} current=${shortCurrent}`);
+
+    const activeFile = activeJsonPath(repoRoot, flowName);
+    const statusLine = `⛔ [ai-flow:${flowName}] 被 session ${shortOwner}... 锁定`;
+    const lines = [
+      `[ai-flow] ⚠️ 流程互斥冲突`,
+      ``,
+      `流程 '${flowName}' 正由 session '${shortOwner}...' 控制中。`,
+      `为避免多 session 并发导致流程控制 bug，**本 session 不允许使用任何 ai-flow 命令**。`,
+      ``,
+      `请告知用户：`,
+      `  · 如需同时进行其他工作，请用 git worktree 创建独立工作空间，在新 session 中操作。`,
+      `  · 如认为上述 session 已不存在（误报），恢复步骤如下（顺序不可颠倒）：`,
+      `    1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
+      `    2. 保存完成后，在本 session 执行 /clear。`,
+    ];
+    return { additionalContext: lines.join('\n'), systemMessage: statusLine };
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const isNewSession = state.last_session_id !== session_id;
   // /clear and compact keep the same session_id, so isNewSession stays false.
   // Detect them via source to ensure context state is properly reset.
   const isClear = input.source === 'compact' || input.source === 'clear';
 
+  // Note: there is an inherent TOCTOU race here — two sessions could both read
+  // last_session_id=null and both pass the mutex check above before either writes.
+  // The atomic rename in writeActiveState prevents torn writes but not this race.
+  // In practice, two Claude Code sessions opening the same repo within milliseconds
+  // is rare enough that we accept the risk rather than add a lockfile.
+
+  // Track all sessions that have ever owned this flow (append-only).
+  const newHistoryIds = [...(state.history_session_ids ?? [])];
+  if (isNewSession && !newHistoryIds.includes(session_id)) {
+    newHistoryIds.push(session_id);
+  }
+
   const updated = {
     ...state,
     last_session_id: session_id,
+    history_session_ids: newHistoryIds,
     ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
   };
   if (isNewSession || isClear) {

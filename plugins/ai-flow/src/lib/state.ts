@@ -29,6 +29,11 @@ export interface ActiveState {
    */
   first_prompt_handled?: boolean;
   /**
+   * All session IDs that have ever been the owner of this flow instance.
+   * Append-only; used for auditing. Populated by SessionStart.
+   */
+  history_session_ids?: string[];
+  /**
    * Git SHA of the "Stage 1-3 docs" commit created at the start of Stage 4.
    * Stage 5 and Stage 6 use this as the diff base to scope reviews to only
    * the code changes of the current flow. Set by Stage 4 Step 1; absent until

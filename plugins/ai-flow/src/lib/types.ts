@@ -34,6 +34,10 @@ export interface SessionStartInput extends BaseHookInput {
   agent_type?: string;
 }
 
+export interface SessionEndInput extends BaseHookInput {
+  hook_event_name: 'SessionEnd';
+}
+
 // ─── Hook Output Types ─────────────────────────────────────────────────────────
 
 export interface PreToolOutput {
