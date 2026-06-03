@@ -37,15 +37,19 @@ src 访问受阻时，解决访问或询问，**不要退而读 dist/缓存**。
 
 | 命令 | 输出目录 | 用途 | gitignore |
 |------|----------|------|-----------|
-| `npm run build:local` | `dist-local/` | 本地开发、测试 hook 行为 | ✅ 已忽略 |
+| `npm run typecheck` | 无 | 本地验证编译，日常首选 | — |
+| `npm run test` | 无 | 单元测试，直接跑 src/ | — |
+| `npm run build:local` | `dist-local/` | 预留：E2E hook 测试（尚未建立） | ✅ 已忽略 |
 | `npm run build` | `dist/` | **仅 CI 使用**，本地执行直接报错 | ✅ 已忽略 |
 
-**本地验证编译**：
+**本地日常流程**：
 ```bash
 cd plugins/ai-flow
-npm run typecheck      # 最快：只做类型检查，不产生文件
-npm run build:local    # 需要实际运行 hook 时用，产物在 dist-local/
+npm run typecheck   # 验证编译，不产生任何文件
+npm test            # 跑单元测试
 ```
+
+`build:local` 当前无实际消费方（E2E hook 测试尚未建立），不需要在日常开发中运行。
 
 **绝不要在本地跑 `npm run build`**——检测到非 CI 环境会直接报错退出。
 
