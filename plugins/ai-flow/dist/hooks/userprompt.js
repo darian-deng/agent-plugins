@@ -4810,6 +4810,23 @@ async function handleUserPrompt(input2) {
   const { cwd, prompt, session_id } = input2;
   const active = await hasActiveFlow(cwd).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
+  if (active && active.state.last_session_id && active.state.last_session_id !== session_id) {
+    const shortOwner = active.state.last_session_id.slice(0, 8);
+    const activeFile = activeJsonPath(active.repoRoot, active.flowName);
+    return resultToHookOutput({
+      action: "deny",
+      reason: [
+        `\u26A0\uFE0F \u5F53\u524D session \u672A\u6301\u6709 '${active.flowName}' \u6D41\u7A0B\u63A7\u5236\u6743\uFF08\u6301\u6709\u8005\uFF1Asession ${shortOwner}...\uFF09\u3002`,
+        ``,
+        `\u4E3A\u907F\u514D\u591A session \u5E76\u53D1\u5BFC\u81F4\u6D41\u7A0B\u72B6\u6001\u635F\u574F\uFF0C\u672C session \u7684\u6240\u6709\u8F93\u5165\u5747\u88AB\u62D2\u7EDD\u3002`,
+        ``,
+        `\u5982\u9700\u540C\u65F6\u8FDB\u884C\u5176\u4ED6\u5DE5\u4F5C\uFF1A\u4F7F\u7528 git worktree \u521B\u5EFA\u72EC\u7ACB\u5DE5\u4F5C\u7A7A\u95F4\u540E\u5728\u65B0 session \u4E2D\u64CD\u4F5C\u3002`,
+        `\u5982\u8BA4\u4E3A\u6301\u6709\u8005 session \u5DF2\u4E0D\u5B58\u5728\uFF08\u8BEF\u62A5\uFF09\uFF0C\u6062\u590D\u6B65\u9AA4\uFF08\u987A\u5E8F\u4E0D\u53EF\u98A0\u5012\uFF09\uFF1A`,
+        `  1. \u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00 ${activeFile}\uFF0C\u5C06 "last_session_id" \u6539\u4E3A null \u5E76\u4FDD\u5B58\u3002`,
+        `  2. \u4FDD\u5B58\u5B8C\u6210\u540E\u6267\u884C /clear\u3002`
+      ].join("\n")
+    });
+  }
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
   if (!parsed) {
