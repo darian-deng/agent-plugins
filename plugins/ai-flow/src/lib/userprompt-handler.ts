@@ -52,6 +52,29 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   const active = await hasActiveFlow(cwd).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
 
+  // ── Global session mutex guard ──────────────────────────────────────────────
+  // If this session is not the owner of the active flow, deny ALL prompts
+  // unconditionally. This is a protocol-level block: Claude never sees the
+  // user's input; only the denial reason is shown.
+  if (active && active.state.last_session_id && active.state.last_session_id !== session_id) {
+    const shortOwner = active.state.last_session_id.slice(0, 8);
+    const activeFile = activeJsonPath(active.repoRoot, active.flowName);
+    return resultToHookOutput({
+      action: 'deny',
+      reason: [
+        `⚠️ 当前 session 未持有 '${active.flowName}' 流程控制权（持有者：session ${shortOwner}...）。`,
+        ``,
+        `为避免多 session 并发导致流程状态损坏，本 session 的所有输入均被拒绝。`,
+        ``,
+        `如需同时进行其他工作：使用 git worktree 创建独立工作空间后在新 session 中操作。`,
+        `如认为持有者 session 已不存在（误报），恢复步骤（顺序不可颠倒）：`,
+        `  1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
+        `  2. 保存完成后执行 /clear。`,
+      ].join('\n'),
+    });
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
 

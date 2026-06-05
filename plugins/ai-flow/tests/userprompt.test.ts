@@ -177,6 +177,23 @@ describe('handleUserPrompt — routing', () => {
     expect(o.permissionDecisionReason).toContain('owner-se'); // 8-char truncated owner id
   });
 
+  it('non-owner session sends any prompt → globally denied (not just flow commands)', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+    // A plain non-flow-command prompt must also be denied
+    const out = await handleUserPrompt(makeInput('hello world', repo.repoRoot, 'intruder-sess'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
+    expect(o.permissionDecision).toBe('deny');
+    expect(o.permissionDecisionReason).toContain('owner-se');
+  });
+
   it('owner session issues flow command → not denied', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -188,6 +205,21 @@ describe('handleUserPrompt — routing', () => {
       last_session_id: 'owner-sess',
     });
     const out = await handleUserPrompt(makeInput('test-flow status', repo.repoRoot, 'owner-sess'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+  });
+
+  it('owner session sends plain prompt → not denied', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+    const out = await handleUserPrompt(makeInput('hello world', repo.repoRoot, 'owner-sess'));
     const o = out.hookSpecificOutput as { permissionDecision?: string };
     expect(o.permissionDecision).not.toBe('deny');
   });
