@@ -44,11 +44,15 @@ export async function handleSessionStart(
       `流程 '${flowName}' 正由 session '${shortOwner}...' 控制中。`,
       `为避免多 session 并发导致流程控制 bug，**本 session 不允许使用任何 ai-flow 命令**。`,
       ``,
-      `请告知用户：`,
-      `  · 如需同时进行其他工作，请用 git worktree 创建独立工作空间，在新 session 中操作。`,
-      `  · 如认为上述 session 已不存在（误报），恢复步骤如下（顺序不可颠倒）：`,
-      `    1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
-      `    2. 保存完成后，在本 session 执行 /clear。`,
+      `**你的第一句回复必须主动告知用户以下内容（无论用户说了什么）**：`,
+      `「⚠️ 当前 session 已被 ${flowName} 流程锁定（控制 session：${shortOwner}...）。`,
+      `本 session 无法执行任何 ai-flow 操作。`,
+      `如需同时进行其他工作，请用 git worktree 创建独立工作空间后在新 session 中操作。`,
+      `如认为上述 session 已不存在（误报），恢复步骤（顺序不可颠倒）：`,
+      `1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
+      `2. 保存完成后执行 /clear。」`,
+      ``,
+      `告知完毕后，可正常回应用户的非 ai-flow 请求。`,
     ];
     return { additionalContext: lines.join('\n'), systemMessage: statusLine };
   }
