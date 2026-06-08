@@ -1,14 +1,14 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { readActiveState, appendTransition } from '../state.js';
+import { readActiveState, appendLog } from '../state.js';
 import type { CommandResult } from '../types.js';
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' }).trim();
 }
 
-export async function handleAbort(repoRoot: string, flowName: string, args: string = ''): Promise<CommandResult> {
+export async function handleAbort(repoRoot: string, flowName: string, sessionId: string, args: string = ''): Promise<CommandResult> {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { action: 'deny', reason: 'No active flow to abort.' };
@@ -62,7 +62,7 @@ export async function handleAbort(repoRoot: string, flowName: string, args: stri
     if (originalBranch && originalBranch !== 'HEAD') {
       try { git(['checkout', originalBranch], repoRoot); } catch { /* best-effort */ }
     }
-    await appendTransition(repoRoot, flowName, `ABORT_ERROR ${String(err)}`);
+    await appendLog(repoRoot, flowName, sessionId, `ABORT_ERROR ${String(err)}`);
     const reason = snapshotCommitted
       ? `Abort partially failed: snapshot was committed to '${branchName}' but could not switch back.\n` +
         `Error: ${String(err)}\n` +
@@ -77,7 +77,7 @@ export async function handleAbort(repoRoot: string, flowName: string, args: stri
   // Only reach here if the entire git sequence succeeded.
   const activeJsonPath = join(repoRoot, '.ai-flow', flowName, 'state', 'active.json');
   if (existsSync(activeJsonPath)) unlinkSync(activeJsonPath);
-  await appendTransition(repoRoot, flowName, `ABORTED branch=${branchName}`);
+  await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
 
   const headNote = (!originalBranch || originalBranch === 'HEAD')
     ? `\nNote: you were in detached HEAD state; HEAD is now on '${branchName}'.`

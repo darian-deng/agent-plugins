@@ -4,8 +4,7 @@ import {
   readActiveState,
   writeActiveState,
   nextStage,
-  appendTransition,
-  appendHookLog,
+  appendLog,
   activeJsonPath,
   signalPath,
 } from './state.js';
@@ -22,7 +21,7 @@ export interface AdvanceResult {
  *
  * Used by: pretool-handler (none/script), approve.ts, session-handler (self-heal).
  */
-export async function advanceStage(repoRoot: string, flowName: string): Promise<AdvanceResult> {
+export async function advanceStage(repoRoot: string, flowName: string, sessionId: string): Promise<AdvanceResult> {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -39,8 +38,7 @@ export async function advanceStage(repoRoot: string, flowName: string): Promise<
     // Clean up signal file so stale 'flow-complete' doesn't trigger S2 self-heal on a future flow
     const sig = signalPath(repoRoot, flowName);
     if (existsSync(sig)) unlinkSync(sig);
-    await appendTransition(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
-    await appendHookLog(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
+    await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
 
     return {
       additionalContext:
@@ -57,8 +55,7 @@ export async function advanceStage(repoRoot: string, flowName: string): Promise<
   // Clear signal so the new stage starts without a stale trigger
   const sigFile = signalPath(repoRoot, flowName);
   if (existsSync(sigFile)) unlinkSync(sigFile);
-  await appendTransition(repoRoot, flowName, `ADVANCED ${current} → ${next}`);
-  await appendHookLog(repoRoot, flowName, `ADVANCED ${current} → ${next}`);
+  await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} → ${next}`);
 
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join(repoRoot, '.ai-flow', flowName, nextStageCfg.prompt);

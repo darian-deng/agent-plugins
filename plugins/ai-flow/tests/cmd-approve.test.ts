@@ -21,7 +21,7 @@ function makeRepo() {
 describe('handleApprove', () => {
   it("no active flow → error 'no active flow'", async () => {
     const repo = makeRepo();
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/no active flow/i);
   });
@@ -36,7 +36,7 @@ describe('handleApprove', () => {
       base_sha: 'abc',
     });
     // No signal written — not a gate stage (work has no gate)
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     // New: specific message distinguishes "no signal yet" case
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/signal|completion|does not require/i);
@@ -53,7 +53,7 @@ describe('handleApprove', () => {
     });
     // Signal content doesn't match nextStage for review (which is terminal → 'flow-complete')
     writeSignal(repo.repoRoot, 'test-flow', 'wrong-content');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     // New: specific message distinguishes "wrong signal content" case
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/signal|does not match|checkpoint/i);
@@ -81,7 +81,7 @@ describe('handleApprove', () => {
     });
     // Signal must contain nextStageId = 'review'
     writeSignal(repo.repoRoot, 'test-flow', 'review');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('allow');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
@@ -108,7 +108,7 @@ describe('handleApprove', () => {
       base_sha: 'abc',
     });
     writeSignal(repo.repoRoot, 'test-flow', 'review');
-    await handleApprove(repo.repoRoot, 'test-flow');
+    await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
   });
@@ -125,7 +125,7 @@ describe('handleApprove', () => {
     });
     // Terminal stage signal must be 'flow-complete'
     writeSignal(repo.repoRoot, 'test-flow', 'flow-complete');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('allow');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state).toBeNull();
@@ -144,7 +144,7 @@ describe('handleApprove', () => {
       requirement: 'test', current_stage: 'work', base_sha: 'abc',
     });
     writeSignal(repo.repoRoot, 'test-flow', 'done');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('allow');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('review');
@@ -158,7 +158,7 @@ describe('handleApprove', () => {
       requirement: 'test', current_stage: 'review', base_sha: 'abc',
     });
     writeSignal(repo.repoRoot, 'test-flow', 'done');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('allow');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state).toBeNull();
@@ -172,7 +172,7 @@ describe('handleApprove', () => {
       requirement: 'test', current_stage: 'work', base_sha: 'abc',
     });
     writeSignal(repo.repoRoot, 'test-flow', 'done');
-    const result = await handleApprove(repo.repoRoot, 'test-flow');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/does not require/i);
   });

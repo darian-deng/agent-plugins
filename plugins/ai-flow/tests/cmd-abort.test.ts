@@ -22,7 +22,7 @@ function makeRepo() {
 describe('handleAbort', () => {
   it("no active flow → error 'no active flow'", async () => {
     const repo = makeRepo();
-    const result = await handleAbort(repo.repoRoot, 'test-flow');
+    const result = await handleAbort(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/no active flow/i);
   });
@@ -36,7 +36,7 @@ describe('handleAbort', () => {
       current_stage: 'work',
       base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
     });
-    const result = await handleAbort(repo.repoRoot, 'test-flow');
+    const result = await handleAbort(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/--confirm/);
     // state must NOT be deleted — abort without confirm is a no-op
@@ -53,7 +53,7 @@ describe('handleAbort', () => {
       current_stage: 'work',
       base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
     });
-    const result = await handleAbort(repo.repoRoot, 'test-flow', '--confirm');
+    const result = await handleAbort(repo.repoRoot, 'test-flow', 'test-sess', '--confirm');
     expect(result.action).toBe('allow');
     const branches = execSync('git branch', { cwd: repo.repoRoot, encoding: 'utf-8' });
     expect(branches).toMatch(/test-flow\/aborted-/);
@@ -68,7 +68,7 @@ describe('handleAbort', () => {
       current_stage: 'work',
       base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
     });
-    await handleAbort(repo.repoRoot, 'test-flow', '--confirm');
+    await handleAbort(repo.repoRoot, 'test-flow', 'test-sess', '--confirm');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state).toBeNull();
   });
@@ -84,7 +84,7 @@ describe('handleAbort', () => {
       base_sha: baseSha,
     });
     writeSignal(repo.repoRoot, 'test-flow', 'review');
-    await handleAbort(repo.repoRoot, 'test-flow', '--confirm');
+    await handleAbort(repo.repoRoot, 'test-flow', 'test-sess', '--confirm');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state).toBeNull();
   });
@@ -98,7 +98,7 @@ describe('handleAbort', () => {
       current_stage: 'work',
       base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
     });
-    await handleAbort(repo.repoRoot, 'test-flow', '--confirm');
+    await handleAbort(repo.repoRoot, 'test-flow', 'test-sess', '--confirm');
     const branches = execSync('git branch', { cwd: repo.repoRoot, encoding: 'utf-8' });
     expect(branches).toMatch(/test-flow\/aborted-\d{4}-\d{2}-\d{2}/);
   });

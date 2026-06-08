@@ -2,9 +2,7 @@ import { join, relative, resolve } from 'path';
 import type { PreToolInput } from './types.js';
 import {
   hasActiveFlow,
-  appendTransition,
-  appendViolation,
-  appendHookLog,
+  appendLog,
   signalPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
@@ -35,7 +33,7 @@ function resolvePath(repoRoot: string, filePath: string): string {
 }
 
 export async function handlePreTool(input: PreToolInput): Promise<PreToolResult | null> {
-  const { cwd, tool_name, tool_input } = input;
+  const { cwd, tool_name, tool_input, session_id } = input;
 
   const active = await hasActiveFlow(cwd).catch(() => null);
   if (!active) return null;
@@ -104,7 +102,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // path. Write also auto-creates parent dirs, so the misplacement is silent. Force
   // an absolute, repoRoot-anchored path before any path-based check runs.
   if (!fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
-    await appendViolation(repoRoot, activeFlowName, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
+    await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
     return deny(
       `feat-flow expects the working directory to be the flow root (${repoRoot}), but the current ` +
       `cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' ` +
@@ -119,13 +117,13 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
 
   // ─── Signal interception ─────────────────────────────────────────────────────
   if (absPath === signalPath(repoRoot, activeFlowName)) {
-    await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
+    await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
     const stageCfg = getStageConfig(config, state.current_stage);
     const signalContent = String(tool_input['content'] ?? '').trim();
 
     // Validate signal content: AI must always write exactly 'done'
     if (signalContent !== 'done') {
-      await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INVALID expected=done got=${signalContent}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INVALID expected=done got=${signalContent}`);
       return deny(
         `Invalid signal content for stage '${state.current_stage}'. ` +
         `Write exactly 'done' to the signal file to trigger stage completion. Got: '${signalContent}'.`
@@ -140,19 +138,19 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
         : undefined;
       const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
       if (!scriptResult.ok) {
-        await appendHookLog(repoRoot, activeFlowName, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
+        await appendLog(repoRoot, activeFlowName, session_id, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
         return deny(`Script validation failed:\n${scriptResult.reason}\n\nFix the issues and try again.`);
       }
     }
 
     // Gate type: ALLOW (PostToolUse will detect gate via signal content and handle pending state)
     if (stageCfg.completion.gate) {
-      await appendHookLog(repoRoot, activeFlowName, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
       return allow();
     }
 
     // None/script type (non-gate): ALLOW — PostToolUse will advance stage and inject next prompt
-    await appendHookLog(repoRoot, activeFlowName, `SIGNAL_ALLOW stage=${state.current_stage}`);
+    await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_ALLOW stage=${state.current_stage}`);
     return allow();
   }
 
@@ -162,25 +160,25 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
 
   // active.json direct write
   if (rel === join(flowBase, 'state', 'active.json')) {
-    await appendViolation(repoRoot, activeFlowName, `BLOCKED direct write to active.json`);
+    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json`);
     return deny('Direct writes to active.json are blocked (control plane protection).');
   }
 
   // config.json
   if (rel === join(flowBase, 'config.json')) {
-    await appendViolation(repoRoot, activeFlowName, `BLOCKED write to config.json`);
+    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json`);
     return deny('config.json is read-only during flow execution.');
   }
 
   // stages/
   if (rel.startsWith(join(flowBase, 'stages') + '/')) {
-    await appendViolation(repoRoot, activeFlowName, `BLOCKED write to stage prompt: ${fp}`);
+    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
     return deny('Stage prompt files are read-only during flow execution.');
   }
 
   // scripts/ — special message
   if (rel.startsWith(join(flowBase, 'scripts') + '/')) {
-    await appendViolation(repoRoot, activeFlowName, `BLOCKED write to scripts: ${fp}`);
+    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
     return deny('Script files cannot be modified during flow execution. Ask the user to replace them manually.');
   }
 
@@ -194,7 +192,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       return rel.startsWith(norm) || absPath.startsWith(join(repoRoot, norm));
     });
     if (!allowed) {
-      await appendViolation(repoRoot, activeFlowName, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
       return deny(
         `Write scope violation: stage '${state.current_stage}' is docs_only.\n` +
         `Allowed paths: ${docsPaths.join(', ')}\n` +
@@ -207,8 +205,8 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
 
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, activeFlowName, `ERROR pretool tool=${tool_name}: ${truncateError(e)}`);
-    } catch { /* appendHookLog itself failed */ }
+      await appendLog(repoRoot, activeFlowName, session_id, `ERROR pretool tool=${tool_name}: ${truncateError(e)}`);
+    } catch { /* appendLog itself failed */ }
     return null;
   }
 }

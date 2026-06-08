@@ -38,14 +38,14 @@ function createAbortBranch(
 describe('handleResume', () => {
   it('no branch name → error with usage hint', async () => {
     const repo = makeRepo();
-    const result = await handleResume(repo.repoRoot, 'test-flow', '');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', '');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/usage|branch/i);
   });
 
   it('branch does not exist → error', async () => {
     const repo = makeRepo();
-    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-nonexistent');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-nonexistent');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/not found|does not exist/i);
   });
@@ -54,7 +54,7 @@ describe('handleResume', () => {
     const repo = makeRepo();
     execSync('git checkout -b test-flow/aborted-no-snapshot', { cwd: repo.repoRoot });
     execSync('git checkout -', { cwd: repo.repoRoot });
-    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-no-snapshot');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-no-snapshot');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/snapshot|not found/i);
   });
@@ -73,7 +73,7 @@ describe('handleResume', () => {
       context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-2024-01-01T00-00-00', snapshot);
-    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-2024-01-01T00-00-00');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-2024-01-01T00-00-00');
     expect(result.action).toBe('allow');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('work');
@@ -94,7 +94,7 @@ describe('handleResume', () => {
       context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-resume-test', snapshot);
-    await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-resume-test');
+    await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-resume-test');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.last_session_id).toBeNull();
   });
@@ -108,7 +108,7 @@ describe('handleResume', () => {
       current_stage: 'work',
       base_sha: 'abc',
     });
-    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-something');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-something');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/already active|abort/i);
   });
@@ -127,7 +127,7 @@ describe('handleResume', () => {
       context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-ctx-test', snapshot);
-    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-flow/aborted-ctx-test');
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-ctx-test');
     expect(result.action).toBe('allow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
     expect(ctx).toContain('Stage: work');

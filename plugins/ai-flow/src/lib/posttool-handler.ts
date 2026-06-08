@@ -5,7 +5,7 @@ import {
   hasActiveFlow,
   writeActiveState,
   writeSignalFile,
-  appendHookLog,
+  appendLog,
   signalPath,
   readSignal,
   nextStage,
@@ -48,7 +48,7 @@ export async function handlePostTool(
       if (stageCfg.completion.gate) {
         // Rewrite signal to the proper gate indicator for session recovery
         writeSignalFile(repoRoot, flowName, normalizedSignal);
-        await appendHookLog(repoRoot, flowName, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
+        await appendLog(repoRoot, flowName, session_id, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
         return {
           additionalContext:
             `[ai-flow] Stage '${state.current_stage}' 已提交，等待人工确认。\n\n` +
@@ -64,8 +64,8 @@ export async function handlePostTool(
       }
 
       // none/script completion — advance immediately
-      await appendHookLog(repoRoot, flowName, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName);
+      await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
+      const result = await advanceStage(repoRoot, flowName, session_id);
       const flowRoot = join(repoRoot, '.ai-flow', flowName);
       const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
       return { additionalContext: pathsPreamble + result.additionalContext };
@@ -129,8 +129,8 @@ export async function handlePostTool(
 
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, flowName, `ERROR posttool tool=${tool_name}: ${truncateError(e)}`);
-    } catch { /* appendHookLog itself failed */ }
+      await appendLog(repoRoot, flowName, session_id, `ERROR posttool tool=${tool_name}: ${truncateError(e)}`);
+    } catch { /* appendLog itself failed */ }
     return null;
   }
 }

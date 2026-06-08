@@ -57,12 +57,12 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // unconditionally. This is a protocol-level block: Claude never sees the
   // user's input; only the denial reason is shown.
   if (active && active.state.last_session_id && active.state.last_session_id !== session_id) {
-    const shortOwner = active.state.last_session_id.slice(0, 8);
+    const ownerSession = active.state.last_session_id;
     const activeFile = activeJsonPath(active.repoRoot, active.flowName);
     return resultToHookOutput({
       action: 'deny',
       reason: [
-        `⚠️ 当前 session 未持有 '${active.flowName}' 流程控制权（持有者：session ${shortOwner}...）。`,
+        `⚠️ 当前 session 未持有 '${active.flowName}' 流程控制权（持有者：session ${ownerSession}）。`,
         ``,
         `为避免多 session 并发导致流程状态损坏，本 session 的所有输入均被拒绝。`,
         ``,
@@ -126,11 +126,11 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // targets a different flow than the one hasActiveFlow happened to return.
   const targetFlowState = await readActiveState(repoRoot, flowName).catch(() => null);
   if (targetFlowState?.last_session_id && targetFlowState.last_session_id !== session_id) {
-    const shortOwner = targetFlowState.last_session_id.slice(0, 8);
+    const ownerSession = targetFlowState.last_session_id;
     const activeFile = activeJsonPath(repoRoot, flowName);
     return resultToHookOutput({
       action: 'deny',
-      reason: `[ai-flow] 流程 '${flowName}' 当前由 session '${shortOwner}...' 控制，本 session 不可操作。\n` +
+      reason: `[ai-flow] 流程 '${flowName}' 当前由 session '${ownerSession}' 控制，本 session 不可操作。\n` +
         `恢复步骤（误报时）：\n` +
         `  1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。\n` +
         `  2. 保存完成后，在本 session 执行 /clear。`,
@@ -156,13 +156,13 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
       break;
     }
     case 'approve':
-      result = await handleApprove(repoRoot, flowName, args);
+      result = await handleApprove(repoRoot, flowName, session_id, args);
       break;
     case 'abort':
-      result = await handleAbort(repoRoot, flowName, args);
+      result = await handleAbort(repoRoot, flowName, session_id, args);
       break;
     case 'resume':
-      result = await handleResume(repoRoot, flowName, args);
+      result = await handleResume(repoRoot, flowName, session_id, args);
       break;
     case 'status':
       result = await handleStatus(repoRoot, flowName);

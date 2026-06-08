@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
-import { hasActiveFlow, writeActiveState, appendTransition, type ActiveState } from '../state.js';
+import { hasActiveFlow, writeActiveState, appendLog, type ActiveState } from '../state.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 import type { CommandResult } from '../types.js';
@@ -106,7 +106,7 @@ export async function handleStart(
   };
 
   await writeActiveState(repoRoot, flowName, state);
-  await appendTransition(repoRoot, flowName, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
+  await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
 
   const promptPath = join(repoRoot, '.ai-flow', flowName, firstStage.prompt);
   let stageContent = '';

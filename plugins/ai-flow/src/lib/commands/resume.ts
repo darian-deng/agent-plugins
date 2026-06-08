@@ -4,7 +4,7 @@ import { join } from 'path';
 import {
   readActiveState,
   writeActiveState,
-  appendTransition,
+  appendLog,
   type ActiveState,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
@@ -13,6 +13,7 @@ import type { CommandResult } from '../types.js';
 export async function handleResume(
   repoRoot: string,
   flowName: string,
+  sessionId: string,
   branch: string
 ): Promise<CommandResult> {
   const trimmedBranch = branch.trim();
@@ -85,7 +86,7 @@ export async function handleResume(
   };
 
   await writeActiveState(repoRoot, flowName, restored);
-  await appendTransition(repoRoot, flowName, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
+  await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
 
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);

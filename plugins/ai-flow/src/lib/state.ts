@@ -132,22 +132,11 @@ export function isGatePending(signal: string | null, config: FlowConfig, current
   return signal === 'flow-complete';
 }
 
-export async function appendTransition(repoRoot: string, flowName: string, message: string): Promise<void> {
-  const path = statePath(repoRoot, flowName, 'transitions.log');
+export async function appendLog(repoRoot: string, flowName: string, sessionId: string, message: string): Promise<void> {
+  const logPath = statePath(repoRoot, flowName, 'flow.log');
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
-}
-
-export async function appendViolation(repoRoot: string, flowName: string, message: string): Promise<void> {
-  const path = statePath(repoRoot, flowName, 'violations.log');
-  const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
-}
-
-export async function appendHookLog(repoRoot: string, flowName: string, message: string): Promise<void> {
-  const path = statePath(repoRoot, flowName, 'hooks.log');
-  const timestamp = new Date().toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}\n`);
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}\n`);
 }
 
 export function nextStage(config: FlowConfig, currentStageId: string): string | null {

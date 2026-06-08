@@ -7,7 +7,7 @@ import {
   readSignal,
   isGatePending,
   nextStage,
-  appendHookLog,
+  appendLog,
   activeJsonPath,
 } from './state.js';
 import { truncateError, flowStatusLine } from './format.js';
@@ -27,25 +27,24 @@ export async function handleSessionStart(
   const { flowName, state, repoRoot } = active;
 
   try {
-  await appendHookLog(repoRoot, flowName, `SESSION source=${input.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
+  await appendLog(repoRoot, flowName, session_id, `SESSION source=${input.source} stage=${state.current_stage}`);
 
   // ── Session Mutex ─────────────────────────────────────────────────────────────
   // If another session currently owns this flow, block this one from using ai-flow.
   if (state.last_session_id && state.last_session_id !== session_id) {
-    const shortOwner = state.last_session_id.slice(0, 8);
-    const shortCurrent = session_id.slice(0, 8);
-    await appendHookLog(repoRoot, flowName, `SESSION_BLOCKED owner=${shortOwner} current=${shortCurrent}`);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_BLOCKED owner=${state.last_session_id}`);
 
+    const ownerSession = state.last_session_id;
     const activeFile = activeJsonPath(repoRoot, flowName);
-    const statusLine = `⛔ [ai-flow:${flowName}] 被 session ${shortOwner}... 锁定`;
+    const statusLine = `⛔ [ai-flow:${flowName}] 被 session ${ownerSession} 锁定`;
     const lines = [
       `[ai-flow] ⚠️ 流程互斥冲突`,
       ``,
-      `流程 '${flowName}' 正由 session '${shortOwner}...' 控制中。`,
+      `流程 '${flowName}' 正由 session '${ownerSession}' 控制中。`,
       `为避免多 session 并发导致流程控制 bug，**本 session 不允许使用任何 ai-flow 命令**。`,
       ``,
       `**你的第一句回复必须主动告知用户以下内容（无论用户说了什么）**：`,
-      `「⚠️ 当前 session 已被 ${flowName} 流程锁定（控制 session：${shortOwner}...）。`,
+      `「⚠️ 当前 session 已被 ${flowName} 流程锁定（控制 session：${ownerSession}）。`,
       `本 session 无法执行任何 ai-flow 操作。`,
       `如需同时进行其他工作，请用 git worktree 创建独立工作空间后在新 session 中操作。`,
       `如认为上述 session 已不存在（误报），恢复步骤（顺序不可颠倒）：`,
@@ -111,7 +110,7 @@ export async function handleSessionStart(
 
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {
-    await appendHookLog(repoRoot, flowName, `SESSION_GATE_PENDING stage=${state.current_stage}`);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
     const statusLine = flowStatusLine({
       flowName,
       stageId: state.current_stage,
@@ -133,15 +132,15 @@ export async function handleSessionStart(
 
   // S2: flow-complete signal at terminal stage (no gate) — self-heal
   if (isFlowComplete && !stageCfg.completion.gate) {
-    await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
-    const result = await advanceStage(repoRoot, flowName);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
+    const result = await advanceStage(repoRoot, flowName, session_id);
     return { additionalContext: pathsPreamble + result.additionalContext };
   }
 
   // S1 + none/script: self-heal advance
   if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
-    await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
-    const result = await advanceStage(repoRoot, flowName);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
+    const result = await advanceStage(repoRoot, flowName, session_id);
     // expectedNext is the stage we just advanced into (it was the signal value)
     const base = { additionalContext: pathsPreamble + result.additionalContext };
     if (!result.terminal && expectedNext) {
@@ -152,7 +151,7 @@ export async function handleSessionStart(
 
   // S0 (no signal), S3 (stale/invalid content), or invalid → Normal recovery
   // Inject current stage prompt
-  await appendHookLog(repoRoot, flowName, `SESSION_NORMAL stage=${state.current_stage}`);
+  await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
 
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
   let promptContent = '';
@@ -183,8 +182,8 @@ export async function handleSessionStart(
   return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, flowName, `ERROR session: ${truncateError(e)}`);
-    } catch { /* appendHookLog itself failed — nothing more to do */ }
+      await appendLog(repoRoot, flowName, session_id, `ERROR session: ${truncateError(e)}`);
+    } catch { /* appendLog itself failed — nothing more to do */ }
     return null;
   }
 }

@@ -10,7 +10,7 @@ import {
   readSignal,
   writeSignalFile,
   isGatePending,
-  appendTransition,
+  appendLog,
   nextStage,
 } from '../src/lib/state.js';
 import type { ActiveState } from '../src/lib/state.js';
@@ -175,32 +175,42 @@ describe('readSignal / writeSignalFile / isGatePending', () => {
   });
 });
 
-describe('appendTransition', () => {
-  it('creates file if not exists and appends a line', async () => {
+describe('appendLog', () => {
+  it('writes to flow.log with timestamp, flowName, full sessionId, and message', async () => {
     const root = makeTmp();
     mkdirSync(join(root, '.ai-flow', 'test-flow', 'state'), { recursive: true });
-    await appendTransition(root, 'test-flow', 'work → review');
+    await appendLog(root, 'test-flow', 'my-full-session-id', 'STARTED flow_id=abc stage=work');
     const content = readFileSync(
-      join(root, '.ai-flow', 'test-flow', 'state', 'transitions.log'),
+      join(root, '.ai-flow', 'test-flow', 'state', 'flow.log'),
       'utf-8'
     );
-    expect(content).toContain('work → review');
+    expect(content).toMatch(/\[test-flow\] \[session=my-full-session-id\] STARTED flow_id=abc stage=work/);
   });
 
-  it('multiple calls → all lines present in order', async () => {
+  it('multiple calls accumulate in order in flow.log', async () => {
     const root = makeTmp();
     mkdirSync(join(root, '.ai-flow', 'test-flow', 'state'), { recursive: true });
-    await appendTransition(root, 'test-flow', 'started');
-    await appendTransition(root, 'test-flow', 'work → review');
-    await appendTransition(root, 'test-flow', 'completed');
+    await appendLog(root, 'test-flow', 'sess-1', 'event-A');
+    await appendLog(root, 'test-flow', 'sess-1', 'event-B');
+    await appendLog(root, 'test-flow', 'sess-1', 'event-C');
+    const lines = readFileSync(
+      join(root, '.ai-flow', 'test-flow', 'state', 'flow.log'),
+      'utf-8'
+    ).trim().split('\n');
+    expect(lines[0]).toContain('event-A');
+    expect(lines[1]).toContain('event-B');
+    expect(lines[2]).toContain('event-C');
+  });
+
+  it('each line starts with ISO timestamp', async () => {
+    const root = makeTmp();
+    mkdirSync(join(root, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    await appendLog(root, 'test-flow', 'sess-1', 'TEST_EVENT');
     const content = readFileSync(
-      join(root, '.ai-flow', 'test-flow', 'state', 'transitions.log'),
+      join(root, '.ai-flow', 'test-flow', 'state', 'flow.log'),
       'utf-8'
     );
-    const lines = content.trim().split('\n');
-    expect(lines[0]).toContain('started');
-    expect(lines[1]).toContain('work → review');
-    expect(lines[2]).toContain('completed');
+    expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z /);
   });
 });
 
