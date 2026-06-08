@@ -50,6 +50,8 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 ## 接口设计
 （每个 service / hook 的方法签名）
 
+**批量成员必须枚举（供 Stage 3 估算任务体量、防截断）**：若某个文件会获得 / 包装 / 注册**一批成员**（如「为 contextIsolation 包装全部 rpc 方法」「建一张含 N 条的映射表 / handler 注册表」），**必须在此列出完整成员清单或明确数量**，不能只写「全部 xxx」。Stage 3 的 `output_size` 体量门依赖这个枚举：列不全 → Stage 3 估不出体量 → 会退回本 stage 补全（`references/revision-protocol.md` 入口 B），徒增往返。
+
 ## 数据流
 （端到端链条 + 错误冒泡 + loading 归属）
 
@@ -108,7 +110,7 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 
 1. 覆盖：design.md 每个决策是否都在蓝图里有对应实现位置？
 2. 模块定位：新建模块/文件的目录位置是否符合项目既有惯例？
-3. 接口设计：每个 service / hook / API 的接口形状是否合理？参数粒度、返回值结构、是否有遗漏的关键操作（stats / list / clear 等）
+3. 接口设计：每个 service / hook / API 的接口形状是否合理？参数粒度、返回值结构、是否有遗漏的关键操作（stats / list / clear 等）。**批量成员是否已枚举**：凡「包装/注册/映射一批成员」的文件，成员清单或数量是否已列全（不是「全部 xxx」）？
 4. 数据流：从 UI 触发到数据持久化（或回流）的完整链条是否清晰？错误如何冒泡？loading 状态由谁管？
 5. 集成点：与既有代码的接驳（路由、i18n、错误处理、日志）是否完整？
 6. Build 顺序：依赖关系是否合理？能否独立测试每一步？有循环依赖吗？
@@ -119,6 +121,7 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 
 - `architecture.md` 存在且各节齐全
 - 与 design.md 无未解冲突
+- **批量成员已枚举**：凡「包装/注册/映射一批成员」的文件,接口设计节已列出完整成员清单或明确数量（供 Stage 3 体量门用，防截断）
 - **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
 - 开发者审批 7 点 + 架构审查建议项已主动呈现

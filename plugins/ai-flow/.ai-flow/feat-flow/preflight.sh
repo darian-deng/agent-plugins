@@ -51,11 +51,11 @@ ok "git $(git --version | awk '{print $3}')"
 # ── 4. 必需 user-installed skills ──────────────────────────────────────────────
 # skill 来源（均通过 npx skills add <owner/repo@skill> -g 安装）：
 #   grounded-design             → darian-deng/agent-skills（Stage 1 接地式需求拆解）
-#   writing-plans               → obra/superpowers
-#   subagent-driven-development → obra/superpowers
+#   subagent-driven-development → obra/superpowers（Stage 4 执行模型）
 #   receiving-code-review       → obra/superpowers
 #   optimize-claude-context     → darian-deng/agent-skills（含 ADR 路由：Stage 6 经 handle-one-directive 写 ADR）
-REQUIRED_SKILLS="grounded-design writing-plans subagent-driven-development receiving-code-review optimize-claude-context"
+# 注：Stage 3 不再依赖 writing-plans——plan 用 feat-flow 原生格式生成，self-review checklist 已内联进 stage-3.md
+REQUIRED_SKILLS="grounded-design subagent-driven-development receiving-code-review optimize-claude-context"
 MISSING_SKILLS=""
 
 for skill in $REQUIRED_SKILLS; do
@@ -76,9 +76,6 @@ if [ -n "$MISSING_SKILLS" ]; then
     case "$skill" in
       grounded-design)
         cmd "npx skills add darian-deng/agent-skills@grounded-design -g -y"
-        ;;
-      writing-plans)
-        cmd "npx skills add obra/superpowers@writing-plans -g -y"
         ;;
       subagent-driven-development)
         cmd "npx skills add obra/superpowers@subagent-driven-development -g -y"

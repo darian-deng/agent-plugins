@@ -42,8 +42,8 @@ feat-flow help                      # 查看本文档
 |----|------|------|---------|
 | stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grounded-design + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查） | ✅ | feature-dev:code-architect + general-purpose（架构审查） |
-| stage-3 | 实施计划（AI 内部三轮 review，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | writing-plans + general-purpose（三轮内部 review） |
-| stage-4 | 代码实施 | ❌（无 Gate） | subagent-driven-development |
+| stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
+| stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development |
 | stage-5 | 质量门（回归 + 组装级双视角：集成闭环 + 强制安全） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review |
 | stage-6 | 知识沉淀（增 + 修 + 退役） | ❌（直接写入，汇总表确认） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
 
@@ -85,7 +85,6 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 
 用 `ls ~/.claude/skills/` 检查：
 - `grounded-design` — Stage 1 接地式需求拆解（来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
-- `writing-plans` — Stage 3 计划
 - `subagent-driven-development` — Stage 4 实施
 - `receiving-code-review` — Stage 5 处理反馈
 - `optimize-claude-context` — Stage 6 治理全 4 层 context：CLAUDE.md + .claude/rules/ + .claude/skills/ + **ADR**（其 `handle-one-directive` 的 Priority 4 路由到 ADR，自带跨层冲突检测、ADR 重叠 → 原地更新 / supersede、README 索引维护；来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
@@ -113,11 +112,14 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 
 ## 已知偏离 upstream
 
-详见 `docs/feat-flows/feat-flow-design/design.md` 第九节。简要：
+stage-3/4 重构详见 `docs/feat-flows/stage-3-4-redesign/design.md`（含对抗审查处置）。简要：
 
-- SDD 默认 implementer-prompt 改为精选来源（Curated Sources）模式（主 session 给指针 + subagent 按需读，而非主 session 粘贴完整 architectural context）。具体到 dispatch prompt：plan.md 路径 + task 锚点（不粘贴 task 段内容）、red-green 步骤交给 `test-driven-development` skill 不内联、完整 task-report 模板不进 prompt（子代理只回精简形状）——TDD task 尤其严格执行这三条，防止 input 超重导致子代理首轮截断
-- Stage 3 plan.md 任务格式：不含代码块，每 task = `read_first`（动态校验后注入 dispatch）+ `done`（行为级断言，dispatch 时推导 verify 命令）+ 可选 `contract`（stub task 的语义契约，dispatch 填充 task 时注入）。粒度标准从时间估计改为「可独立验证的行为变化」
-- NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答）
+- **plan 原生格式（feat-flow 自有，不依赖 writing-plans；self-review checklist 已内联进 stage-3）**：每 task = `unit`（执行单元 id）+ `done`（行为断言）+ `verify`（Stage 3 预推导，非运行时）+ `read_first` + `decisions`（决策切片，带 `⟵ 来源`）+ `files`（**符号锚点，禁行号**）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `contract`（stub）。plan 末尾含「执行单元清单」。
+- **粒度三硬门**：语义内聚 ∧ files≤3–4 ∧ output_size 装得进单上下文（`large` 拆骨架+填充；体量靠「数 architecture 已列明成员」估，未列全则退回 Stage 2）。
+- **decisions 切片取代 design.md 默认注入**：管每个 task 的决策内联进 plan（矩阵投影 + 四类过滤 + 四道结构门）；design.md/architecture.md 全文降级为 Stage 4 兜底路径。
+- **Stage 4 = 机械执行器**：按执行单元串行派（**绝不并行**）、dispatch 机械拼装、`touches_shared` 注入前序 diff、**截断自保护协议**（近上限先 commit + 写「剩余工作」清单，续跑读清单不做 git 考古）、耦合簇内逐 task commit/verify + 越界升簇并集层、verify 假绿检测。
+- NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答；反复缺护栏 = decisions 漏 → 回补 plan）。
+- **cwd 漂移防护在引擎层**（pretool-handler 守卫，不在 stage 提示词写「禁止 cd」）。
 
 ## 异常恢复
 

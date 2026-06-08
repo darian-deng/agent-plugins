@@ -350,6 +350,94 @@ describe('handlePreTool — cwd ≠ repoRoot guard (subdir-write bug)', () => {
   });
 });
 
+describe('handlePreTool — Bash cwd-drift guard', () => {
+  // The cwd guard for Write/Edit covers structured file_path. Bash commands are free
+  // text and were previously waved through after the three control-plane checks. When
+  // the session cwd drifts into a subdir, repo-root-anchored relative paths in Bash
+  // (e.g. `git add apps/x/...`) get a doubled prefix. We DENY on drift, but MUST allow
+  // `cd `-prefixed commands or the escape hatch (`cd <root> && ...`) itself deadlocks —
+  // the hook sees the still-drifted pre-command cwd.
+  function makeBashInput(cwd: string, command: string): PreToolInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      session_id: 'sess-1',
+      cwd,
+      tool_name: 'Bash',
+      tool_input: { command },
+    };
+  }
+
+  function subdirOf(repoRoot: string): string {
+    const subdir = join(repoRoot, 'apps', 'plaud-desktop');
+    mkdirSync(subdir, { recursive: true });
+    return subdir;
+  }
+
+  it('drifted cwd + repo-root-relative git add (no cd) → DENY with cd-back instruction', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = subdirOf(repo.repoRoot);
+    const out = await handlePreTool(
+      makeBashInput(subdir, 'git diff --stat && git add apps/plaud-desktop/src/main/service.ts')
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toContain(repo.repoRoot);
+    expect(out?.permissionDecisionReason).toMatch(/cd /);
+  });
+
+  it('drifted cwd + cd-prefixed escape command → allowed (no deadlock)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = subdirOf(repo.repoRoot);
+    const out = await handlePreTool(
+      makeBashInput(subdir, `cd ${repo.repoRoot} && git add apps/plaud-desktop/src/main/service.ts`)
+    );
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('cwd == repoRoot + relative git add → allowed (guard does not fire)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const out = await handlePreTool(makeBashInput(repo.repoRoot, 'git add src/main.ts'));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('drifted cwd + absolute-path non-cd command → DENY (intentional over-block, safe direction)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = subdirOf(repo.repoRoot);
+    const out = await handlePreTool(makeBashInput(subdir, `cat ${join(repo.repoRoot, 'README.md')}`));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('drifted cwd + signal write via Bash → DENY with signal message (control plane before cwd guard)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = subdirOf(repo.repoRoot);
+    const signal = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeBashInput(subdir, `echo done > ${signal}`));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/signal/i);
+  });
+
+  it('drifted cwd + scripts write via Bash → DENY with scripts message (control plane before cwd guard)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const subdir = subdirOf(repo.repoRoot);
+    const scriptPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'validate.sh');
+    const out = await handlePreTool(makeBashInput(subdir, `echo x > ${scriptPath}`));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/script/i);
+  });
+
+  it('no active flow + drifted cwd + bash → null (guard requires active flow)', async () => {
+    const repo = makeRepo(); // no activateFlow
+    const subdir = subdirOf(repo.repoRoot);
+    const out = await handlePreTool(makeBashInput(subdir, 'git add apps/x.ts'));
+    expect(out).toBeNull();
+  });
+});
+
 describe('handlePreTool — context block enforcement', () => {
   it('context_blocked=true + write tool → DENY with /clear message', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);

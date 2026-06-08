@@ -63,6 +63,26 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     if (command.includes(signal)) return deny('Direct Bash writes to signal are blocked. Use the Write tool to signal stage completion.');
     if (command.includes(activeJson)) return deny('Direct modification of active.json is blocked (control plane protection).');
     if (command.includes(scripts)) return deny('Modification of scripts/ via Bash is blocked. Ask the user to replace scripts manually.');
+
+    // ─── cwd ≠ repoRoot guard for Bash (subdir cwd-drift protection) ──────────────
+    // repoRoot is always cwd or an ancestor (hasActiveFlow walks up). When the session
+    // cwd has drifted into a subdirectory, repoRoot-anchored RELATIVE paths in Bash
+    // commands (e.g. `git add apps/x/...`) resolve against the drifted cwd and land at a
+    // doubled prefix (`apps/x/apps/x/...`). Bash commands are free text — we cannot
+    // reliably extract operated paths — but cwd≠repoRoot is a reliable drift signal, so
+    // we DENY and tell the session to return to the flow root.
+    // EXCEPTION: allow `cd `-prefixed commands. The hook sees the pre-command (still
+    // drifted) cwd, so without this the escape hatch `cd <repoRoot> && ...` would itself
+    // be denied and the session would deadlock with no way back to the flow root.
+    if (resolve(cwd) !== resolve(repoRoot) && !/^cd(\s|$)/.test(command.trimStart())) {
+      await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH_BASH cwd=${cwd}`);
+      return deny(
+        `feat-flow expects the working directory to be the flow root (${repoRoot}), but the session ` +
+        `cwd has drifted into a subdirectory (${cwd}). Relative paths in Bash resolve against this cwd, ` +
+        `so repo-root-anchored paths would be mis-resolved (doubled prefix). Prefix the command with ` +
+        `'cd ${repoRoot} && ...' to return to the flow root, or use absolute paths for every path argument.`
+      );
+    }
     return null;
   }
 
