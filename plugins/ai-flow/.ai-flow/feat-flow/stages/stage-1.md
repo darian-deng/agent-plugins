@@ -7,14 +7,14 @@
 
 ## 目标
 
-通过 grill-me 风格的审讯式问询 + 必要时的代码 / 外部调研，产出一份足够 subagent 在后续 stage 独立执行的 `design.md`。Stage 1 出错下游全废，**信息完整 > 速度**。
+通过 `grounded-design` 的接地式分层拆解 + feat-flow 专属探测，产出一份足够 subagent 在后续 stage 独立执行的 `design.md`。Stage 1 出错下游全废，**信息完整 > 速度**。
 
 ## 入场动作（按顺序，主 session 执行）
 
-1. **需求源摄入**
+1. **需求源记录**
    - 引擎注入的「需求」可能只是一句话，也可能指向一份 PRD 文件 / URL / 飞书文档
-   - 若指向外部来源 → **先完整读取再进入后续动作**：本地文件直接 Read；URL 用 tavily-extract；飞书文档用 lark-doc
    - 把来源（路径 / URL / 链接）记到 design.md「外部参考」节，确保 /clear 后仍能回溯
+   - 其内容由 grounded-design 接地时完整读取（本地 Read / URL→tavily-extract / 飞书→lark-doc），此处不重复读取
 
 2. **ADR 查阅**
    - 执行 `references/adr-scan.md`
@@ -28,25 +28,23 @@
 4. **TDD 基建检测**
    - 查项目是否有测试框架 + 测试目录
    - 已有完整基建 → 记到 design.md 决策记录「TDD 基建：已有 [vitest/jest/...]」
-   - 无 / 部分 → 此处不自动决定，留到 grill 的强制必问项确认（见下）
+   - 无 / 部分 → 此处不自动决定，留到下方强制必问项确认（见下）
 
-## 调用 grill-me 进行问询
+## 调用 grounded-design 进行问询
 
-调用 `grill-me` skill 启动审讯式问询：一次一问 + 附推荐答案 + 能查代码先查。grill-me 自带按需探索代码的能力，**不需要额外强制代码探索**。直到下列内容全部清晰：
+调用 `grounded-design` skill 驱动需求拆解。它自带:**接地优先**（提任何问题前先查代码 / 文档 / 资料，无根选项禁止呈现）、**三分类**（finding 陈述 / 问开发者 / ⚠ 假设）、**一次一问 + 带依据的推荐**、**选择性呈现**、**清晰度 Gate**（覆盖功能边界 / 技术约束 / 验收标准 / 关键决策）。把 `design.md` 作为它的方案产物，逐条对齐时增量写入——这些机制本 stage 不再重述。
 
-- 功能边界（做什么、明确不做什么）
-- 技术约束（依赖、兼容性、性能要求）
-- 验收标准（每条必须可测量，标 `[auto]` 命令或 `[manual]` 步骤）
+> 验收标准每条必须可测量，标 `[auto]` 命令或 `[manual]` 步骤，写入 design.md「验收标准」节。
 
-**强制必问项**（无论 grill 如何展开都必须问到并记录决策）：
+在 grounded-design 的通用流程之上，本 stage **追加 feat-flow 专属要求**：
+
+**强制必问项**（无论问询如何展开都必须问到并记录决策）：
 - 若入场检测到 TDD 基建「无 / 部分」：本次 feature 是否顺带建立 TDD 基建？决策写到 design.md 决策记录
 - **产品安全**：从产品安全角度审视，本方案设计 / 产品设计是否存在漏洞？（权限绕过、数据泄露、状态被滥用、输入未校验、边界条件被利用等）必须主动思考并把结论 / 缓解措施记录到 design.md
 
-**问询纪律**：
-- 每个问题与开发者对齐后**立即增量更新 design.md**，不批量
-- 涉及外部技术选型，或依赖库在模型知识截止后可能变化的接口 → dispatch 独立调研 subagent（general-purpose 类型，或 tavily-search 等 Web 调研 skill），禁止凭模型既有知识给推荐
-- 涉及代码细节 → 主 session 直接 grep / read
-- 关键决策（影响下游多个 stage、难以反转）被开发者拒绝，或与开发者反复争论未达成一致 → 当场提议 ADR 草稿写到 design.md「ADR 候选」节
+**外部技术调研**：grounded-design 要求外部选型 / 易变接口必须查证；feat-flow 额外要求**隔离调研上下文**——优先 dispatch 独立调研 subagent（general-purpose 或 tavily skill），而非主 session 内联查，保持主 session context 干净。
+
+**ADR 草稿**：关键决策（影响下游多个 stage、难以反转）被开发者拒绝，或反复争论未达成一致 → 当场提议 ADR 草稿写到 design.md「ADR 候选」节（供 Stage 6 兜底再次评估）。
 
 ## UI 设计来源对齐（若需求涉及 UI）
 
@@ -112,7 +110,7 @@ design.md 骨架：
 **理由**：<why this + why not 主要替代>
 
 ## ADR 候选
-（grill-me 即时提议的草稿；由 Stage 6 兜底再次评估）
+（问询中即时提议的草稿；由 Stage 6 兜底再次评估）
 
 ## 验收标准
 - [auto] AC1 — 验证命令：`...`

@@ -17,7 +17,7 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + ADR 候选（grill-me 即时草拟的）
+- `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + ADR 候选（Stage 1 问询中即时草拟的）
 - `docs/feat-flows/<flow_id>/architecture.md`
 - `docs/feat-flows/<flow_id>/plan.md`
 - `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**。本 stage 只取候选字段 `ADR 候选` / `新术语或模式` / `context 候选`；`注释删除` 已由 Stage 5 视角① 复核、`前置修订` 已在 Stage 4/5 当场走 revision-protocol 处理完，本 stage 不再动它们（仅作存档）
@@ -52,7 +52,7 @@
 
 - `task-reports.md` 每个 task 的 `ADR 候选`、`context 候选`、`新术语或模式`
 - `context-delta.md` `## Stage 2` 和 `## Stage 5` 节的候选
-- `design.md` 「ADR 候选」节（Stage 1 grill-me 即时草拟的）
+- `design.md` 「ADR 候选」节（Stage 1 问询中即时草拟的）
 
 去重规则：来源相同语义时，以措辞更完整的一条为准。
 
@@ -62,7 +62,7 @@
 
 对 A3 收集的每条候选项（含 `ADR 候选` 与 `context 候选 / 新术语`），调用 `optimize-claude-context` 的 `handle-one-directive`（**manual 模式**）：
 
-> 为什么用 manual 模式而非同名的 `feat-flow` 模式：`feat-flow` 模式跳过 Step 0（拆分），要求调用方保证每条 directive 已原子化。但本 stage 的候选含 grill-me 草拟的 ADR 候选、freeform 的 context-delta 条目，**不保证原子**，需要 manual 模式的 Step 0 解析/拆分兜底。对已原子的条目 Step 0 是廉价空操作。**勿改成 feat-flow 模式。**
+> 为什么用 manual 模式而非同名的 `feat-flow` 模式：`feat-flow` 模式跳过 Step 0（拆分），要求调用方保证每条 directive 已原子化。但本 stage 的候选含 Stage 1 草拟的 ADR 候选、freeform 的 context-delta 条目，**不保证原子**，需要 manual 模式的 Step 0 解析/拆分兜底。对已原子的条目 Step 0 是廉价空操作。**勿改成 feat-flow 模式。**
 
 - `handle-one-directive` 单工具负责全 4 层：linter 检查（可机械化执行的毕业到 linter 配置，不进 context 层）→ 跨源冲突检测（扫 CLAUDE.md / rules / skills / **ADR 目录**）→ 层路由（CLAUDE.md / rules / skill / **ADR**，Priority 4 的"解释性决策理由"即落 ADR）→ 内容 enrichment → 写入文件（ADR 走 Nygard 模板 + 更新 README 索引）
 - **遇到 `CONFLICT`**：当场展示给开发者（附双方内容 + 来源），等待决策后继续处理下一条

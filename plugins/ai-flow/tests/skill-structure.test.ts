@@ -79,7 +79,7 @@ describe('feat-flow preflight.sh — integration', () => {
 
     // 新 feat-flow preflight 需要的 6 个用户 skill（含来自 darian-deng/agent-skills 的 2 个）
     const skills = [
-      'grill-me', 'writing-plans', 'subagent-driven-development', 'receiving-code-review',
+      'grounded-design', 'writing-plans', 'subagent-driven-development', 'receiving-code-review',
       'optimize-claude-context', 'adr-manage',
     ];
     for (const skill of skills) {

@@ -24,7 +24,7 @@
 
 | stage | 用途 |
 |-------|------|
-| stage-1 | 给 grill 推荐答案做依据；已有 ADR 决策直接引用，不重复问开发者 |
+| stage-1 | 给问询推荐答案做依据；已有 ADR 决策直接引用，不重复问开发者 |
 | stage-2 | 作为精选来源传给 code-architect（按需读） |
 | stage-4 | 相关 ADR 路径列表传给 implementer（按需读） |
 | stage-5 | reviewer 引用 ADR ID 作为 issue 证据，检查代码是否违反既有 ADR |

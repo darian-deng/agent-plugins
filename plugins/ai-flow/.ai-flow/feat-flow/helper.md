@@ -40,7 +40,7 @@ feat-flow help                      # 查看本文档
 
 | ID | 名称 | Gate | 关键工具 |
 |----|------|------|---------|
-| stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grill-me + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
+| stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grounded-design + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查） | ✅ | feature-dev:code-architect + general-purpose（架构审查） |
 | stage-3 | 实施计划（AI 内部三轮 review，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | writing-plans + general-purpose（三轮内部 review） |
 | stage-4 | 代码实施 | ❌（无 Gate） | subagent-driven-development |
@@ -84,7 +84,7 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 ### 必需 skills
 
 用 `ls ~/.claude/skills/` 检查：
-- `grill-me` — Stage 1 问询
+- `grounded-design` — Stage 1 接地式需求拆解（来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
 - `writing-plans` — Stage 3 计划
 - `subagent-driven-development` — Stage 4 实施
 - `receiving-code-review` — Stage 5 处理反馈

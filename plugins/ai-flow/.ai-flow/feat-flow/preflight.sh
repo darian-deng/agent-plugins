@@ -50,12 +50,12 @@ ok "git $(git --version | awk '{print $3}')"
 
 # ── 4. 必需 user-installed skills ──────────────────────────────────────────────
 # skill 来源（均通过 npx skills add <owner/repo@skill> -g 安装）：
-#   grill-me                    → mattpocock/skills
+#   grounded-design             → darian-deng/agent-skills（Stage 1 接地式需求拆解）
 #   writing-plans               → obra/superpowers
 #   subagent-driven-development → obra/superpowers
 #   receiving-code-review       → obra/superpowers
 #   optimize-claude-context     → darian-deng/agent-skills（含 ADR 路由：Stage 6 经 handle-one-directive 写 ADR）
-REQUIRED_SKILLS="grill-me writing-plans subagent-driven-development receiving-code-review optimize-claude-context"
+REQUIRED_SKILLS="grounded-design writing-plans subagent-driven-development receiving-code-review optimize-claude-context"
 MISSING_SKILLS=""
 
 for skill in $REQUIRED_SKILLS; do
@@ -74,8 +74,8 @@ if [ -n "$MISSING_SKILLS" ]; then
   # 按 skill 输出精确安装命令
   for skill in $MISSING_SKILLS; do
     case "$skill" in
-      grill-me)
-        cmd "npx skills add mattpocock/skills@grill-me -g -y"
+      grounded-design)
+        cmd "npx skills add darian-deng/agent-skills@grounded-design -g -y"
         ;;
       writing-plans)
         cmd "npx skills add obra/superpowers@writing-plans -g -y"
