@@ -4258,6 +4258,12 @@ async function handlePreTool(input2) {
       if (command.includes(signal)) return deny("Direct Bash writes to signal are blocked. Use the Write tool to signal stage completion.");
       if (command.includes(activeJson)) return deny("Direct modification of active.json is blocked (control plane protection).");
       if (command.includes(scripts)) return deny("Modification of scripts/ via Bash is blocked. Ask the user to replace scripts manually.");
+      if (resolve(cwd) !== resolve(repoRoot) && !/^cd(\s|$)/.test(command.trimStart())) {
+        await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH_BASH cwd=${cwd}`);
+        return deny(
+          `feat-flow expects the working directory to be the flow root (${repoRoot}), but the session cwd has drifted into a subdirectory (${cwd}). Relative paths in Bash resolve against this cwd, so repo-root-anchored paths would be mis-resolved (doubled prefix). Prefix the command with 'cd ${repoRoot} && ...' to return to the flow root, or use absolute paths for every path argument.`
+        );
+      }
       return null;
     }
     if (READ_TOOLS.has(tool_name)) {
