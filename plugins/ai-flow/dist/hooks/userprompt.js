@@ -4261,16 +4261,11 @@ function isGatePending(signal, config, currentStageId) {
   }
   return signal === "flow-complete";
 }
-async function appendTransition(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "transitions.log");
+async function appendLog(repoRoot, flowName, sessionId, message) {
+  const logPath = statePath(repoRoot, flowName, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
-`);
-}
-async function appendHookLog(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "hooks.log");
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
 }
 function nextStage(config, currentStageId) {
@@ -4424,7 +4419,7 @@ ${result.reason}`
     first_prompt_handled: false
   };
   await writeActiveState(repoRoot, flowName, state);
-  await appendTransition(repoRoot, flowName, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
+  await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
   const promptPath = join4(repoRoot, ".ai-flow", flowName, firstStage.prompt);
   let stageContent = "";
   if (existsSync4(promptPath)) {
@@ -4451,7 +4446,7 @@ import { join as join6 } from "path";
 // src/lib/advance-stage.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5, unlinkSync } from "fs";
 import { join as join5 } from "path";
-async function advanceStage(repoRoot, flowName) {
+async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4464,8 +4459,7 @@ async function advanceStage(repoRoot, flowName) {
     if (existsSync5(activeJson)) unlinkSync(activeJson);
     const sig = signalPath(repoRoot, flowName);
     if (existsSync5(sig)) unlinkSync(sig);
-    await appendTransition(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
-    await appendHookLog(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
+    await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
 
@@ -4477,8 +4471,7 @@ async function advanceStage(repoRoot, flowName) {
   await writeActiveState(repoRoot, flowName, updated);
   const sigFile = signalPath(repoRoot, flowName);
   if (existsSync5(sigFile)) unlinkSync(sigFile);
-  await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
-  await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
+  await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join5(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
@@ -4500,7 +4493,7 @@ ${promptContent}
 }
 
 // src/lib/commands/approve.ts
-async function handleApprove(repoRoot, flowName, _args) {
+async function handleApprove(repoRoot, flowName, sessionId, _args) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { action: "deny", reason: "No active flow. Run the flow start command first." };
@@ -4517,9 +4510,8 @@ async function handleApprove(repoRoot, flowName, _args) {
   if (!isGatePending(signal, config, state.current_stage)) {
     return { action: "deny", reason: `Signal present but does not match the expected checkpoint for stage '${state.current_stage}'.` };
   }
-  await appendTransition(repoRoot, flowName, `APPROVED stage=${state.current_stage}`);
-  await appendHookLog(repoRoot, flowName, `APPROVED stage=${state.current_stage}`);
-  const result = await advanceStage(repoRoot, flowName);
+  await appendLog(repoRoot, flowName, sessionId, `APPROVED stage=${state.current_stage}`);
+  const result = await advanceStage(repoRoot, flowName, sessionId);
   const flowRoot = join6(repoRoot, ".ai-flow", flowName);
   const pathsPreamble = `[ai-flow:paths]
 project_root: ${repoRoot}
@@ -4536,7 +4528,7 @@ import { join as join7 } from "path";
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
 }
-async function handleAbort(repoRoot, flowName, args = "") {
+async function handleAbort(repoRoot, flowName, sessionId, args = "") {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { action: "deny", reason: "No active flow to abort." };
@@ -4583,7 +4575,7 @@ async function handleAbort(repoRoot, flowName, args = "") {
       } catch {
       }
     }
-    await appendTransition(repoRoot, flowName, `ABORT_ERROR ${String(err)}`);
+    await appendLog(repoRoot, flowName, sessionId, `ABORT_ERROR ${String(err)}`);
     const reason = snapshotCommitted ? `Abort partially failed: snapshot was committed to '${branchName}' but could not switch back.
 Error: ${String(err)}
 Flow remains active \u2014 active.json was NOT deleted.
@@ -4594,7 +4586,7 @@ Flow remains active \u2014 active.json was NOT deleted.`;
   }
   const activeJsonPath2 = join7(repoRoot, ".ai-flow", flowName, "state", "active.json");
   if (existsSync6(activeJsonPath2)) unlinkSync2(activeJsonPath2);
-  await appendTransition(repoRoot, flowName, `ABORTED branch=${branchName}`);
+  await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
   const headNote = !originalBranch || originalBranch === "HEAD" ? `
 Note: you were in detached HEAD state; HEAD is now on '${branchName}'.` : "";
   return {
@@ -4608,7 +4600,7 @@ To resume: ${flowName} resume ${branchName}`
 import { execFileSync as execFileSync2 } from "child_process";
 import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
 import { join as join8 } from "path";
-async function handleResume(repoRoot, flowName, branch) {
+async function handleResume(repoRoot, flowName, sessionId, branch) {
   const trimmedBranch = branch.trim();
   if (!trimmedBranch) {
     return {
@@ -4669,7 +4661,7 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
     first_prompt_handled: false
   };
   await writeActiveState(repoRoot, flowName, restored);
-  await appendTransition(repoRoot, flowName, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
+  await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = join8(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
   let stageContent = "";
@@ -4811,12 +4803,12 @@ async function handleUserPrompt(input2) {
   const active = await hasActiveFlow(cwd).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
   if (active && active.state.last_session_id && active.state.last_session_id !== session_id) {
-    const shortOwner = active.state.last_session_id.slice(0, 8);
+    const ownerSession = active.state.last_session_id;
     const activeFile = activeJsonPath(active.repoRoot, active.flowName);
     return resultToHookOutput({
       action: "deny",
       reason: [
-        `\u26A0\uFE0F \u5F53\u524D session \u672A\u6301\u6709 '${active.flowName}' \u6D41\u7A0B\u63A7\u5236\u6743\uFF08\u6301\u6709\u8005\uFF1Asession ${shortOwner}...\uFF09\u3002`,
+        `\u26A0\uFE0F \u5F53\u524D session \u672A\u6301\u6709 '${active.flowName}' \u6D41\u7A0B\u63A7\u5236\u6743\uFF08\u6301\u6709\u8005\uFF1Asession ${ownerSession}\uFF09\u3002`,
         ``,
         `\u4E3A\u907F\u514D\u591A session \u5E76\u53D1\u5BFC\u81F4\u6D41\u7A0B\u72B6\u6001\u635F\u574F\uFF0C\u672C session \u7684\u6240\u6709\u8F93\u5165\u5747\u88AB\u62D2\u7EDD\u3002`,
         ``,
@@ -4866,11 +4858,11 @@ async function handleUserPrompt(input2) {
   const { flowName, subCmd, args } = parsed;
   const targetFlowState = await readActiveState(repoRoot, flowName).catch(() => null);
   if (targetFlowState?.last_session_id && targetFlowState.last_session_id !== session_id) {
-    const shortOwner = targetFlowState.last_session_id.slice(0, 8);
+    const ownerSession = targetFlowState.last_session_id;
     const activeFile = activeJsonPath(repoRoot, flowName);
     return resultToHookOutput({
       action: "deny",
-      reason: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5F53\u524D\u7531 session '${shortOwner}...' \u63A7\u5236\uFF0C\u672C session \u4E0D\u53EF\u64CD\u4F5C\u3002
+      reason: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5F53\u524D\u7531 session '${ownerSession}' \u63A7\u5236\uFF0C\u672C session \u4E0D\u53EF\u64CD\u4F5C\u3002
 \u6062\u590D\u6B65\u9AA4\uFF08\u8BEF\u62A5\u65F6\uFF09\uFF1A
   1. \u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00 ${activeFile}\uFF0C\u5C06 "last_session_id" \u6539\u4E3A null \u5E76\u4FDD\u5B58\u3002
   2. \u4FDD\u5B58\u5B8C\u6210\u540E\uFF0C\u5728\u672C session \u6267\u884C /clear\u3002`
@@ -4893,13 +4885,13 @@ Valid commands: ${VALID_COMMANDS.join(", ")}`
       break;
     }
     case "approve":
-      result = await handleApprove(repoRoot, flowName, args);
+      result = await handleApprove(repoRoot, flowName, session_id, args);
       break;
     case "abort":
-      result = await handleAbort(repoRoot, flowName, args);
+      result = await handleAbort(repoRoot, flowName, session_id, args);
       break;
     case "resume":
-      result = await handleResume(repoRoot, flowName, args);
+      result = await handleResume(repoRoot, flowName, session_id, args);
       break;
     case "status":
       result = await handleStatus(repoRoot, flowName);

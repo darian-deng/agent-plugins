@@ -76,16 +76,11 @@ function isGatePending(signal, config, currentStageId) {
   }
   return signal === "flow-complete";
 }
-async function appendTransition(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "transitions.log");
+async function appendLog(repoRoot, flowName, sessionId, message) {
+  const logPath = statePath(repoRoot, flowName, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
-`);
-}
-async function appendHookLog(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "hooks.log");
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
 }
 function nextStage(config, currentStageId) {
@@ -4251,7 +4246,7 @@ function contextWindowForModel(model) {
 // src/lib/advance-stage.ts
 import { existsSync as existsSync3, readFileSync as readFileSync3, unlinkSync } from "fs";
 import { join as join3 } from "path";
-async function advanceStage(repoRoot, flowName) {
+async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4264,8 +4259,7 @@ async function advanceStage(repoRoot, flowName) {
     if (existsSync3(activeJson)) unlinkSync(activeJson);
     const sig = signalPath(repoRoot, flowName);
     if (existsSync3(sig)) unlinkSync(sig);
-    await appendTransition(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
-    await appendHookLog(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
+    await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
 
@@ -4277,8 +4271,7 @@ async function advanceStage(repoRoot, flowName) {
   await writeActiveState(repoRoot, flowName, updated);
   const sigFile = signalPath(repoRoot, flowName);
   if (existsSync3(sigFile)) unlinkSync(sigFile);
-  await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
-  await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
+  await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join3(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
@@ -4306,21 +4299,20 @@ async function handleSessionStart(input2) {
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
   try {
-    await appendHookLog(repoRoot, flowName, `SESSION source=${input2.source} session=${session_id.slice(0, 8)} stage=${state.current_stage}`);
+    await appendLog(repoRoot, flowName, session_id, `SESSION source=${input2.source} stage=${state.current_stage}`);
     if (state.last_session_id && state.last_session_id !== session_id) {
-      const shortOwner = state.last_session_id.slice(0, 8);
-      const shortCurrent = session_id.slice(0, 8);
-      await appendHookLog(repoRoot, flowName, `SESSION_BLOCKED owner=${shortOwner} current=${shortCurrent}`);
+      await appendLog(repoRoot, flowName, session_id, `SESSION_BLOCKED owner=${state.last_session_id}`);
+      const ownerSession = state.last_session_id;
       const activeFile = activeJsonPath(repoRoot, flowName);
-      const statusLine2 = `\u26D4 [ai-flow:${flowName}] \u88AB session ${shortOwner}... \u9501\u5B9A`;
+      const statusLine2 = `\u26D4 [ai-flow:${flowName}] \u88AB session ${ownerSession} \u9501\u5B9A`;
       const lines2 = [
         `[ai-flow] \u26A0\uFE0F \u6D41\u7A0B\u4E92\u65A5\u51B2\u7A81`,
         ``,
-        `\u6D41\u7A0B '${flowName}' \u6B63\u7531 session '${shortOwner}...' \u63A7\u5236\u4E2D\u3002`,
+        `\u6D41\u7A0B '${flowName}' \u6B63\u7531 session '${ownerSession}' \u63A7\u5236\u4E2D\u3002`,
         `\u4E3A\u907F\u514D\u591A session \u5E76\u53D1\u5BFC\u81F4\u6D41\u7A0B\u63A7\u5236 bug\uFF0C**\u672C session \u4E0D\u5141\u8BB8\u4F7F\u7528\u4EFB\u4F55 ai-flow \u547D\u4EE4**\u3002`,
         ``,
         `**\u4F60\u7684\u7B2C\u4E00\u53E5\u56DE\u590D\u5FC5\u987B\u4E3B\u52A8\u544A\u77E5\u7528\u6237\u4EE5\u4E0B\u5185\u5BB9\uFF08\u65E0\u8BBA\u7528\u6237\u8BF4\u4E86\u4EC0\u4E48\uFF09**\uFF1A`,
-        `\u300C\u26A0\uFE0F \u5F53\u524D session \u5DF2\u88AB ${flowName} \u6D41\u7A0B\u9501\u5B9A\uFF08\u63A7\u5236 session\uFF1A${shortOwner}...\uFF09\u3002`,
+        `\u300C\u26A0\uFE0F \u5F53\u524D session \u5DF2\u88AB ${flowName} \u6D41\u7A0B\u9501\u5B9A\uFF08\u63A7\u5236 session\uFF1A${ownerSession}\uFF09\u3002`,
         `\u672C session \u65E0\u6CD5\u6267\u884C\u4EFB\u4F55 ai-flow \u64CD\u4F5C\u3002`,
         `\u5982\u9700\u540C\u65F6\u8FDB\u884C\u5176\u4ED6\u5DE5\u4F5C\uFF0C\u8BF7\u7528 git worktree \u521B\u5EFA\u72EC\u7ACB\u5DE5\u4F5C\u7A7A\u95F4\u540E\u5728\u65B0 session \u4E2D\u64CD\u4F5C\u3002`,
         `\u5982\u8BA4\u4E3A\u4E0A\u8FF0 session \u5DF2\u4E0D\u5B58\u5728\uFF08\u8BEF\u62A5\uFF09\uFF0C\u6062\u590D\u6B65\u9AA4\uFF08\u987A\u5E8F\u4E0D\u53EF\u98A0\u5012\uFF09\uFF1A`,
@@ -4363,7 +4355,7 @@ flow_root: ${flowRoot}
 
 `;
     if (isGatePending(signal, config, state.current_stage)) {
-      await appendHookLog(repoRoot, flowName, `SESSION_GATE_PENDING stage=${state.current_stage}`);
+      await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
       const statusLine2 = flowStatusLine({
         flowName,
         stageId: state.current_stage,
@@ -4383,20 +4375,20 @@ flow_root: ${flowRoot}
       return { additionalContext: pathsPreamble + lines2.join("\n"), systemMessage: statusLine2 };
     }
     if (isFlowComplete && !stageCfg.completion.gate) {
-      await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName);
+      await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
+      const result = await advanceStage(repoRoot, flowName, session_id);
       return { additionalContext: pathsPreamble + result.additionalContext };
     }
     if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
-      await appendHookLog(repoRoot, flowName, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName);
+      await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
+      const result = await advanceStage(repoRoot, flowName, session_id);
       const base = { additionalContext: pathsPreamble + result.additionalContext };
       if (!result.terminal && expectedNext) {
         return { ...base, systemMessage: flowStatusLine({ flowName, stageId: expectedNext, flowId: state.flow_id, gatePending: false, recovered: false }) };
       }
       return base;
     }
-    await appendHookLog(repoRoot, flowName, `SESSION_NORMAL stage=${state.current_stage}`);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
     const promptPath = join4(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
     let promptContent = "";
     if (existsSync4(promptPath)) {
@@ -4424,7 +4416,7 @@ flow_root: ${flowRoot}
     return { additionalContext: pathsPreamble + lines.join("\n"), systemMessage: statusLine };
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, flowName, `ERROR session: ${truncateError(e)}`);
+      await appendLog(repoRoot, flowName, session_id, `ERROR session: ${truncateError(e)}`);
     } catch {
     }
     return null;

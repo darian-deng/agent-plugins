@@ -70,16 +70,11 @@ function writeSignalFile(repoRoot, flowName, content) {
   writeFileSync(tmp, content);
   renameSync(tmp, statePath(repoRoot, flowName, "signal"));
 }
-async function appendTransition(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "transitions.log");
+async function appendLog(repoRoot, flowName, sessionId, message) {
+  const logPath = statePath(repoRoot, flowName, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
-`);
-}
-async function appendHookLog(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "hooks.log");
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
 }
 function nextStage(config, currentStageId) {
@@ -4263,7 +4258,7 @@ function getStageConfig(config, stageId) {
 // src/lib/advance-stage.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync } from "fs";
 import { join as join4 } from "path";
-async function advanceStage(repoRoot, flowName) {
+async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4276,8 +4271,7 @@ async function advanceStage(repoRoot, flowName) {
     if (existsSync4(activeJson)) unlinkSync(activeJson);
     const sig = signalPath(repoRoot, flowName);
     if (existsSync4(sig)) unlinkSync(sig);
-    await appendTransition(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
-    await appendHookLog(repoRoot, flowName, `COMPLETED flow_id=${state.flow_id}`);
+    await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
 
@@ -4289,8 +4283,7 @@ async function advanceStage(repoRoot, flowName) {
   await writeActiveState(repoRoot, flowName, updated);
   const sigFile = signalPath(repoRoot, flowName);
   if (existsSync4(sigFile)) unlinkSync(sigFile);
-  await appendTransition(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
-  await appendHookLog(repoRoot, flowName, `ADVANCED ${current} \u2192 ${next}`);
+  await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join4(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
@@ -4334,7 +4327,7 @@ async function handlePostTool(input2) {
         const normalizedSignal = next !== null ? next : "flow-complete";
         if (stageCfg.completion.gate) {
           writeSignalFile(repoRoot, flowName, normalizedSignal);
-          await appendHookLog(repoRoot, flowName, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
+          await appendLog(repoRoot, flowName, session_id, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
           return {
             additionalContext: `[ai-flow] Stage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u3002
 
@@ -4350,8 +4343,8 @@ async function handlePostTool(input2) {
 \u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u7684\u4EFB\u4F55\u5DE5\u4F5C\u3002`
           };
         }
-        await appendHookLog(repoRoot, flowName, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
-        const result = await advanceStage(repoRoot, flowName);
+        await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
+        const result = await advanceStage(repoRoot, flowName, session_id);
         const flowRoot = join5(repoRoot, ".ai-flow", flowName);
         const pathsPreamble = `[ai-flow:paths]
 project_root: ${repoRoot}
@@ -4399,7 +4392,7 @@ flow_root: ${flowRoot}
     };
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, flowName, `ERROR posttool tool=${tool_name}: ${truncateError(e)}`);
+      await appendLog(repoRoot, flowName, session_id, `ERROR posttool tool=${tool_name}: ${truncateError(e)}`);
     } catch {
     }
     return null;

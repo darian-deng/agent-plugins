@@ -43,16 +43,11 @@ async function hasActiveFlow(cwd) {
     dir = parent;
   }
 }
-async function appendViolation(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "violations.log");
+async function appendLog(repoRoot, flowName, sessionId, message) {
+  const logPath = statePath(repoRoot, flowName, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
-`);
-}
-async function appendHookLog(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "hooks.log");
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
 }
 function signalPath(repoRoot, flowName) {
@@ -4242,7 +4237,7 @@ function resolvePath(repoRoot, filePath) {
   return join3(repoRoot, filePath);
 }
 async function handlePreTool(input2) {
-  const { cwd, tool_name, tool_input } = input2;
+  const { cwd, tool_name, tool_input, session_id } = input2;
   const active = await hasActiveFlow(cwd).catch(() => null);
   if (!active) return null;
   const { flowName: activeFlowName, state, repoRoot } = active;
@@ -4286,18 +4281,18 @@ async function handlePreTool(input2) {
     const fp = String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? "");
     if (!fp) return null;
     if (!fp.startsWith("/") && resolve(cwd) !== resolve(repoRoot)) {
-      await appendViolation(repoRoot, activeFlowName, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
       return deny(
         `feat-flow expects the working directory to be the flow root (${repoRoot}), but the current cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' would be written under the subdirectory \u2014 not the flow root \u2014 and Write would silently create it there. Re-issue the write with an absolute path to the location you actually intend: a flow artifact rooted at the flow root is ${join3(repoRoot, fp)}; a file under the current subdirectory is ${resolve(cwd, fp)}.`
       );
     }
     const absPath = resolvePath(repoRoot, fp);
     if (absPath === signalPath(repoRoot, activeFlowName)) {
-      await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
       const stageCfg2 = getStageConfig(config, state.current_stage);
       const signalContent = String(tool_input["content"] ?? "").trim();
       if (signalContent !== "done") {
-        await appendHookLog(repoRoot, activeFlowName, `SIGNAL_INVALID expected=done got=${signalContent}`);
+        await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INVALID expected=done got=${signalContent}`);
         return deny(
           `Invalid signal content for stage '${state.current_stage}'. Write exactly 'done' to the signal file to trigger stage completion. Got: '${signalContent}'.`
         );
@@ -4307,7 +4302,7 @@ async function handlePreTool(input2) {
         const scriptOpts = stageCfg2.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg2.completion.script.timeout_ms } : void 0;
         const scriptResult = await runScript(stageCfg2.completion.script.command, flowDir, scriptOpts);
         if (!scriptResult.ok) {
-          await appendHookLog(repoRoot, activeFlowName, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, " ").slice(0, 80)}`);
+          await appendLog(repoRoot, activeFlowName, session_id, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, " ").slice(0, 80)}`);
           return deny(`Script validation failed:
 ${scriptResult.reason}
 
@@ -4315,28 +4310,28 @@ Fix the issues and try again.`);
         }
       }
       if (stageCfg2.completion.gate) {
-        await appendHookLog(repoRoot, activeFlowName, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
+        await appendLog(repoRoot, activeFlowName, session_id, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
         return allow();
       }
-      await appendHookLog(repoRoot, activeFlowName, `SIGNAL_ALLOW stage=${state.current_stage}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_ALLOW stage=${state.current_stage}`);
       return allow();
     }
     const rel = relative(repoRoot, absPath);
     const flowBase = join3(".ai-flow", activeFlowName);
     if (rel === join3(flowBase, "state", "active.json")) {
-      await appendViolation(repoRoot, activeFlowName, `BLOCKED direct write to active.json`);
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json`);
       return deny("Direct writes to active.json are blocked (control plane protection).");
     }
     if (rel === join3(flowBase, "config.json")) {
-      await appendViolation(repoRoot, activeFlowName, `BLOCKED write to config.json`);
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json`);
       return deny("config.json is read-only during flow execution.");
     }
     if (rel.startsWith(join3(flowBase, "stages") + "/")) {
-      await appendViolation(repoRoot, activeFlowName, `BLOCKED write to stage prompt: ${fp}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
       return deny("Stage prompt files are read-only during flow execution.");
     }
     if (rel.startsWith(join3(flowBase, "scripts") + "/")) {
-      await appendViolation(repoRoot, activeFlowName, `BLOCKED write to scripts: ${fp}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
       return deny("Script files cannot be modified during flow execution. Ask the user to replace them manually.");
     }
     const stageCfg = getStageConfig(config, state.current_stage);
@@ -4347,7 +4342,7 @@ Fix the issues and try again.`);
         return rel.startsWith(norm) || absPath.startsWith(join3(repoRoot, norm));
       });
       if (!allowed) {
-        await appendViolation(repoRoot, activeFlowName, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
+        await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
         return deny(
           `Write scope violation: stage '${state.current_stage}' is docs_only.
 Allowed paths: ${docsPaths.join(", ")}
@@ -4358,7 +4353,7 @@ Blocked: ${fp}`
     return null;
   } catch (e) {
     try {
-      await appendHookLog(repoRoot, activeFlowName, `ERROR pretool tool=${tool_name}: ${truncateError(e)}`);
+      await appendLog(repoRoot, activeFlowName, session_id, `ERROR pretool tool=${tool_name}: ${truncateError(e)}`);
     } catch {
     }
     return null;

@@ -46,10 +46,11 @@ async function hasActiveFlow(cwd) {
     dir = parent;
   }
 }
-async function appendHookLog(repoRoot, flowName, message) {
-  const path = statePath(repoRoot, flowName, "hooks.log");
+async function appendLog(repoRoot, flowName, sessionId, message) {
+  const logPath = statePath(repoRoot, flowName, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(path, `${timestamp} [${flowName}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
 }
 
@@ -61,7 +62,7 @@ async function handleSessionEnd(input2) {
   const { flowName, state, repoRoot } = active;
   if (state.last_session_id !== session_id) return;
   await writeActiveState(repoRoot, flowName, { ...state, last_session_id: null });
-  await appendHookLog(repoRoot, flowName, `SESSION_END cleared last_session_id session=${session_id.slice(0, 8)}`);
+  await appendLog(repoRoot, flowName, session_id, `SESSION_END cleared last_session_id`);
 }
 
 // src/hooks/sessionend.ts
