@@ -224,20 +224,19 @@ BASE_SHA_CODE: <SHA>
 
 ## Context 变化捕获（完成条件满足后执行）
 
-只**收集**本 stage 引入的 context 候选，**不分类、不写 CLAUDE.md/ADR**——分类路由 + 冲突检测是 Stage 6 的职责，此处提前分类是重复劳动。
+派一个 `general-purpose` 子代理做知识沉淀——它 `git diff <base_sha_code>..HEAD` 看本次全部最终改动，**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
 
-检视 review.md 已解决项，命中以下**全部**才收集：
+- 从 review.md 已解决项 + diff 识别命中 helper「注释与 context 归置」4 类之一（缘由 / 否定 / 约定 / 边界）、且属代码行为模式（非一次性局部 bug）的候选
+- 对每条调用 `optimize-claude-context` 的 `assess-candidate`，只回它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**（其余由 skill 自理）
 
-1. 修复改的是**代码行为模式**（而非一次性局部 bug）
-2. 命中 helper「注释与 context 归置」的 4 类之一（缘由 / 否定 / 约定 / 边界），即值得进 context 层而非仅代码注释
-3. 通过 linter / formatter / hook 配置**无法机械化执行**
+> `base_sha_code` 取自 active.json（命令见 Stage 6）。跨源冲突检测与权威路由仍归 Stage 6 `handle-one-directive`。
 
-写入 `docs/feat-flows/<flow_id>/context-delta.md`。**不论是否有候选，都必须追加 `## Stage 5` 节**（无候选时写「（无）」）——此节是 Stage 6 验证本 stage 已执行的唯一标记。
+主 session 把子代理回报的幸存候选写入 `docs/feat-flows/<flow_id>/context-delta.md`。**不论是否有候选，都必须追加 `## Stage 5` 节**（无幸存时写「（无）」）——此节是 Stage 6 验证本 stage 已执行的唯一标记。
 
 ```markdown
 ## Stage 5 — <flow_id>
 
-- <一句话描述> — 来源: review.md §<已解决项描述>
+- <一句话描述> — 目标层 hint: <CLAUDE.md | rules/<domain>.md | skill | ADR> — 来源: review.md §<已解决项描述>
 ```
 
 ## Signal

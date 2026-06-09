@@ -43,8 +43,8 @@ feat-flow help                      # 查看本文档
 | stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grounded-design + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查） | ✅ | feature-dev:code-architect + general-purpose（架构审查） |
 | stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
-| stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development |
-| stage-5 | 质量门（回归 + 组装级双视角：集成闭环 + 强制安全） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review |
+| stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
+| stage-5 | 质量门（回归 + 组装级双视角：集成闭环 + 强制安全） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
 | stage-6 | 知识沉淀（增 + 修 + 退役） | ❌（直接写入，汇总表确认） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
 
 ## 产出文件路径

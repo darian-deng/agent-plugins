@@ -143,6 +143,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
 - 单处一次性删除连续注释 ≥3 行，必须在 task report 写理由
 - **单元是耦合簇时**：见「耦合簇执行」——簇内**逐 task commit、逐 task 跑 verify**，不是一坨做完只 commit/verify 一次
+- **知识沉淀（测试通过后、返回前——你在代码里，故由你做）**：识别本 task 引入、命中『缘由 / 否定 / 约定 / 边界』4 类的知识（非显然选择含为何不选 X · 验证某方案不可行 · 不确定是否已记录的命名/架构/接口约定 · 依赖外部条件会静默失效），对每条调用 `optimize-claude-context` 的 `assess-candidate`，只把它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**纳入精简回报（其余由 skill 自理，不必回报）。跳过：调试试验 / 临时绕过 / 个人偏好。
 
 **截断自保护协议（防输出撑爆被截断）**：
 
@@ -167,7 +168,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - **越界检查升到「簇 `files` 并集」层**：簇内 task 间互相写对方文件属正常协作，单 task 越界检查在簇内失效；改为对比簇 `files` 并集，并**要求子代理回报「每个 task 实际碰了哪些文件」**供细粒度核对（见精简回报形状）。
 - 簇内每个 task 都各自落一份 task report（与独立 task 同格式）。
 
-**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **注释删除：单处删除连续 ≥3 行注释的位置 + 理由（无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕的其余字段（新增注释/context 候选/ADR 候选/前置修订）由**主 session** 在落盘时基于这份回报 + diff 自行补全，不要求子代理产出。
+**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **注释删除：单处删除连续 ≥3 行注释的位置 + 理由（无则「无」）** + **知识沉淀：幸存的 context / ADR 候选及其 assess-candidate 路由（目标层 + 理由 + file:line；无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕里 `新增注释` / `前置修订` 由**主 session** 据这份回报 + diff 补全；`context 候选` / `ADR 候选` **直接取子代理回报里的 assess-candidate 路由，主 session 只记录、不重判**（理由见下「知识沉淀的归属」）。
 
 **落盘保护（防止 /clear 丢失补全字段）**：子代理精简回报到手后，**立即**把原始精简回报作为 draft 追加到 task-reports.md，格式为 `## Task N: <标题> [draft]`（与正式版标题一致、加 `[draft]` 后缀），再读 diff 补全剩余字段。补全完成后，以 `## Task N:` 前缀（不含标题全文）为锚点把整段 `[draft]` 替换为正式版本。这样即使 /clear 在补全过程中发生，精简回报和 commit SHA 已持久化，下次恢复可从 draft + diff 重建；恢复时若看到 `[draft]` 标记即知该 task 补全未完成。
 
@@ -178,15 +179,14 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - **行为越界**：diff 中是否存在与本 task `done` 语义无关的新增函数 / 方法（对比 diff 中新增的函数/方法名是否超出 `done` 断言所描述的行为范围）？
 越界发现 → 规格 FAIL，要求 subagent revert 越界部分后重新 commit。
 
-**知识沉淀**（task 到达 完成 / 完成但有顾虑 终态后做一次整体回顾——不是实施中随手记；完成但有顾虑 也要回顾）：
+**知识沉淀的归属**：知识沉淀本身由 implementer 子代理在 task 终态完成（见〔实施要求〕的「知识沉淀」条——它在代码里，满足 `assess-candidate` 的契约）。主 session **不自己跑 assess-candidate、不重判**（主 session 不读代码，litmus / comment-check / lint 毕业都无现场依据），只把子代理回报的**幸存候选 + 路由**记入 task report 的 `context 候选` / `ADR 候选` 字段。
 
-识别命中以下任一类的决策，对每条调用 `optimize-claude-context` 的 `assess-candidate` 拿到「目标层路由」，记进 task report 对应字段（assess-candidate 只返回路由决策，怎么记由本 stage 决定）：
-1. **缘由类**：做了非显然选择、或绕过了更自然的做法（含「为什么不选 X」的权衡）
-2. **否定类**：验证了某方案不可行（含验证过程和失败原因）
-3. **约定类**：用了不确定是否已记录的命名规范 / 架构惯例 / 接口契约
-4. **边界类**：实现依赖外部条件，条件变化会静默失效（版本、环境、隐式顺序假设）
+**主 session 每 task 终态后按此序处理（串行 checklist，避免并发判断导致漂移）**：
 
-跳过（不算候选）：调试中间试验、临时绕过方案（尚未确认提交）、个人工作偏好。
+1. 收到子代理精简回报 → **立即** draft 落盘到 task-reports.md（`## Task N: <标题> [draft]`，见上「落盘保护」）
+2. 据回报 + diff 补全 `新增注释` / `前置修订` 字段；把回报里的幸存候选 + 路由记入 `context 候选` / `ADR 候选`（不重判）
+3. 跑两段评审 → 回填 `**审查**` 行（见上「两段评审」）
+4. draft 替换为正式版；确认本 task 段完整后，再 dispatch 下一执行单元
 
 ## task report 格式（每 task 完成后主 session 立即落盘）
 
@@ -207,10 +207,10 @@ implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下�
 本 task 引入的术语 / 命名规范（如 "LRUEvictionPolicy"）——后续 task 靠它避免命名漂移
 
 ### context 候选
-注释承载不了、该进 context 层的知识；每条带 assess-candidate 给的目标层（rules/<domain>.md | CLAUDE.md | skill）
+子代理 assess-candidate 判定该进 context 层的幸存候选；每条带目标层 + 理由 + file:line（rules/<domain>.md | CLAUDE.md | skill）
 
 ### ADR 候选
-跨文件、有权衡的架构决策——Stage 6 评 ADR
+子代理 assess-candidate 路由到 ADR 的候选（跨文件、有权衡）——Stage 6 评 ADR
 
 ### 注释删除
 单处删除连续注释 ≥3 行的位置 + 理由

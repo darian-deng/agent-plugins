@@ -56,7 +56,7 @@
 
 去重规则：来源相同语义时，以措辞更完整的一条为准。
 
-> 注意各来源的路由状态不同：`task-reports.md` 的 `context 候选` 带 Stage 4 `assess-candidate` 给的**临时目标层**（per-task、无跨源冲突检测）；`context-delta.md` 的 S2/S5 节是**无路由的扁平收集**。两者的临时路由都**只作参考**——环节 B 的 `handle-one-directive` 会做权威的跨源冲突检测 + 重新路由（这是 `assess-candidate` 与 `handle-one-directive` 的有意分工，见两者 skill reference）。故去重只比措辞完整度，不必纠结"哪条路由更准"，但去重时保留更完整一条携带的临时路由作 hint。
+> 各来源路由状态不同：`task-reports.md`（Stage 4）和 `context-delta.md` 的 `## Stage 5` 节都带 `assess-candidate` 的**临时目标层 hint**（都在代码里跑过源头过滤，到这里的是幸存者）；只有 `## Stage 2` 节是**无路由的扁平收集**（Stage 2 无代码，assess-candidate 不适用）。临时 hint **只作参考**——环节 B 的 `handle-one-directive` 做权威的跨源冲突检测 + 重新路由。故去重只比措辞完整度，保留更完整一条的 hint。
 
 ## 环节 B：逐条处理并呈现汇总表
 
