@@ -4511,14 +4511,16 @@ async function handleApprove(repoRoot, flowName, sessionId, _args) {
     return { action: "deny", reason: `Signal present but does not match the expected checkpoint for stage '${state.current_stage}'.` };
   }
   await appendLog(repoRoot, flowName, sessionId, `APPROVED stage=${state.current_stage}`);
+  const enteredStage = nextStage(config, state.current_stage);
   const result = await advanceStage(repoRoot, flowName, sessionId);
+  const systemMessage = result.terminal ? `[${flowName}] \u2705 \u6D41\u7A0B\u5DF2\u7ED3\u675F` : `[${flowName}] \u2705 \u5DF2\u8FDB\u5165 ${enteredStage} \xB7 \u6B63\u5728\u8BFB\u53D6\u9636\u6BB5\u6587\u6863\u2026`;
   const flowRoot = join6(repoRoot, ".ai-flow", flowName);
   const pathsPreamble = `[ai-flow:paths]
 project_root: ${repoRoot}
 flow_root: ${flowRoot}
 
 `;
-  return { action: "allow", additionalContext: pathsPreamble + result.additionalContext };
+  return { action: "allow", systemMessage, additionalContext: pathsPreamble + result.additionalContext };
 }
 
 // src/lib/commands/abort.ts
@@ -4694,14 +4696,16 @@ async function handleStatus(repoRoot, flowName) {
     `requirement: ${state.requirement}`
   ];
   let gateActive = false;
+  let gateTerminal = false;
   try {
     const config = await loadFlowConfig(repoRoot, flowName);
     const signal = readSignal(repoRoot, flowName);
     gateActive = isGatePending(signal, config, state.current_stage);
+    gateTerminal = nextStage(config, state.current_stage) === null;
   } catch {
   }
   if (gateActive) {
-    lines.push("", `Gate pending \u2014 run '${flowName} approve' to advance to the next stage.`);
+    lines.push("", gateTerminal ? `Gate pending \u2014 run '${flowName} approve' to confirm and end the flow.` : `Gate pending \u2014 run '${flowName} approve' to advance to the next stage.`);
   }
   if (state.context_warning.warned) {
     lines.push("", `Context warning: ${state.context_warning.warned_at_pct}% used`);

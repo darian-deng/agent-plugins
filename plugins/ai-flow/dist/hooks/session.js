@@ -4363,14 +4363,15 @@ flow_root: ${flowRoot}
         gatePending: true,
         recovered: true
       });
+      const isTerminal = expectedNext === null;
       const lines2 = [
         `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0CStage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u7528\u6237\u786E\u8BA4\u3002`,
         ``,
         `Signal \u5DF2\u5199\u5165\u4F46\u7528\u6237\u5C1A\u672A\u6267\u884C approve\u3002`,
-        `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve`,
+        isTerminal ? `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve\uFF08\u7EC8\u7AEF\u9636\u6BB5\uFF0Capprove \u540E\u6D41\u7A0B\u7ED3\u675F\uFF09` : `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve`,
         ``,
         `\u5982\u9700\u4FEE\u6539\uFF0C\u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u5199\u5165 signal\u3002`,
-        `\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u5DE5\u4F5C\u3002`
+        isTerminal ? `\u4E0D\u8981\u64C5\u81EA\u7ED3\u675F\u6D41\u7A0B\uFF0C\u7B49\u5F85\u5F00\u53D1\u8005 approve\u3002` : `\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u5DE5\u4F5C\u3002`
       ];
       return { additionalContext: pathsPreamble + lines2.join("\n"), systemMessage: statusLine2 };
     }

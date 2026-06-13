@@ -4328,6 +4328,7 @@ async function handlePostTool(input2) {
         if (stageCfg.completion.gate) {
           writeSignalFile(repoRoot, flowName, normalizedSignal);
           await appendLog(repoRoot, flowName, session_id, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
+          const isTerminal = next === null;
           return {
             additionalContext: `[ai-flow] Stage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u3002
 
@@ -4337,10 +4338,13 @@ async function handlePostTool(input2) {
 - \u6709\u54EA\u4E9B\u9700\u8981\u7528\u6237\u7279\u522B\u6CE8\u610F\u7684\u5730\u65B9
 
 \u6700\u540E\u544A\u77E5\u7528\u6237\uFF1A
-  \u6EE1\u610F \u2192 \u6267\u884C \`feat-flow approve\` \u8FDB\u5165\u4E0B\u4E00\u9636\u6BB5
+` + (isTerminal ? `  \u6EE1\u610F \u2192 \u6267\u884C \`${flowName} approve\` \u786E\u8BA4\u5E76\u7ED3\u675F\u6D41\u7A0B
   \u9700\u8981\u8C03\u6574 \u2192 \u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u89E6\u53D1
 
-\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u7684\u4EFB\u4F55\u5DE5\u4F5C\u3002`
+\u4E0D\u8981\u64C5\u81EA\u7ED3\u675F\u6D41\u7A0B\uFF0C\u7B49\u5F85\u5F00\u53D1\u8005 approve\u3002` : `  \u6EE1\u610F \u2192 \u6267\u884C \`${flowName} approve\` \u8FDB\u5165\u4E0B\u4E00\u9636\u6BB5
+  \u9700\u8981\u8C03\u6574 \u2192 \u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u89E6\u53D1
+
+\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u7684\u4EFB\u4F55\u5DE5\u4F5C\u3002`)
           };
         }
         await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
