@@ -330,6 +330,9 @@ describe('handlePostTool — signal detection', () => {
     const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toMatch(/approve|gate|confirm/i);
+    // Non-terminal gate → advance wording, NOT end-flow wording
+    expect(out!.additionalContext).toContain('进入下一阶段');
+    expect(out!.additionalContext).not.toContain('结束流程');
     // Signal rewritten to next stage id (not 'done')
     expect(readFileSync(sig, 'utf-8').trim()).toBe('review');
     // Stage NOT advanced
@@ -351,6 +354,9 @@ describe('handlePostTool — signal detection', () => {
     const out = await handlePostTool(makeSignalInput(repo.repoRoot, 'Write', sig, 'done'));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toMatch(/approve|gate|confirm/i);
+    // Terminal gate → end-flow wording, NOT advance wording
+    expect(out!.additionalContext).toContain('确认并结束流程');
+    expect(out!.additionalContext).not.toContain('进入下一阶段');
     // Signal rewritten to 'flow-complete'
     expect(readFileSync(sig, 'utf-8').trim()).toBe('flow-complete');
     // Stage NOT advanced

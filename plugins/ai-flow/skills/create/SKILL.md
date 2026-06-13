@@ -131,7 +131,7 @@ ai-flow 对用户的承诺：**任一 stage 完成后 /clear，或多-task stage
 
 1. **Stage 衔接**：每个 stage 的输出是否就是下一个 stage 的输入？有没有信息断层（stage N 产出 A，但 stage N+1 需要 B，而没有 stage 负责生成 B）？
 2. **write_scope 一致性**：`docs_only` 的 stage，它的 stage prompt 要求写入的所有文件路径是否都在 `docs_paths` 范围内？
-3. **Gate 合理性**：每个 Gate 的位置——人类审批的是什么内容？基于什么做判断？有没有遗漏关键审批点，或多余的 Gate 拖慢流程？
+3. **Gate 合理性**：每个 Gate 的位置——人类审批的是什么内容？基于什么做判断？有没有遗漏关键审批点，或多余的 Gate 拖慢流程？**终端（最后一个）stage 默认必带 Gate**——终端误完成会删 active.json、不可逆；中途误推进可恢复。无 Gate 的终端 stage = 允许 AI 在讨论中自觉完事就结束 flow。
 4. **边界情况**：某 stage 产出为空时，下游 stage 能否优雅处理？用户中途修改上一 stage 产出，当前 flow 设计是否能应对？
 
 ---

@@ -45,7 +45,7 @@
       "id": "stage-6",
       "prompt": "stages/stage-6.md",
       "write_scope": "unrestricted",
-      "completion": {}
+      "completion": { "gate": true }
     }
   ]
 }

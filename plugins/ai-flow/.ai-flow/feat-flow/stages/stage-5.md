@@ -18,7 +18,7 @@
 
 - `docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
 - `docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
-- `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 注释删除理由 / 前置修订）
+- `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 前置修订）
 - `.ai-flow/feat-flow/state/active.json` 中的 `base_sha_code` 字段 — Stage 4 起点 SHA
 
 ## 入场动作
@@ -67,7 +67,7 @@
 - design.md 全量（需求 + 决策记录 + AC——已对齐决策不得再质疑）
 - architecture.md（架构基线 + 集成点清单）
 - 相关 ADR 路径列表
-- task-reports.md（跨 task 元信息：新术语 / 注释删除理由 / 前置修订）
+- task-reports.md（跨 task 元信息：新术语 / 前置修订）
 - **不传 plan.md**（避免审查被实施过程带偏）
 
 审查维度（**全是组装级**）：
@@ -75,10 +75,11 @@
 2. **跨 task 一致性**：术语 / 命名跨文件一致？数据结构跨模块对齐？task 之间的接口契约吻合？
 3. **集成接驳**：与既有代码的接驳点（路由 / i18n / 错误处理 / 日志 / 鉴权）真的接上了？architecture.md 列的集成点有无遗漏？
 4. **跨 task 资源 / 时序**：多 task 路径汇合后才显现的问题——新的竞态 / 死锁、N+1 查询、重复请求、性能退化。**只看多 task 汇合处**，不做通用性能审查（那是过早优化）。
-5. **注释 / context 漂移**：改动函数相邻 ±20 行注释是否仍准确？删除的注释 ≥3 行，implementer 在 task-reports.md 写了理由吗、是否充分？
+5. **注释 / context 漂移**：改动函数相邻 ±20 行注释是否仍准确？
 6. **ADR 合规**：本次改动是否违反既有 ADR？问题必须引 ADR ID 作证据。
 7. **测试调整复核（若 review.md 有「测试调整记录」）**：逐条验证——被改的测试是否真在测实现细节而非行为？新测试是否仍覆盖原意图？不成立则列为阻塞项。
-8. 局部 bug 只在上述视角下**顺手撞见**才报，不主动地毯式扫。
+8. **实现深度（altitude）**：改动是在正确深度实现，还是把特例堆在共享基础设施上当创可贴？多个 task 都在加特例 = 底层机制该泛化的信号——作为**建议项**提（非阻塞，呈开发者裁决，可能 YAGNI，不进 3 轮循环）。
+9. 局部 bug 只在上述视角下**顺手撞见**才报，不主动地毯式扫。
 
 输出**分两级**（每条 ≤5 行片段证据）：
 - 🔴 **阻塞项**：需求未闭环 / 跨 task 不一致 / 集成断裂 / 违反 ADR / 高置信度真 bug。必须修。
@@ -166,7 +167,9 @@ echo "${ADDED_DEPS:-NONE}"
 
 ### /clear 后的恢复
 
-审查中途 /clear（审查者子代理 agent ID session-scoped 会丢失）→ 新 session 重启 Stage 5：
+新 session 重启前先判定停在哪个环节：读 review.md——**有「人工 review（环节 C）」节且记有「本环节起点 SHA」→ 处于环节 C**，不重派双视角，直接续环节 C（重呈 `git diff base_sha_code..HEAD` + review.md 结论，从「还有其他问题吗」继续人审-修复循环，delta 起点用记录的 SHA）；**否则处于环节 A/B**，按下面重派双视角。
+
+审查中途 /clear（审查者子代理 agent ID session-scoped 会丢失）→ 新 session 重启环节 B：
 
 1. 已 commit 的修复 → 新审查者跑 `git diff <base>..HEAD` 看到的是当前 HEAD，不会再报已修项
 2. review.md 累积的「已解决 / 已反驳 / 待开发者决策 / 建议」段保留——重派审查者时把现有 review.md 作为「上次审查的状态」一并传入
@@ -208,21 +211,46 @@ BASE_SHA_CODE: <SHA>
 ## 测试调整记录
 - <如有> 改测试的位置 + 理由 + 复核者意见
 
+## 人工 review（环节 C）
+本环节起点 SHA: <SHA>
+- <开发者指出的问题>：<修复 commit> — 回归：通过
+- 最终 CR：<跳过（零改动）| delta 聚焦 CR 结论 | 全量安全重跑结论>
+
 ## 结论
 <总体评估>
 ```
+
+## 环节 C：人工 review 闭环 + 最终 CR（写 signal 前的最后一关）
+
+环节 A/B 是 AI 自查，这一环是**开发者**把关；开发者的修改同样要过回归与最终 CR（与 AI 代码同等把关）。**本环节走完前绝不写 signal。**
+
+入场记下当前 HEAD 为**本环节起点 SHA**，写进 review.md「人工 review」节标题（`/clear` 后从那里读，用于算 delta）。
+
+1. **请开发者 review**：呈现组装后改动（`git diff base_sha_code..HEAD`）+ review.md 结论摘要，明确告知：「你指出的每个问题都会修 + 重跑回归，全部满意后我做一次整体 CR 才推进」。
+2. **人审-修复循环**（开发者每提一个问题）：
+   - 修代码 → `git commit -m "fix: address human review"`（每问题一笔，/clear 安全）
+   - **重跑环节 A 的自动化回归，必须全绿**——人改的代码同样过回归，不放行未验证改动
+   - 把问题 + 处理记入 review.md「人工 review」节
+   - 回开发者：「已修复 + 回归通过，还有其他问题吗？」
+   - **持续判断开发者是否审完**；开发者明确表示无更多问题前，不进下一步、不写 signal（即便讨论中说「可以了」，也要先跑完步骤 3 的最终 CR）
+3. **最终 CR（条件式）**——开发者确认无更多问题后：
+   - 循环**零代码改动**（只 review、没让改）→ **跳过**（环节 B 双视角已覆盖当前 HEAD）
+   - 循环**有改动** → 对本环节 delta（`git diff <本环节起点 SHA>..HEAD`）做聚焦 CR：质量看 reuse / simplification / altitude，正确性看 delta 是否引入回归或与既有改动冲突
+   - delta **含安全敏感改动**（鉴权 / 输入处理 / 密钥 / 序列化 等）→ 升级为对 `base_sha_code..HEAD` 全量重跑视角②（安全）
+   - CR 发现问题 → 回步骤 2 修复循环；**CR 干净 → 方可进入完成条件、写 signal**
 
 ## 完成条件
 
 - 自动化回归全过（最后一个 commit 后跑一次确认）
 - **视角① 与视角② 都已跑**（安全视角强制，不可跳过）
+- **环节 C 已走完**：开发者确认无更多问题，人审 fix 全部过回归，最终 CR 已跑（或按条件跳过）且干净
 - review.md 存在且完整（**含安全节**）
 - 所有阻塞项（视角① 阻塞 + 安全 Critical/High）已修复 + commit
 - 「待开发者决策」类问题由开发者拍板后已应用
 - 建议项已呈开发者（非阻塞，无需全部修）
 - `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `（无）`）
 
-## Context 变化捕获（完成条件满足后执行）
+## Context 变化捕获（写 signal 前、判定完成条件时执行——其产出满足上面完成条件的 `## Stage 5` 节项）
 
 派一个 `general-purpose` 子代理做知识沉淀——它 `git diff <base_sha_code>..HEAD` 看本次全部最终改动，**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
 
@@ -241,5 +269,5 @@ BASE_SHA_CODE: <SHA>
 
 ## Signal
 
-**触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**触发条件**：本阶段「完成条件」全部满足——**含环节 C 走完（开发者确认无更多问题 + 最终 CR 干净）**。在此之前不写 signal；即便讨论中开发者说「可以了」，也要先跑完最终 CR。
+**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`。写入后引擎进入 gate-pending，开发者 `feat-flow approve` 方才推进。

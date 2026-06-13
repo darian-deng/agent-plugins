@@ -1,4 +1,4 @@
-import { readActiveState, readSignal, isGatePending } from '../state.js';
+import { readActiveState, readSignal, isGatePending, nextStage } from '../state.js';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import type { CommandResult } from '../types.js';
 
@@ -16,14 +16,18 @@ export async function handleStatus(repoRoot: string, flowName: string): Promise<
   ];
 
   let gateActive = false;
+  let gateTerminal = false;
   try {
     const config = await loadFlowConfig(repoRoot, flowName);
     const signal = readSignal(repoRoot, flowName);
     gateActive = isGatePending(signal, config, state.current_stage);
+    gateTerminal = nextStage(config, state.current_stage) === null;
   } catch { /* non-fatal */ }
 
   if (gateActive) {
-    lines.push('', `Gate pending — run '${flowName} approve' to advance to the next stage.`);
+    lines.push('', gateTerminal
+      ? `Gate pending — run '${flowName} approve' to confirm and end the flow.`
+      : `Gate pending — run '${flowName} approve' to advance to the next stage.`);
   }
 
   if (state.context_warning.warned) {

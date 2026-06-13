@@ -49,6 +49,7 @@ export async function handlePostTool(
         // Rewrite signal to the proper gate indicator for session recovery
         writeSignalFile(repoRoot, flowName, normalizedSignal);
         await appendLog(repoRoot, flowName, session_id, `POSTTOOL_GATE_PENDING stage=${state.current_stage}`);
+        const isTerminal = next === null;
         return {
           additionalContext:
             `[ai-flow] Stage '${state.current_stage}' 已提交，等待人工确认。\n\n` +
@@ -57,9 +58,13 @@ export async function handlePostTool(
             `- 做了哪些关键决策或权衡\n` +
             `- 有哪些需要用户特别注意的地方\n\n` +
             `最后告知用户：\n` +
-            `  满意 → 执行 \`feat-flow approve\` 进入下一阶段\n` +
-            `  需要调整 → 继续讨论，完成后重新触发\n\n` +
-            `不要开始下一阶段的任何工作。`,
+            (isTerminal
+              ? `  满意 → 执行 \`${flowName} approve\` 确认并结束流程\n` +
+                `  需要调整 → 继续讨论，完成后重新触发\n\n` +
+                `不要擅自结束流程，等待开发者 approve。`
+              : `  满意 → 执行 \`${flowName} approve\` 进入下一阶段\n` +
+                `  需要调整 → 继续讨论，完成后重新触发\n\n` +
+                `不要开始下一阶段的任何工作。`),
         };
       }
 

@@ -58,6 +58,7 @@ Read .ai-flow/{flow-name}/config.json
 1. **流程连贯性**：这个改动让整个 flow 的逻辑更合理，还是产生了断点？
    - 例：给探索阶段加 Gate，意味着人类要审批 AI 的探索摘要才能继续设计——合理吗？
    - 例：删除最后一个 Gate，意味着最终产出不需要人工确认——可以接受吗？
+   - **原则：终端（最后一个）stage 默认必带 Gate。** 终端 stage 误写 signal 会删 active.json、flow 不可逆地结束；中途 stage 误推进还在 flow 内、可恢复，终端不可。删终端 Gate 等于允许 AI 在讨论中自觉「完事了」就结束 flow——除非有充分理由，否则不要删。
 
 2. **write_scope 一致性**：相邻阶段的读写路径是否对齐？
 

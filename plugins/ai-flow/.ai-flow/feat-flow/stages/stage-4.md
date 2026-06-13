@@ -30,8 +30,8 @@ except:
 ```
 
 - **`HAS_BASE == yes`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——覆写 base_sha_code 会污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。其中：
-  - 遇到**已 commit 但无 `**审查**` 行的 task → 一律重跑两段评审**（无法区分「没审」还是「审了没回填」，重跑安全）。
-  - 遇到 task-reports.md 里有 **`[partial]` commit + 「剩余工作」清单**的 task（截断自保护留下的）→ 按清单续跑该 task，**不做 git 考古**（见「截断自保护协议」）。
+  - 遇到**已 commit 但 task report 缺失 / 不全的 task**（无 `**审查**` 行，或缺 `context 候选` / `ADR 候选` 等只有子代理能产出的字段）→ 派一个子代理读 `git show <sha>` **重跑两段评审 + 重跑 assess-candidate**，据回报重建该 task report。主 session 不读代码、跑不了 assess-candidate，故这类字段必须由子代理重建；重跑安全（diff 已含该 task 最终改动）。
+  - 遇到 task-reports.md 里有 **`[partial]` commit + 「剩余工作」清单**的 task（截断自保护留下的）→ 按清单续跑该 task，**不做 git 考古**（见「截断自保护」）。
   - Step 0 的分支复核仍要做。
 - **`HAS_BASE == no` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
 
@@ -92,8 +92,6 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **开跑前**：解析 plan.md 的 task 列表 + 执行单元清单——解析到 0 个 task 或无执行单元清单 → 停下问开发者（疑似 plan.md 损坏或 Stage 3 未完成）。
 
-**每个单元 dispatch 前**：`git branch --show-current` 复核仍不在 main/master（防运行中途被切回 main，导致后续 commit 落到 main）。
-
 **抑制 SDD 的越界默认行为**（feat-flow 接管这些，不让 SDD 冲出 stage-4 边界）：
 - **不建 worktree**——feat-flow 在当前工作树跑（引擎靠 `cwd/.ai-flow` 定位状态，worktree 会让 cwd 漂走、base_sha 失效）
 - **不调用 `finishing-a-development-branch`**——merge / PR 收尾归 Stage 6 + 开发者
@@ -102,12 +100,9 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **子代理走 TDD**：若该 task 在 plan.md 标了走 TDD，implementer 子代理按 `test-driven-development` 实施。
 
-**TDD task 的 dispatch prompt 必须减重**（input 超重会让子代理在生成第一步工具调用前就被截断——红绿循环本身多步、plan 段又常内嵌测试/实现代码块，两者叠加最易在首轮挤爆上下文预算）。对标了 TDD 的 task，在常规〔精选来源〕之上再加这三条裁剪：
-- **不粘贴代码块**：Stage 3 的 plan 本就禁止代码块（只有结构化字段），故无成品代码可粘——天然满足。给 task 标题/编号 + `done` + `verify` + `decisions` 切片 + `files` 符号锚点即可，子代理按符号锚点自己 Read 对应代码。
-- **不内联红绿步骤**：red-green-refactor 的过程已在 `test-driven-development` skill 里。prompt 只点名「按 test-driven-development 实施」+ 下面〔实施要求〕里 feat-flow 特有的几条增量（全量单测 / 不跑 lint·typecheck / 单 task 单 commit），不要把红→绿→重构在 prompt 里再叙述一遍。
-- **不塞完整 report 模板**：下面〔task report 格式〕是**主 session** 落盘用的模板，不是给子代理的输出契约。子代理只按〔实施要求〕末尾的**精简回报形状**返回，主 session 自己映射进完整模板。把 7 字段模板塞进 dispatch prompt 会让子代理一上来背上重输出契约，加剧首轮截断。
+**TDD task 的 dispatch prompt 必须减重**（红绿循环多步 + plan 段易内嵌代码块，叠加最易在子代理首轮工具调用前就撑爆上下文）。在常规〔精选来源〕之上再裁三条：① **不粘贴代码块**（plan 本就只有结构化字段，子代理按 `files` 符号锚点自己 Read）；② **不内联红绿步骤**（只点名「按 test-driven-development 实施」，过程在该 skill 里）；③ **不塞完整 report 模板**（子代理只按末尾〔精简回报形状〕返回，主 session 自己映射）。
 
-非 TDD task 不受上述**后两条**约束（无红绿多步、无 report 模板泄漏风险）；**「不粘贴代码块」作为通用规则已在下面〔精选来源〕里适用于所有 task**，非 TDD task 同样遵守。
+非 TDD task 仅受 ① 约束（已是〔精选来源〕通用规则），②③ 不适用。
 
 **状态报告用中文**：implementer 用「完成 / 完成但有顾虑 / 受阻 / 需补充信息」四种状态报告（对应 SDD 的 DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT）。
 
@@ -141,23 +136,14 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - 既有单测挂了：默认当作回归，**修代码而非改测试**
 - 极少数确信测试在测实现细节（而非行为）→ 报 完成但有顾虑 附理由（必须复核）
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
-- 单处一次性删除连续注释 ≥3 行，必须在 task report 写理由
+- **复用优先 + 最简实现**：写新代码前先 grep 相邻 / 共享模块，已有 helper 直接调用、不重复造；只写完成本 task `done` 所需的最简实现——不加可推导的冗余状态、不留死代码、不复制粘贴改两行。**仅限本 task 范围**——需泛化底层机制属架构级，留给 Stage 5，不在此越界重构
+- **注释纪律**：加任何注释前先问「不加，下一个读这段代码的 AI 会犯错吗」——只解释代码答不出的『为什么』（缘由 / 否定 / 约定 / 边界四类），凡复述代码『在做什么』的不写；改动代码时同步检查**相邻注释**是否已失准、需更新
 - **单元是耦合簇时**：见「耦合簇执行」——簇内**逐 task commit、逐 task 跑 verify**，不是一坨做完只 commit/verify 一次
 - **知识沉淀（测试通过后、返回前——你在代码里，故由你做）**：识别本 task 引入、命中『缘由 / 否定 / 约定 / 边界』4 类的知识（非显然选择含为何不选 X · 验证某方案不可行 · 不确定是否已记录的命名/架构/接口约定 · 依赖外部条件会静默失效），对每条调用 `optimize-claude-context` 的 `assess-candidate`，只把它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**纳入精简回报（其余由 skill 自理，不必回报）。跳过：调试试验 / 临时绕过 / 个人偏好。
 
-**截断自保护协议（防输出撑爆被截断）**：
+**截断自保护**（无法静态预估的大 task 的运行时兜底；可预估的已由 Stage 3 `output_size: large` 拆分避免）：子代理近上限、或发现 task 比预期大时**别硬撑到被截断**——先 `git commit` 已完成部分（message 标 `[partial]`）+ 在 task-reports.md 写「剩余工作」清单（差哪些、做到哪、从哪继续）+ 报 `完成但有顾虑` / `受阻`。
 
-子代理执行中若**感到接近上下文上限，或发现任务比预期大**（典型：枚举式改造比 plan 估计的条目更多），**不要硬撑到被截断**，按以下自保护：
-
-1. **先 commit 已完成部分**（哪怕只完成一半行为），commit message 标注 `[partial]`。
-2. **在 task-reports.md 写「剩余工作」清单**：还差哪些具体改动、已完成到哪、下一步从哪继续（落盘，跨 /clear 存活）。
-3. 报 `完成但有顾虑`（仍有剩余）或 `受阻`（无法继续），附「剩余工作」清单位置。
-
-**主 session 处理续跑**：读「剩余工作」清单 dispatch 续跑子代理——**续跑读清单，不做 git 考古反推前次进度**。续跑 prompt = 原 task 的 decisions/verify + 「剩余工作」清单 + 「前半已 commit 在 `<sha>`，从清单第一条继续」。
-
-**续跑要折进 partial commit，保持「一 task 一 commit」不变量（防 Stage 5/6 取到残 diff）**：续跑完成后**不要新建 commit**——`[partial]` commit 在串行下必是 HEAD（同一 task 续跑、其间无其他 task commit，即便中途 /clear 也无其他 commit 插入），续跑子代理用 `git add -A && git commit --amend` 把完成部分**折进那个 partial commit**，并把 message 的 `[partial]` 去掉改为正常 message。结果该 task 仍只有**一个** commit、`git show <sha>` 含完整 diff。task-reports.md 的 `**Commit**` 字段记这个 amend 后的最终 SHA。（这样不破坏下游一切 `git show <task-commit>` 的假设——评审、Stage 5 diff、Stage 6 都按「一 task 一 commit」工作。）
-
-> 这是对「无法静态预估的大 task」的运行时兜底；可静态预估的大 task 已由 Stage 3 的 `output_size: large` 拆骨架+填充避免。
+主 session 续跑：**读清单，不做 git 考古**；续跑 prompt = 原 task decisions/verify + 剩余清单 + 「前半已 commit 在 `<sha>`，接着做」。续跑子代理完成后**不新建 commit**，用 `git add -A && git commit --amend` 折回那个 `[partial]` commit（串行下它必是 HEAD）并去掉 `[partial]` 标记——保住「一 task 一 commit」不变量（下游 `git show <sha>`、Stage 5 diff 全依赖它），最终 SHA 记进 task report 的 `**Commit**`。
 
 **耦合簇执行（单元含多个 task 时）**：
 
@@ -168,11 +154,13 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 - **越界检查升到「簇 `files` 并集」层**：簇内 task 间互相写对方文件属正常协作，单 task 越界检查在簇内失效；改为对比簇 `files` 并集，并**要求子代理回报「每个 task 实际碰了哪些文件」**供细粒度核对（见精简回报形状）。
 - 簇内每个 task 都各自落一份 task report（与独立 task 同格式）。
 
-**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **注释删除：单处删除连续 ≥3 行注释的位置 + 理由（无则「无」）** + **知识沉淀：幸存的 context / ADR 候选及其 assess-candidate 路由（目标层 + 理由 + file:line；无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕里 `新增注释` / `前置修订` 由**主 session** 据这份回报 + diff 补全；`context 候选` / `ADR 候选` **直接取子代理回报里的 assess-candidate 路由，主 session 只记录、不重判**（理由见下「知识沉淀的归属」）。
+**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **知识沉淀：幸存的 context / ADR 候选及其 assess-candidate 路由（目标层 + 理由 + file:line；无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕里 `新增注释` / `前置修订` 由**主 session** 据这份回报 + diff 补全；`context 候选` / `ADR 候选` **直接取子代理回报里的 assess-candidate 路由，主 session 只记录、不重判**（理由见下「知识沉淀的归属」）。
 
-**落盘保护（防止 /clear 丢失补全字段）**：子代理精简回报到手后，**立即**把原始精简回报作为 draft 追加到 task-reports.md，格式为 `## Task N: <标题> [draft]`（与正式版标题一致、加 `[draft]` 后缀），再读 diff 补全剩余字段。补全完成后，以 `## Task N:` 前缀（不含标题全文）为锚点把整段 `[draft]` 替换为正式版本。这样即使 /clear 在补全过程中发生，精简回报和 commit SHA 已持久化，下次恢复可从 draft + diff 重建；恢复时若看到 `[draft]` 标记即知该 task 补全未完成。
+**立即落盘**：子代理精简回报到手后**立即**落盘到 task-reports.md（`## Task N: <标题>`），再读 diff 补全剩余字段。若 /clear 落在补全中途（commit 已在、report 不全）——由入场恢复规则重建（见「入场动作」）。
 
 **两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
+
+**质量审查额外维度（注释误删检查）**：质量审查者对 `git show <sha>` 里被删除的注释行，套同一 litmus 核——「这条注释不在了，下一个读代码的 AI 会犯错吗？会 → 误删了有价值注释，要求恢复」。
 
 **规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。
@@ -183,10 +171,10 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 
 **主 session 每 task 终态后按此序处理（串行 checklist，避免并发判断导致漂移）**：
 
-1. 收到子代理精简回报 → **立即** draft 落盘到 task-reports.md（`## Task N: <标题> [draft]`，见上「落盘保护」）
+1. 收到子代理精简回报 → **立即**落盘到 task-reports.md（`## Task N: <标题>`，见上「立即落盘」）
 2. 据回报 + diff 补全 `新增注释` / `前置修订` 字段；把回报里的幸存候选 + 路由记入 `context 候选` / `ADR 候选`（不重判）
 3. 跑两段评审 → 回填 `**审查**` 行（见上「两段评审」）
-4. draft 替换为正式版；确认本 task 段完整后，再 dispatch 下一执行单元
+4. 确认本 task 段完整后，再 dispatch 下一执行单元
 
 ## task report 格式（每 task 完成后主 session 立即落盘）
 
@@ -211,9 +199,6 @@ implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下�
 
 ### ADR 候选
 子代理 assess-candidate 路由到 ADR 的候选（跨文件、有权衡）——Stage 6 评 ADR
-
-### 注释删除
-单处删除连续注释 ≥3 行的位置 + 理由
 
 ### 前置修订
 本 task 自查发现前置 stage 问题时填：L1/L2/L3 + 描述 + 处理（见 revision-protocol.md 入口 B）

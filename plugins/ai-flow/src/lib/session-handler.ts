@@ -118,14 +118,17 @@ export async function handleSessionStart(
       gatePending: true,
       recovered: true,
     });
+    const isTerminal = expectedNext === null;
     const lines: string[] = [
       `[ai-flow] 流程 '${flowName}' 恢复中，Stage '${state.current_stage}' 已提交，等待用户确认。`,
       ``,
       `Signal 已写入但用户尚未执行 approve。`,
-      `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve`,
+      isTerminal
+        ? `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve（终端阶段，approve 后流程结束）`
+        : `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve`,
       ``,
       `如需修改，继续讨论，完成后重新写入 signal。`,
-      `不要开始下一阶段工作。`,
+      isTerminal ? `不要擅自结束流程，等待开发者 approve。` : `不要开始下一阶段工作。`,
     ];
     return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
   }
