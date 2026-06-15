@@ -6,43 +6,75 @@ var __export = (target, all) => {
 };
 
 // src/hooks/posttool.ts
-import { readFileSync as readFileSync5 } from "fs";
+import { readFileSync as readFileSync7 } from "fs";
 
 // src/lib/posttool-handler.ts
-import { join as join5 } from "path";
+import { existsSync as existsSync6, unlinkSync as unlinkSync3 } from "fs";
+import { join as join7 } from "path";
+import { execSync } from "child_process";
 
 // src/lib/state.ts
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from "fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
 import { randomBytes } from "crypto";
-import { join, dirname } from "path";
+import { join as join2, dirname } from "path";
+
+// src/lib/session-registry.ts
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+function claudeDir() {
+  return process.env["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude");
+}
+function registryDir() {
+  return join(claudeDir(), "ai-flow", "sessions");
+}
+function bindingPath(sessionId) {
+  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(registryDir(), `${safe}.json`);
+}
+function lookupSession(sessionId) {
+  try {
+    const p = bindingPath(sessionId);
+    if (!existsSync(p)) return null;
+    const parsed = JSON.parse(readFileSync(p, "utf-8"));
+    if (!parsed || typeof parsed.projectRoot !== "string" || typeof parsed.flowName !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// src/lib/state.ts
 function statePath(repoRoot, flowName, file) {
-  return join(repoRoot, ".ai-flow", flowName, "state", file);
+  return join2(repoRoot, ".ai-flow", flowName, "state", file);
 }
 function stateDir(repoRoot, flowName) {
-  return join(repoRoot, ".ai-flow", flowName, "state");
+  return join2(repoRoot, ".ai-flow", flowName, "state");
 }
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
-  if (!existsSync(path)) return null;
+  if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf-8"));
+    return JSON.parse(readFileSync2(path, "utf-8"));
   } catch {
     return null;
   }
 }
 async function writeActiveState(repoRoot, flowName, state) {
   const dir = stateDir(repoRoot, flowName);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync2(dir, { recursive: true });
   const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString("hex")}.tmp`);
-  writeFileSync(tmp, JSON.stringify(state, null, 2));
-  renameSync(tmp, statePath(repoRoot, flowName, "active.json"));
+  writeFileSync2(tmp, JSON.stringify(state, null, 2));
+  renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join(dir, ".ai-flow");
-    if (existsSync(aiFlowDir)) {
-      for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
+    const aiFlowDir = join2(dir, ".ai-flow");
+    if (existsSync2(aiFlowDir)) {
+      for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
@@ -54,25 +86,37 @@ async function hasActiveFlow(cwd) {
     dir = parent;
   }
 }
+async function resolveActiveFlow(cwd, sessionId) {
+  if (sessionId) {
+    const binding = lookupSession(sessionId);
+    if (binding) {
+      const state = await readActiveState(binding.projectRoot, binding.flowName);
+      if (state) {
+        return { flowName: binding.flowName, state, repoRoot: binding.projectRoot };
+      }
+    }
+  }
+  return hasActiveFlow(cwd);
+}
 function readSignal(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "signal");
-  if (!existsSync(path)) return null;
+  if (!existsSync2(path)) return null;
   try {
-    return readFileSync(path, "utf-8").trim();
+    return readFileSync2(path, "utf-8").trim();
   } catch {
     return null;
   }
 }
 function writeSignalFile(repoRoot, flowName, content) {
   const dir = stateDir(repoRoot, flowName);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync2(dir, { recursive: true });
   const tmp = statePath(repoRoot, flowName, `signal.${randomBytes(4).toString("hex")}.tmp`);
-  writeFileSync(tmp, content);
-  renameSync(tmp, statePath(repoRoot, flowName, "signal"));
+  writeFileSync2(tmp, content);
+  renameSync2(tmp, statePath(repoRoot, flowName, "signal"));
 }
 async function appendLog(repoRoot, flowName, sessionId, message) {
   const logPath = statePath(repoRoot, flowName, "flow.log");
-  mkdirSync(dirname(logPath), { recursive: true });
+  mkdirSync2(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
@@ -85,6 +129,9 @@ function nextStage(config, currentStageId) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function markBasePath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "mark-base");
+}
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
@@ -96,18 +143,18 @@ function truncateError(e, max = 120) {
 }
 
 // src/lib/context.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2 } from "fs";
-import { join as join2 } from "path";
-import { homedir } from "os";
-function transcriptPath(sessionId, cwd) {
+import { readFileSync as readFileSync3, existsSync as existsSync3 } from "fs";
+import { join as join3 } from "path";
+import { homedir as homedir2 } from "os";
+function transcriptPathFor(sessionId, cwd) {
   const encoded = cwd.replace(/\//g, "-");
-  return join2(homedir(), ".claude", "projects", encoded, `${sessionId}.jsonl`);
+  return join3(homedir2(), ".claude", "projects", encoded, `${sessionId}.jsonl`);
 }
-function readTokenCount(sessionId, cwd) {
-  const p = transcriptPath(sessionId, cwd);
-  if (!existsSync2(p)) return 0;
+function readTokenCount(sessionId, cwd, transcriptPath) {
+  const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
+  if (!existsSync3(p)) return 0;
   try {
-    const lines = readFileSync2(p, "utf-8").split("\n").filter(Boolean);
+    const lines = readFileSync3(p, "utf-8").split("\n").filter(Boolean);
     let lastUsage = null;
     for (const line of lines) {
       try {
@@ -124,16 +171,16 @@ function readTokenCount(sessionId, cwd) {
     return 0;
   }
 }
-function contextPct(sessionId, cwd, contextWindowSize) {
+function contextPct(sessionId, cwd, contextWindowSize, transcriptPath) {
   if (contextWindowSize <= 0) return 0;
-  const tokens = readTokenCount(sessionId, cwd);
+  const tokens = readTokenCount(sessionId, cwd, transcriptPath);
   return Math.round(tokens / contextWindowSize * 100);
 }
 var DEFAULT_CONTEXT_WINDOW = 1e6;
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync3, readdirSync as readdirSync2, readFileSync as readFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "fs";
+import { join as join4 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4234,11 +4281,11 @@ ${details}`);
   }
 };
 async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join3(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName);
+  const configPath = join4(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync4(configPath)) throw new FlowNotFoundError(flowName);
   let raw2;
   try {
-    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
+    raw2 = JSON.parse(readFileSync4(configPath, "utf-8"));
   } catch (e) {
     throw new FlowConfigParseError(configPath, e);
   }
@@ -4256,8 +4303,27 @@ function getStageConfig(config, stageId) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync } from "fs";
-import { join as join4 } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync5, unlinkSync as unlinkSync2 } from "fs";
+import { join as join6 } from "path";
+
+// src/lib/prompt-render.ts
+import { join as join5 } from "path";
+function renderPrompt(content, repoRoot, flowName) {
+  const flowRoot = join5(repoRoot, ".ai-flow", flowName);
+  return content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+}
+function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
+  const flowRoot = join5(repoRoot, ".ai-flow", flowName);
+  const lines = [
+    `[ai-flow:paths]`,
+    `project_root: ${repoRoot}`,
+    `flow_root: ${flowRoot}`
+  ];
+  if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
+  return lines.join("\n") + "\n\n";
+}
+
+// src/lib/advance-stage.ts
 async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
@@ -4268,9 +4334,9 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync4(activeJson)) unlinkSync(activeJson);
+    if (existsSync5(activeJson)) unlinkSync2(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync4(sig)) unlinkSync(sig);
+    if (existsSync5(sig)) unlinkSync2(sig);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4282,14 +4348,14 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync4(sigFile)) unlinkSync(sigFile);
+  if (existsSync5(sigFile)) unlinkSync2(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
-  const promptPath = join4(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const promptPath = join6(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
-  if (existsSync4(promptPath)) {
+  if (existsSync5(promptPath)) {
     try {
-      promptContent = readFileSync4(promptPath, "utf-8");
+      promptContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
     } catch {
     }
   }
@@ -4311,12 +4377,34 @@ var DEFAULT_REWARN_DELTA_PCT = 5;
 async function handlePostTool(input2) {
   const { cwd, tool_name, session_id, context_size_pct } = input2;
   if (!WRITE_TOOLS.has(tool_name)) return null;
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
   try {
     const rawFp = String(input2.tool_input?.["file_path"] ?? "");
-    const fp = rawFp.startsWith("/") ? rawFp : join5(repoRoot, rawFp);
+    const fp = rawFp.startsWith("/") ? rawFp : join7(repoRoot, rawFp);
+    const markBase = markBasePath(repoRoot, flowName);
+    if (fp === markBase) {
+      try {
+        if (existsSync6(markBase)) unlinkSync3(markBase);
+      } catch {
+      }
+      if (state.base_sha_code) {
+        return { additionalContext: `[ai-flow] base_sha_code \u5DF2\u5B58\u5728(${state.base_sha_code}),\u8DF3\u8FC7\u91CD\u590D\u6355\u83B7\u3002` };
+      }
+      let sha = "";
+      try {
+        sha = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
+      } catch {
+      }
+      if (!sha) {
+        await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURE_FAIL`);
+        return { additionalContext: `[ai-flow] base_sha_code \u6355\u83B7\u5931\u8D25:\u65E0\u6CD5 git rev-parse HEAD(\u4ED3\u5E93\u662F\u5426\u5DF2\u6709\u63D0\u4EA4?)\u3002\u8BF7\u5148\u5B8C\u6210 docs \u63D0\u4EA4\u518D\u5199 mark-base\u3002` };
+      }
+      await writeActiveState(repoRoot, flowName, { ...state, base_sha_code: sha });
+      await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURED ${sha}`);
+      return { additionalContext: `[ai-flow] \u2713 base_sha_code \u5DF2\u6355\u83B7:${sha}(Stage 5/6 \u7684\u4EE3\u7801 diff \u57FA\u51C6,\u5DF2\u5199\u5165\u5F15\u64CE\u72B6\u6001)\u3002` };
+    }
     const sig = signalPath(repoRoot, flowName);
     if (fp === sig) {
       const signalContent = readSignal(repoRoot, flowName);
@@ -4349,12 +4437,7 @@ async function handlePostTool(input2) {
         }
         await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
         const result = await advanceStage(repoRoot, flowName, session_id);
-        const flowRoot = join5(repoRoot, ".ai-flow", flowName);
-        const pathsPreamble = `[ai-flow:paths]
-project_root: ${repoRoot}
-flow_root: ${flowRoot}
-
-`;
+        const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
         return { additionalContext: pathsPreamble + result.additionalContext };
       }
     }
@@ -4365,7 +4448,7 @@ flow_root: ${flowRoot}
     } catch {
     }
     const contextWindow = state.context_size > 0 ? state.context_size : DEFAULT_CONTEXT_WINDOW;
-    const pct = context_size_pct ?? contextPct(session_id, repoRoot, contextWindow);
+    const pct = context_size_pct ?? contextPct(session_id, cwd, contextWindow, input2.transcript_path);
     const warning = state.context_warning;
     const warnAt = flowContextCfg?.warn_at_pct ?? DEFAULT_WARN_AT_PCT;
     const rewarnDelta = flowContextCfg?.rewarn_delta_pct ?? DEFAULT_REWARN_DELTA_PCT;
@@ -4406,7 +4489,7 @@ flow_root: ${flowRoot}
 // src/hooks/posttool.ts
 var raw = (() => {
   try {
-    return readFileSync5(0, "utf-8");
+    return readFileSync7(0, "utf-8");
   } catch {
     return "{}";
   }

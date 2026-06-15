@@ -6,44 +6,121 @@ var __export = (target, all) => {
 };
 
 // src/hooks/session.ts
-import { readFileSync as readFileSync5 } from "fs";
+import { readFileSync as readFileSync6 } from "fs";
 
 // src/lib/session-handler.ts
-import { readFileSync as readFileSync4, existsSync as existsSync4 } from "fs";
-import { join as join4 } from "path";
+import { readFileSync as readFileSync5, existsSync as existsSync5 } from "fs";
+import { join as join6 } from "path";
 
 // src/lib/state.ts
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from "fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import { randomBytes as randomBytes2 } from "crypto";
+import { join as join2, dirname } from "path";
+
+// src/lib/session-registry.ts
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
-import { join, dirname } from "path";
+import { join } from "path";
+import { homedir } from "os";
+function claudeDir() {
+  return process.env["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude");
+}
+function registryDir() {
+  return join(claudeDir(), "ai-flow", "sessions");
+}
+function bindingPath(sessionId) {
+  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(registryDir(), `${safe}.json`);
+}
+function bindSession(sessionId, projectRoot, flowName) {
+  try {
+    const dir = registryDir();
+    mkdirSync(dir, { recursive: true });
+    const payload = {
+      sessionId,
+      projectRoot,
+      flowName,
+      boundAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const tmp = join(dir, `${randomBytes(4).toString("hex")}.tmp`);
+    writeFileSync(tmp, JSON.stringify(payload, null, 2));
+    renameSync(tmp, bindingPath(sessionId));
+  } catch {
+  }
+}
+function lookupSession(sessionId) {
+  try {
+    const p = bindingPath(sessionId);
+    if (!existsSync(p)) return null;
+    const parsed = JSON.parse(readFileSync(p, "utf-8"));
+    if (!parsed || typeof parsed.projectRoot !== "string" || typeof parsed.flowName !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function unbindSession(sessionId) {
+  try {
+    const p = bindingPath(sessionId);
+    if (existsSync(p)) unlinkSync(p);
+  } catch {
+  }
+}
+function listBindings() {
+  try {
+    const dir = registryDir();
+    if (!existsSync(dir)) return [];
+    const out = [];
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(join(dir, f), "utf-8"));
+        if (parsed && typeof parsed.sessionId === "string" && typeof parsed.projectRoot === "string" && typeof parsed.flowName === "string") {
+          out.push(parsed);
+        }
+      } catch {
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+function removeBinding(sessionId) {
+  unbindSession(sessionId);
+}
+
+// src/lib/state.ts
 function statePath(repoRoot, flowName, file) {
-  return join(repoRoot, ".ai-flow", flowName, "state", file);
+  return join2(repoRoot, ".ai-flow", flowName, "state", file);
 }
 function stateDir(repoRoot, flowName) {
-  return join(repoRoot, ".ai-flow", flowName, "state");
+  return join2(repoRoot, ".ai-flow", flowName, "state");
 }
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
-  if (!existsSync(path)) return null;
+  if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf-8"));
+    return JSON.parse(readFileSync2(path, "utf-8"));
   } catch {
     return null;
   }
 }
 async function writeActiveState(repoRoot, flowName, state) {
   const dir = stateDir(repoRoot, flowName);
-  mkdirSync(dir, { recursive: true });
-  const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString("hex")}.tmp`);
-  writeFileSync(tmp, JSON.stringify(state, null, 2));
-  renameSync(tmp, statePath(repoRoot, flowName, "active.json"));
+  mkdirSync2(dir, { recursive: true });
+  const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes2(4).toString("hex")}.tmp`);
+  writeFileSync2(tmp, JSON.stringify(state, null, 2));
+  renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join(dir, ".ai-flow");
-    if (existsSync(aiFlowDir)) {
-      for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
+    const aiFlowDir = join2(dir, ".ai-flow");
+    if (existsSync2(aiFlowDir)) {
+      for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
@@ -55,11 +132,35 @@ async function hasActiveFlow(cwd) {
     dir = parent;
   }
 }
+async function resolveActiveFlow(cwd, sessionId) {
+  if (sessionId) {
+    const binding = lookupSession(sessionId);
+    if (binding) {
+      const state = await readActiveState(binding.projectRoot, binding.flowName);
+      if (state) {
+        return { flowName: binding.flowName, state, repoRoot: binding.projectRoot };
+      }
+    }
+  }
+  return hasActiveFlow(cwd);
+}
+async function gcRegistry() {
+  for (const b of listBindings()) {
+    let dead = false;
+    try {
+      const state = await readActiveState(b.projectRoot, b.flowName);
+      if (!state || state.last_session_id !== null && state.last_session_id !== b.sessionId) dead = true;
+    } catch {
+      dead = true;
+    }
+    if (dead) removeBinding(b.sessionId);
+  }
+}
 function readSignal(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "signal");
-  if (!existsSync(path)) return null;
+  if (!existsSync2(path)) return null;
   try {
-    return readFileSync(path, "utf-8").trim();
+    return readFileSync2(path, "utf-8").trim();
   } catch {
     return null;
   }
@@ -78,7 +179,7 @@ function isGatePending(signal, config, currentStageId) {
 }
 async function appendLog(repoRoot, flowName, sessionId, message) {
   const logPath = statePath(repoRoot, flowName, "flow.log");
-  mkdirSync(dirname(logPath), { recursive: true });
+  mkdirSync2(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
@@ -107,8 +208,8 @@ function flowStatusLine(opts) {
 }
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync2, readdirSync as readdirSync2, readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
+import { join as join3 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4209,11 +4310,11 @@ ${details}`);
   }
 };
 async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join2(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync2(configPath)) throw new FlowNotFoundError(flowName);
+  const configPath = join3(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName);
   let raw2;
   try {
-    raw2 = JSON.parse(readFileSync2(configPath, "utf-8"));
+    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
   } catch (e) {
     throw new FlowConfigParseError(configPath, e);
   }
@@ -4244,8 +4345,27 @@ function contextWindowForModel(model) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3, unlinkSync } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync as unlinkSync2 } from "fs";
+import { join as join5 } from "path";
+
+// src/lib/prompt-render.ts
+import { join as join4 } from "path";
+function renderPrompt(content, repoRoot, flowName) {
+  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
+  return content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+}
+function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
+  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
+  const lines = [
+    `[ai-flow:paths]`,
+    `project_root: ${repoRoot}`,
+    `flow_root: ${flowRoot}`
+  ];
+  if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
+  return lines.join("\n") + "\n\n";
+}
+
+// src/lib/advance-stage.ts
 async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
@@ -4256,9 +4376,9 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync3(activeJson)) unlinkSync(activeJson);
+    if (existsSync4(activeJson)) unlinkSync2(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync3(sig)) unlinkSync(sig);
+    if (existsSync4(sig)) unlinkSync2(sig);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4270,14 +4390,14 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const updated = { ...state, current_stage: next, first_prompt_handled: false };
   await writeActiveState(repoRoot, flowName, updated);
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync3(sigFile)) unlinkSync(sigFile);
+  if (existsSync4(sigFile)) unlinkSync2(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
-  const promptPath = join3(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const promptPath = join5(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
-  if (existsSync3(promptPath)) {
+  if (existsSync4(promptPath)) {
     try {
-      promptContent = readFileSync3(promptPath, "utf-8");
+      promptContent = renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName);
     } catch {
     }
   }
@@ -4295,7 +4415,9 @@ ${promptContent}
 // src/lib/session-handler.ts
 async function handleSessionStart(input2) {
   const { cwd, session_id, model } = input2;
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  await gcRegistry().catch(() => {
+  });
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
   try {
@@ -4341,6 +4463,7 @@ async function handleSessionStart(input2) {
       updated.first_prompt_handled = false;
     }
     await writeActiveState(repoRoot, flowName, updated);
+    bindSession(session_id, repoRoot, flowName);
     const config = await loadFlowConfig(repoRoot, flowName);
     const stageCfg = getStageConfig(config, state.current_stage);
     const signal = readSignal(repoRoot, flowName);
@@ -4348,12 +4471,7 @@ async function handleSessionStart(input2) {
     const expectedSignalContent = expectedNext !== null ? expectedNext : "flow-complete";
     const isSignalValid = signal === "done";
     const isFlowComplete = signal === "flow-complete" && expectedNext === null;
-    const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-    const pathsPreamble = `[ai-flow:paths]
-project_root: ${repoRoot}
-flow_root: ${flowRoot}
-
-`;
+    const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
     if (isGatePending(signal, config, state.current_stage)) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
       const statusLine2 = flowStatusLine({
@@ -4390,11 +4508,11 @@ flow_root: ${flowRoot}
       return base;
     }
     await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
-    const promptPath = join4(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+    const promptPath = join6(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
     let promptContent = "";
-    if (existsSync4(promptPath)) {
+    if (existsSync5(promptPath)) {
       try {
-        promptContent = readFileSync4(promptPath, "utf-8");
+        promptContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
       } catch {
       }
     }
@@ -4427,7 +4545,7 @@ flow_root: ${flowRoot}
 // src/hooks/session.ts
 var raw = (() => {
   try {
-    return readFileSync5(0, "utf-8");
+    return readFileSync6(0, "utf-8");
   } catch {
     return "{}";
   }

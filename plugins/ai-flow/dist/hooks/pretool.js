@@ -6,22 +6,52 @@ var __export = (target, all) => {
 };
 
 // src/hooks/pretool.ts
-import { readFileSync as readFileSync3 } from "fs";
+import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
-import { join as join3, relative, resolve } from "path";
+import { join as join4, relative, resolve } from "path";
 
 // src/lib/state.ts
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from "fs";
-import { join, dirname } from "path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import { join as join2, dirname } from "path";
+
+// src/lib/session-registry.ts
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
+function claudeDir() {
+  return process.env["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude");
+}
+function registryDir() {
+  return join(claudeDir(), "ai-flow", "sessions");
+}
+function bindingPath(sessionId) {
+  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(registryDir(), `${safe}.json`);
+}
+function lookupSession(sessionId) {
+  try {
+    const p = bindingPath(sessionId);
+    if (!existsSync(p)) return null;
+    const parsed = JSON.parse(readFileSync(p, "utf-8"));
+    if (!parsed || typeof parsed.projectRoot !== "string" || typeof parsed.flowName !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// src/lib/state.ts
 function statePath(repoRoot, flowName, file) {
-  return join(repoRoot, ".ai-flow", flowName, "state", file);
+  return join2(repoRoot, ".ai-flow", flowName, "state", file);
 }
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
-  if (!existsSync(path)) return null;
+  if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf-8"));
+    return JSON.parse(readFileSync2(path, "utf-8"));
   } catch {
     return null;
   }
@@ -29,9 +59,9 @@ async function readActiveState(repoRoot, flowName) {
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join(dir, ".ai-flow");
-    if (existsSync(aiFlowDir)) {
-      for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
+    const aiFlowDir = join2(dir, ".ai-flow");
+    if (existsSync2(aiFlowDir)) {
+      for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
@@ -43,9 +73,21 @@ async function hasActiveFlow(cwd) {
     dir = parent;
   }
 }
+async function resolveActiveFlow(cwd, sessionId) {
+  if (sessionId) {
+    const binding = lookupSession(sessionId);
+    if (binding) {
+      const state = await readActiveState(binding.projectRoot, binding.flowName);
+      if (state) {
+        return { flowName: binding.flowName, state, repoRoot: binding.projectRoot };
+      }
+    }
+  }
+  return hasActiveFlow(cwd);
+}
 async function appendLog(repoRoot, flowName, sessionId, message) {
   const logPath = statePath(repoRoot, flowName, "flow.log");
-  mkdirSync(dirname(logPath), { recursive: true });
+  mkdirSync2(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
@@ -55,8 +97,8 @@ function signalPath(repoRoot, flowName) {
 }
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync2, readdirSync as readdirSync2, readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
+import { join as join3 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4157,11 +4199,11 @@ ${details}`);
   }
 };
 async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join2(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync2(configPath)) throw new FlowNotFoundError(flowName);
+  const configPath = join3(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName);
   let raw2;
   try {
-    raw2 = JSON.parse(readFileSync2(configPath, "utf-8"));
+    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
   } catch (e) {
     throw new FlowConfigParseError(configPath, e);
   }
@@ -4198,11 +4240,12 @@ function getStageByPromptPath(config, flowName, filePath) {
 import { spawnSync } from "child_process";
 async function runScript(command, cwd, opts) {
   const timeout = opts?.timeout_ms ?? 3e4;
-  const result = spawnSync("sh", ["-c", command], {
+  const result = spawnSync(command, {
     cwd,
     timeout,
     encoding: "utf-8",
-    maxBuffer: 1024 * 1024
+    maxBuffer: 1024 * 1024,
+    shell: true
   });
   if (result.signal === "SIGTERM" || result.error?.message?.includes("ETIMEDOUT") || result.status === null && result.signal) {
     return { ok: false, reason: `Script timed out after ${timeout}ms` };
@@ -4234,11 +4277,11 @@ function allow() {
 }
 function resolvePath(repoRoot, filePath) {
   if (filePath.startsWith("/")) return filePath;
-  return join3(repoRoot, filePath);
+  return join4(repoRoot, filePath);
 }
 async function handlePreTool(input2) {
   const { cwd, tool_name, tool_input, session_id } = input2;
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName: activeFlowName, state, repoRoot } = active;
   try {
@@ -4252,16 +4295,18 @@ async function handlePreTool(input2) {
     }
     if (tool_name === "Bash") {
       const command = String(tool_input["command"] ?? "");
-      const signal = signalPath(repoRoot, activeFlowName);
-      const activeJson = join3(repoRoot, ".ai-flow", activeFlowName, "state", "active.json");
-      const scripts = join3(repoRoot, ".ai-flow", activeFlowName, "scripts");
-      if (command.includes(signal)) return deny("Direct Bash writes to signal are blocked. Use the Write tool to signal stage completion.");
-      if (command.includes(activeJson)) return deny("Direct modification of active.json is blocked (control plane protection).");
-      if (command.includes(scripts)) return deny("Modification of scripts/ via Bash is blocked. Ask the user to replace scripts manually.");
-      if (resolve(cwd) !== resolve(repoRoot) && !/^cd(\s|$)/.test(command.trimStart())) {
-        await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH_BASH cwd=${cwd}`);
+      const flowRel = join4(".ai-flow", activeFlowName);
+      const cpFragments = [
+        signalPath(repoRoot, activeFlowName),
+        join4(repoRoot, flowRel, "state", "active.json"),
+        join4(repoRoot, flowRel, "scripts"),
+        join4(flowRel, "state", "signal"),
+        join4(flowRel, "state", "active.json"),
+        join4(flowRel, "scripts")
+      ];
+      if (cpFragments.some((f) => command.includes(f))) {
         return deny(
-          `feat-flow expects the working directory to be the flow root (${repoRoot}), but the session cwd has drifted into a subdirectory (${cwd}). Relative paths in Bash resolve against this cwd, so repo-root-anchored paths would be mis-resolved (doubled prefix). Prefix the command with 'cd ${repoRoot} && ...' to return to the flow root, or use absolute paths for every path argument.`
+          "Direct Bash modification of ai-flow control-plane files (signal / active.json / scripts) is blocked. Use the Write tool to write the signal; ask the user to change active.json or scripts manually."
         );
       }
       return null;
@@ -4289,7 +4334,7 @@ async function handlePreTool(input2) {
     if (!fp.startsWith("/") && resolve(cwd) !== resolve(repoRoot)) {
       await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
       return deny(
-        `feat-flow expects the working directory to be the flow root (${repoRoot}), but the current cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' would be written under the subdirectory \u2014 not the flow root \u2014 and Write would silently create it there. Re-issue the write with an absolute path to the location you actually intend: a flow artifact rooted at the flow root is ${join3(repoRoot, fp)}; a file under the current subdirectory is ${resolve(cwd, fp)}.`
+        `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a relative path \u2014 the Write tool would resolve it against the current cwd and silently create it there. Re-issue the write with an absolute path to the location you actually intend: a flow-root artifact is ${join4(repoRoot, fp)}; a file under the current dir is ${resolve(cwd, fp)}.`
       );
     }
     const absPath = resolvePath(repoRoot, fp);
@@ -4304,7 +4349,7 @@ async function handlePreTool(input2) {
         );
       }
       if (stageCfg2.completion.script) {
-        const flowDir = join3(repoRoot, ".ai-flow", activeFlowName);
+        const flowDir = join4(repoRoot, ".ai-flow", activeFlowName);
         const scriptOpts = stageCfg2.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg2.completion.script.timeout_ms } : void 0;
         const scriptResult = await runScript(stageCfg2.completion.script.command, flowDir, scriptOpts);
         if (!scriptResult.ok) {
@@ -4323,20 +4368,20 @@ Fix the issues and try again.`);
       return allow();
     }
     const rel = relative(repoRoot, absPath);
-    const flowBase = join3(".ai-flow", activeFlowName);
-    if (rel === join3(flowBase, "state", "active.json")) {
+    const flowBase = join4(".ai-flow", activeFlowName);
+    if (rel === join4(flowBase, "state", "active.json")) {
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json`);
       return deny("Direct writes to active.json are blocked (control plane protection).");
     }
-    if (rel === join3(flowBase, "config.json")) {
+    if (rel === join4(flowBase, "config.json")) {
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json`);
       return deny("config.json is read-only during flow execution.");
     }
-    if (rel.startsWith(join3(flowBase, "stages") + "/")) {
+    if (rel.startsWith(join4(flowBase, "stages") + "/")) {
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
       return deny("Stage prompt files are read-only during flow execution.");
     }
-    if (rel.startsWith(join3(flowBase, "scripts") + "/")) {
+    if (rel.startsWith(join4(flowBase, "scripts") + "/")) {
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
       return deny("Script files cannot be modified during flow execution. Ask the user to replace them manually.");
     }
@@ -4345,7 +4390,7 @@ Fix the issues and try again.`);
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
       const allowed = docsPaths.some((p) => {
         const norm = p.endsWith("/") ? p : p + "/";
-        return rel.startsWith(norm) || absPath.startsWith(join3(repoRoot, norm));
+        return rel.startsWith(norm) || absPath.startsWith(join4(repoRoot, norm));
       });
       if (!allowed) {
         await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
@@ -4369,7 +4414,7 @@ Blocked: ${fp}`
 // src/hooks/pretool.ts
 var raw = (() => {
   try {
-    return readFileSync3(0, "utf-8");
+    return readFileSync4(0, "utf-8");
   } catch {
     return "{}";
   }
