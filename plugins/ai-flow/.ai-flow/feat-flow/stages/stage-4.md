@@ -117,6 +117,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
 - **复用优先 + 最简实现**：写新代码前先 grep 相邻 / 共享模块，已有 helper 直接调用、不重复造；只写完成本 task `done` 所需的最简实现——不加可推导的冗余状态、不留死代码、不复制粘贴改两行。**仅限本 task 范围**——需泛化底层机制属架构级，留给 Stage 5，不在此越界重构
 - **注释纪律**：加任何注释前先问「不加，下一个读这段代码的 AI 会犯错吗」——只解释代码答不出的『为什么』（缘由 / 否定 / 约定 / 边界四类），凡复述代码『在做什么』的不写；改动代码时同步检查**相邻注释**是否已失准、需更新
+- **持久产物自包含**：代码注释与本 task 的 commit message 禁止引用 flow 内部临时指代（`Task N` / `U<k>` / `Phase X` / 「见上文」等）——要表达就直接写实质内容。task-reports.md 等 flow 内归档不受限。
 - **单元是耦合簇时**：见「耦合簇执行」——簇内**逐 task commit、逐 task 跑 verify**，不是一坨做完只 commit/verify 一次
 - **知识沉淀（测试通过后、返回前——你在代码里，故由你做）**：识别本 task 引入、命中『缘由 / 否定 / 约定 / 边界』4 类的知识（非显然选择含为何不选 X · 验证某方案不可行 · 不确定是否已记录的命名/架构/接口约定 · 依赖外部条件会静默失效），对每条调用 `optimize-claude-context` 的 `assess-candidate`，只把它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**纳入精简回报（其余由 skill 自理，不必回报）。跳过：调试试验 / 临时绕过 / 个人偏好。
 
@@ -140,6 +141,8 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 **两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
 
 **质量审查额外维度（注释误删检查）**：质量审查者对 `git show <sha>` 里被删除的注释行，套同一 litmus 核——「这条注释不在了，下一个读代码的 AI 会犯错吗？会 → 误删了有价值注释，要求恢复」。
+
+**质量审查额外维度（新增注释 / commit 自包含检查）**：对 `git show <sha>` 里新增注释行与 commit message，核是否出现 `Task N` / `U<k>` / `Phase X` / 「见上文」等临时指代。命中 → 要求改写成自包含表述后重 commit。
 
 **规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。

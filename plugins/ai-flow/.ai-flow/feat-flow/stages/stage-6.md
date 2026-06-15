@@ -47,7 +47,7 @@ flow-squash: <flow_id>"
 fi
 ```
 
-`git reset --soft` 把 base 之后的所有提交折成一笔暂存改动、HEAD 退回 base，`git add -A` 纳入散落的未提交工件（task-reports.md 等），一次 commit 成单个 `feat:`，body 末行 `flow-squash: <flow_id>` 作幂等锚点。reset 后必只剩一笔，**单 task 与多 task 同走这一条路**、都得规范 feat 提交。body 指向 `docs/feat-flows/`（细节由这些文档保留）。此后**知识沉淀写入一律不 commit**。
+`git reset --soft` 把 base 之后的所有提交折成一笔暂存改动、HEAD 退回 base，`git add -A` 纳入散落的未提交工件（task-reports.md 等），一次 commit 成单个 `feat:`，body 末行 `flow-squash: <flow_id>` 作幂等锚点。**commit message 自包含**：概述与 what/why 不引用 `Task N` / `U<k>` / `Phase X` 等 flow 内部临时指代。reset 后必只剩一笔，**单 task 与多 task 同走这一条路**、都得规范 feat 提交。body 指向 `docs/feat-flows/`（细节由这些文档保留）。此后**知识沉淀写入一律不 commit**。
 
 ### A1. 解析写入根目录（monorepo 兼容）
 
@@ -86,6 +86,7 @@ fi
 > 为什么用 manual 模式而非同名的 `feat-flow` 模式：`feat-flow` 模式跳过 Step 0（拆分），要求调用方保证每条 directive 已原子化。但本 stage 的候选含 Stage 1 草拟的 ADR 候选、freeform 的 context-delta 条目，**不保证原子**，需要 manual 模式的 Step 0 解析/拆分兜底。对已原子的条目 Step 0 是廉价空操作。**勿改成 feat-flow 模式。**
 
 - `handle-one-directive` 单工具负责全 4 层：linter 检查（可机械化执行的毕业到 linter 配置，不进 context 层）→ 跨源冲突检测（扫 CLAUDE.md / rules / skills / **ADR 目录**）→ 层路由（CLAUDE.md / rules / skill / **ADR**，Priority 4 的"解释性决策理由"即落 ADR）→ 内容 enrichment → 写入文件（ADR 走 Nygard 模板 + 更新 README 索引）
+- **写入内容必须自包含**：候选措辞若带 `Task N` / `U<k>` / `Phase X` / 「本次」等临时指代，enrichment 时**展开成实质内容**再写入。汇总表的「改动和原因」不受此限（呈现给开发者、可就地解析）。
 - **遇到 `CONFLICT`**：当场展示给开发者（附双方内容 + 来源），等待决策后继续处理下一条
 - **遇到 `LAYER SPLIT`**：当场展示选项 A/B/C，等待开发者选择后继续
 - **遇到 `ADR OVERLAP DETECTED`**（ADR 候选与既有 ADR 语义重叠）：当场展示选项 A（原地更新既有 ADR）/ B（新建 ADR + 把旧的标 supersede），等待开发者选择后继续——**这是「退役 / supersede」的触发点，不可跳过**
