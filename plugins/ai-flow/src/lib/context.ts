@@ -8,13 +8,19 @@ interface TokenUsage {
   cache_read_input_tokens?: number;
 }
 
-function transcriptPath(sessionId: string, cwd: string): string {
+function transcriptPathFor(sessionId: string, cwd: string): string {
   const encoded = cwd.replace(/\//g, '-');
   return join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
 }
 
-export function readTokenCount(sessionId: string, cwd: string): number {
-  const p = transcriptPath(sessionId, cwd);
+// `transcriptPath` (when given) is the ground truth the hook receives — use it
+// verbatim. The cwd-based reconstruction is only a fallback: the transcript is
+// keyed by the session's LAUNCH directory, which is neither the current cwd
+// (the agent may have cd'd) nor the flow's repoRoot (in a monorepo sub-project
+// the anchor differs from the launch dir). Passing repoRoot there silently read
+// the wrong/empty file and disabled the context warn/block guard.
+export function readTokenCount(sessionId: string, cwd: string, transcriptPath?: string): number {
+  const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
   if (!existsSync(p)) return 0;
   try {
     const lines = readFileSync(p, 'utf-8').split('\n').filter(Boolean);
@@ -38,9 +44,9 @@ export function readTokenCount(sessionId: string, cwd: string): number {
   }
 }
 
-export function contextPct(sessionId: string, cwd: string, contextWindowSize: number): number {
+export function contextPct(sessionId: string, cwd: string, contextWindowSize: number, transcriptPath?: string): number {
   if (contextWindowSize <= 0) return 0;
-  const tokens = readTokenCount(sessionId, cwd);
+  const tokens = readTokenCount(sessionId, cwd, transcriptPath);
   return Math.round((tokens / contextWindowSize) * 100);
 }
 

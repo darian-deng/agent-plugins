@@ -1,12 +1,12 @@
 {
   "name": "ai-flow",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "private": true,
   "type": "module",
   "author": "Darian Deng <imdengxianyu@qq.com>",
   "scripts": {
-    "build": "node -e \"if (!process.env.CI) { console.error('ERROR: build is CI-only. Run npm run build:local for local development.'); process.exit(1); }\" && esbuild src/hooks/userprompt.ts src/hooks/posttool.ts src/hooks/pretool.ts src/hooks/session.ts src/hooks/sessionend.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist/hooks",
-    "build:local": "esbuild src/hooks/userprompt.ts src/hooks/posttool.ts src/hooks/pretool.ts src/hooks/session.ts src/hooks/sessionend.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist-local/hooks",
+    "build": "node -e \"if (!process.env.CI) { console.error('ERROR: build is CI-only. Run npm run build:local for local development.'); process.exit(1); }\" && esbuild src/hooks/userprompt.ts src/hooks/posttool.ts src/hooks/pretool.ts src/hooks/session.ts src/hooks/sessionend.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist/hooks && esbuild src/cli/add.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist/cli",
+    "build:local": "esbuild src/hooks/userprompt.ts src/hooks/posttool.ts src/hooks/pretool.ts src/hooks/session.ts src/hooks/sessionend.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist-local/hooks && esbuild src/cli/add.ts --bundle --platform=node --target=node18 --format=esm --outdir=dist-local/cli",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

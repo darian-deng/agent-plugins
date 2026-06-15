@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, append
 import { randomBytes } from 'crypto';
 import { join, dirname } from 'path';
 import type { FlowConfig } from './flow-schema.js';
+import { lookupSession, listBindings, removeBinding } from './session-registry.js';
 
 export interface ContextWarning {
   warned: boolean;
@@ -99,6 +100,62 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
   }
 }
 
+/**
+ * Resolve the active flow for a hook invocation.
+ *
+ * Resolution order:
+ *  1. session→anchor binding (cwd-INDEPENDENT) — survives the agent `cd`-ing to
+ *     an ancestor/sibling of the anchor, which walk-up cannot. If the binding
+ *     points to a flow whose active.json is gone (aborted), fall through.
+ *  2. walk-up from cwd (hasActiveFlow) — backward-compatible fallback; also how
+ *     a fresh session bootstraps before it has been bound.
+ *
+ * Ownership (last_session_id) is NOT validated here on purpose: a binding that
+ * points to a flow now owned by another session must still RESOLVE, so the
+ * downstream mutex can tell this session it is locked out (rather than silently
+ * seeing no flow).
+ */
+export async function resolveActiveFlow(
+  cwd: string,
+  sessionId?: string
+): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
+  if (sessionId) {
+    const binding = lookupSession(sessionId);
+    if (binding) {
+      const state = await readActiveState(binding.projectRoot, binding.flowName);
+      if (state) {
+        return { flowName: binding.flowName, state, repoRoot: binding.projectRoot };
+      }
+      // Binding is stale (flow aborted/removed) — fall through to walk-up.
+    }
+  }
+  return hasActiveFlow(cwd);
+}
+
+/**
+ * Prune dead session→anchor bindings. A binding is dead when:
+ *  - its anchor or active.json no longer exists (flow aborted/removed), or
+ *  - the flow's active.json is owned by a DIFFERENT, non-null session
+ *    (this binding's session was taken over).
+ * A null owner (flow released, waiting to resume) is NOT treated as dead: the
+ * binding may still be the legitimate last anchor, and keeping it lets the same
+ * session re-resolve the flow by binding even if its cwd has drifted above the
+ * anchor. (The normal cleanup path is SessionEnd's explicit unbind, not GC.)
+ * Best-effort and exception-safe — never throws.
+ */
+export async function gcRegistry(): Promise<void> {
+  for (const b of listBindings()) {
+    let dead = false;
+    try {
+      const state = await readActiveState(b.projectRoot, b.flowName);
+      if (!state || (state.last_session_id !== null && state.last_session_id !== b.sessionId)) dead = true;
+    } catch {
+      dead = true;
+    }
+    if (dead) removeBinding(b.sessionId);
+  }
+}
+
 export function readSignal(repoRoot: string, flowName: string): string | null {
   const path = statePath(repoRoot, flowName, 'signal');
   if (!existsSync(path)) return null;
@@ -147,6 +204,15 @@ export function nextStage(config: FlowConfig, currentStageId: string): string | 
 
 export function signalPath(repoRoot: string, flowName: string): string {
   return statePath(repoRoot, flowName, 'signal');
+}
+
+/**
+ * Marker file the AI writes (via the Write tool) to ask the engine to capture
+ * `base_sha_code` = current git HEAD. Lets the engine own the active.json write
+ * (control-plane-safe) instead of stages poking active.json with relative python.
+ */
+export function markBasePath(repoRoot: string, flowName: string): string {
+  return statePath(repoRoot, flowName, 'mark-base');
 }
 
 export function activeJsonPath(repoRoot: string, flowName: string): string {

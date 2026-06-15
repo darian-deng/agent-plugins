@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { handlePostTool } from '../src/lib/posttool-handler.js';
-import { readActiveState, signalPath } from '../src/lib/state.js';
+import { readActiveState, signalPath, markBasePath } from '../src/lib/state.js';
+import { execSync } from 'child_process';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, BLOCKING_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
 import type { PostToolInput } from '../src/lib/types.js';
 
@@ -36,6 +37,40 @@ describe('handlePostTool', () => {
     const repo = makeRepo();
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 80));
     expect(out).toBeNull();
+  });
+
+  it('mark-base marker → engine captures base_sha_code = HEAD', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const head = execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim();
+    const input = makeInput(repo.repoRoot, 'Write', 10);
+    (input.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+    const out = await handlePostTool(input);
+    expect(out?.additionalContext).toContain(head);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBe(head);
+  });
+
+  it('mark-base marker when base_sha_code already set → does not overwrite', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      base_sha_code: 'PRESET_SHA',
+    });
+    const input = makeInput(repo.repoRoot, 'Write', 10);
+    (input.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+    const out = await handlePostTool(input);
+    expect(out?.additionalContext).toMatch(/已存在/);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBe('PRESET_SHA');
   });
 
   it('non-write tool → null', async () => {

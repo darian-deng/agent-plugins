@@ -67,9 +67,13 @@ ai-flow 通过两项机械保证确保 AI 无法绕过流程控制：
 
 ### 环境要求
 
+- **Node.js ≥ 18 — 唯一的普适前置**：引擎（hooks / 安装 CLI / preflight）全部基于 Node，跨平台（含 Windows），不依赖 shell 或 Python。缺失时 `/ai-flow:add` 会在入口给出明确提示。
 - Claude Code（版本 ≥ 2.1.5）
-- Node.js ≥ 18
-- Git（开始工作流时需要干净的工作区）
+- **按 flow 声明的依赖**：具体 flow 可能需要额外工具——例如 feat-flow 需要 Git（开始工作流时需要干净的工作区）。这类依赖由各 flow 的 preflight 在启动时检查并给出安装指引，不是插件级的普适要求。
+
+### 安装位置（含 monorepo）
+
+可装在 git 仓库根，也可装在 monorepo 的某个子项目根——`.ai-flow` 装在哪，该 flow 的锚点就在哪。引擎按 session 绑定定位 flow，运行中可自由 `cd` 到任意目录。`/ai-flow:add` 会探测项目根候选让你选；若子项目装在已有外层 `.ai-flow` 之下，会提示「就近锚定、屏蔽外层 flow」（项目隔离的预期行为）。
 
 ### 许可证
 
@@ -172,9 +176,22 @@ workflow controls:
 
 ### Requirements
 
+- **Node.js ≥ 18 — the only universal prerequisite.** The engine (hooks /
+  install CLI / preflight) is all Node-based and cross-platform (incl. Windows);
+  it needs no shell or Python. `/ai-flow:add` checks for it up front.
 - Claude Code (version ≥ 2.1.5)
-- Node.js ≥ 18
-- Git (clean working tree required to start a workflow)
+- **Per-flow dependencies**: a given flow may need extra tools — e.g. feat-flow
+  needs Git (clean working tree to start). These are checked by each flow's
+  preflight at start with install guidance, and are not plugin-wide requirements.
+
+### Install location (incl. monorepos)
+
+Install at the git repo root, or at a sub-project root in a monorepo — wherever
+`.ai-flow` lives is that flow's anchor. The engine locates the flow by session
+binding, so the agent may freely `cd` while a flow runs. `/ai-flow:add` detects
+project-root candidates and lets you choose; installing under an existing outer
+`.ai-flow` warns that it will anchor locally and shadow the outer flow (intended
+project isolation).
 
 ### License
 

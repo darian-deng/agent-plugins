@@ -5,7 +5,7 @@
 
 ## 目标
 
-**stage-5 只审「全部改动组装后才显现」的缺陷**——这是 Stage 1/2/4 任何单点都看不到的视角。逐函数局部 bug / 语法 / 边界已由 **Stage 4 每 task 的两段评审（规格 + 质量）覆盖，这里不重做**；架构与方案已由 Stage 2 + 其 Gate 定稿，这里不重判（发现真问题走 `references/revision-protocol.md`，不当常规审查项）。
+**stage-5 只审「全部改动组装后才显现」的缺陷**——这是 Stage 1/2/4 任何单点都看不到的视角。逐函数局部 bug / 语法 / 边界已由 **Stage 4 每 task 的两段评审（规格 + 质量）覆盖，这里不重做**；架构与方案已由 Stage 2 + 其 Gate 定稿，这里不重判（发现真问题走 `{{flow_root}}/references/revision-protocol.md`，不当常规审查项）。
 
 确保 base_sha_code 之后的所有改动通过：
 - **自动化回归**（lint / typecheck / 单元测试 / 集成测试）
@@ -16,14 +16,14 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
-- `docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
-- `docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 前置修订）
-- `.ai-flow/feat-flow/state/active.json` 中的 `base_sha_code` 字段 — Stage 4 起点 SHA
+- `{{project_root}}/docs/feat-flows/<flow_id>/design.md` — 项目命令、决策记录、AC
+- `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md` — 架构基线 + 集成点清单
+- `{{project_root}}/docs/feat-flows/<flow_id>/task-reports.md` — 跨 task 元信息（新术语 / 前置修订）
+- 引擎注入的 `[ai-flow:paths]` 块里的 `base_sha_code` — Stage 4 起点 SHA（下文 `<base>` 即此值；不要去读 active.json，那是控制面）
 
 ## 入场动作
 
-**ADR 查阅**：执行 `references/adr-scan.md`，筛出与本次改动相关的 ADR，产出**相关 ADR 路径列表**——下文环节 B 两个视角的审查者都按需引用它（视角① 查"是否违反既有 ADR"、视角② 取安全相关 ADR）。无 `docs/adr/` 则列表为空，跳过。
+**ADR 查阅**：执行 `{{flow_root}}/references/adr-scan.md`，筛出与本次改动相关的 ADR，产出**相关 ADR 路径列表**——下文环节 B 两个视角的审查者都按需引用它（视角① 查"是否违反既有 ADR"、视角② 取安全相关 ADR）。无 `docs/adr/` 则列表为空，跳过。
 
 ## 环节 A：自动化回归
 
@@ -36,7 +36,7 @@
 **失败处理**：
 - 修代码（默认）
 - 若是既有测试被打破 + 怀疑测试在测**实现细节** → 应用「既有测试破坏纪律」（见下）
-- 修复后 `git add . && git commit -m "fix: resolve verification errors"`
+- 修复后 `git add -A && git commit -m "fix: resolve verification errors"`（`-A` 全树暂存,不受当前目录影响）
 - 重跑直到全过
 
 ### 既有测试破坏纪律
@@ -56,7 +56,7 @@
 
 > 为什么不用专用安全/审查插件 agent：官方生态里没有"有文档、可验证调用、且是安全专项"的 subagent——`code-review` 插件是 PR 导向且把安全列为忽略项，`security-guidance` 是被动 hooks，`code-modernization:security-auditor` 是无文档的插件内部 agent（无法可靠调用）。故用 general-purpose **执行公认的 OWASP/CWE 标准**：被背书的是标准本身，不是 agent 外壳。
 
-> base SHA 取法：`python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code', '') or (print('ERROR: base_sha_code 缺失', end='') or '')"`。若字段缺失（极罕见：flow 跨版本续跑），Stage 4 Step 1 需重新执行。下文 `<base>` 均指此值。
+> base SHA = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code` 值。下文 `<base>` 均指此值。若注入块里没有该行（极罕见：flow 跨版本续跑），回 Stage 4 重写 `{{flow_root}}/state/mark-base` 让引擎重新捕获。
 
 ### 视角①：集成 & 需求闭环审查（必跑）
 
@@ -96,15 +96,9 @@
 ```bash
 # 找依赖清单文件（排除 lock 文件）中是否有新增行
 # 覆盖主流生态：JS/TS、Python、Rust、Go、Ruby、Java/Kotlin、PHP、.NET
-BASE_SHA=$(python3 -c "
-import json, sys
-d = json.load(open('.ai-flow/feat-flow/state/active.json'))
-sha = d.get('base_sha_code')
-if not sha:
-    print('ERROR: base_sha_code 未在 active.json 中找到，Stage 4 Step 1 可能未完成', file=sys.stderr)
-    sys.exit(1)
-print(sha)
-")
+# BASE_SHA = 引擎注入的 base_sha_code（把下面的占位替换成 [ai-flow:paths] 里那个值）
+BASE_SHA="<注入的 base_sha_code 值>"
+[ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 Stage 4 重写 mark-base 重新捕获"; exit 1; }
 MANIFEST_RE="package\.json$|requirements[^/]*\.txt$|Pipfile$|pyproject\.toml$|Cargo\.toml$|go\.mod$|Gemfile$|pom\.xml$|build\.gradle(\.kts)?$|\.csproj$|composer\.json$"
 ADDED_DEPS=$(git diff "$BASE_SHA"..HEAD --name-only \
   | grep -E "$MANIFEST_RE" \
@@ -158,7 +152,7 @@ echo "${ADDED_DEPS:-NONE}"
 
 ### 自查前置 stage 问题（Stage 5 期间随时可能触发）
 
-任一视角的审查者或主 session 自查发现前置 stage 漏写 / 错了 → 走 `references/revision-protocol.md`（入口 B）：
+任一视角的审查者或主 session 自查发现前置 stage 漏写 / 错了 → 走 `{{flow_root}}/references/revision-protocol.md`（入口 B）：
 - L1（推翻决策）→ 停下问开发者，建议 abort
 - L2（漏写补全）→ 暂停 Stage 5，回更新前置文档，让开发者确认，再回 Stage 5 继续
 - L3（小修）→ inline 修文档，review.md 加注记
@@ -257,9 +251,9 @@ BASE_SHA_CODE: <SHA>
 - 从 review.md 已解决项 + diff 识别命中 helper「注释与 context 归置」4 类之一（缘由 / 否定 / 约定 / 边界）、且属代码行为模式（非一次性局部 bug）的候选
 - 对每条调用 `optimize-claude-context` 的 `assess-candidate`，只回它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**（其余由 skill 自理）
 
-> `base_sha_code` 取自 active.json（命令见 Stage 6）。跨源冲突检测与权威路由仍归 Stage 6 `handle-one-directive`。
+> `base_sha_code` 取自引擎注入的 `[ai-flow:paths]` 块。跨源冲突检测与权威路由仍归 Stage 6 `handle-one-directive`。
 
-主 session 把子代理回报的幸存候选写入 `docs/feat-flows/<flow_id>/context-delta.md`。**不论是否有候选，都必须追加 `## Stage 5` 节**（无幸存时写「（无）」）——此节是 Stage 6 验证本 stage 已执行的唯一标记。
+主 session 把子代理回报的幸存候选写入 `{{project_root}}/docs/feat-flows/<flow_id>/context-delta.md`。**不论是否有候选，都必须追加 `## Stage 5` 节**（无幸存时写「（无）」）——此节是 Stage 6 验证本 stage 已执行的唯一标记。
 
 ```markdown
 ## Stage 5 — <flow_id>
@@ -270,4 +264,4 @@ BASE_SHA_CODE: <SHA>
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足——**含环节 C 走完（开发者确认无更多问题 + 最终 CR 干净）**。在此之前不写 signal；即便讨论中开发者说「可以了」，也要先跑完最终 CR。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`。写入后引擎进入 gate-pending，开发者 `feat-flow approve` 方才推进。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`。写入后引擎进入 gate-pending，开发者 `feat-flow approve` 方才推进。

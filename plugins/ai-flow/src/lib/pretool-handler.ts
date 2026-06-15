@@ -1,7 +1,7 @@
 import { join, relative, resolve } from 'path';
 import type { PreToolInput } from './types.js';
 import {
-  hasActiveFlow,
+  resolveActiveFlow,
   appendLog,
   signalPath,
 } from './state.js';
@@ -35,7 +35,7 @@ function resolvePath(repoRoot: string, filePath: string): string {
 export async function handlePreTool(input: PreToolInput): Promise<PreToolResult | null> {
   const { cwd, tool_name, tool_input, session_id } = input;
 
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
 
   const { flowName: activeFlowName, state, repoRoot } = active;
@@ -56,33 +56,36 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // ─── Bash interception ────────────────────────────────────────────────────────
   if (tool_name === 'Bash') {
     const command = String(tool_input['command'] ?? '');
-    const signal = signalPath(repoRoot, activeFlowName);
-    const activeJson = join(repoRoot, '.ai-flow', activeFlowName, 'state', 'active.json');
-    const scripts = join(repoRoot, '.ai-flow', activeFlowName, 'scripts');
+    const flowRel = join('.ai-flow', activeFlowName);
 
-    if (command.includes(signal)) return deny('Direct Bash writes to signal are blocked. Use the Write tool to signal stage completion.');
-    if (command.includes(activeJson)) return deny('Direct modification of active.json is blocked (control plane protection).');
-    if (command.includes(scripts)) return deny('Modification of scripts/ via Bash is blocked. Ask the user to replace scripts manually.');
-
-    // ─── cwd ≠ repoRoot guard for Bash (subdir cwd-drift protection) ──────────────
-    // repoRoot is always cwd or an ancestor (hasActiveFlow walks up). When the session
-    // cwd has drifted into a subdirectory, repoRoot-anchored RELATIVE paths in Bash
-    // commands (e.g. `git add apps/x/...`) resolve against the drifted cwd and land at a
-    // doubled prefix (`apps/x/apps/x/...`). Bash commands are free text — we cannot
-    // reliably extract operated paths — but cwd≠repoRoot is a reliable drift signal, so
-    // we DENY and tell the session to return to the flow root.
-    // EXCEPTION: allow `cd `-prefixed commands. The hook sees the pre-command (still
-    // drifted) cwd, so without this the escape hatch `cd <repoRoot> && ...` would itself
-    // be denied and the session would deadlock with no way back to the flow root.
-    if (resolve(cwd) !== resolve(repoRoot) && !/^cd(\s|$)/.test(command.trimStart())) {
-      await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH_BASH cwd=${cwd}`);
+    // Control-plane files must only ever be mutated through the engine (signal
+    // via the Write tool; active.json/scripts not at all). Block Bash references
+    // to them in BOTH their absolute and repoRoot-relative forms — an agent that
+    // has not cd'd typically writes the relative path (`echo done >
+    // .ai-flow/<flow>/state/signal`), which the absolute-only match missed.
+    // Residual gap (accepted): a `cd` into the state dir followed by a bare
+    // filename (`cd .../state && echo done > signal`) is not caught here — the
+    // Write-tool interception below remains the precise, primary guard.
+    const cpFragments = [
+      signalPath(repoRoot, activeFlowName),
+      join(repoRoot, flowRel, 'state', 'active.json'),
+      join(repoRoot, flowRel, 'scripts'),
+      join(flowRel, 'state', 'signal'),
+      join(flowRel, 'state', 'active.json'),
+      join(flowRel, 'scripts'),
+    ];
+    if (cpFragments.some((f) => command.includes(f))) {
       return deny(
-        `feat-flow expects the working directory to be the flow root (${repoRoot}), but the session ` +
-        `cwd has drifted into a subdirectory (${cwd}). Relative paths in Bash resolve against this cwd, ` +
-        `so repo-root-anchored paths would be mis-resolved (doubled prefix). Prefix the command with ` +
-        `'cd ${repoRoot} && ...' to return to the flow root, or use absolute paths for every path argument.`
+        'Direct Bash modification of ai-flow control-plane files (signal / active.json / scripts) is blocked. ' +
+        'Use the Write tool to write the signal; ask the user to change active.json or scripts manually.'
       );
     }
+
+    // cwd drift is no longer fenced for Bash: the flow is resolved by session
+    // binding (cwd-independent) and stage prompts anchor flow paths on the
+    // injected absolute {{project_root}}/{{flow_root}}, so the agent is free to
+    // `cd` into a sub-project to run scoped commands. git operations resolve
+    // `.git` upward, so they remain correct regardless of cwd.
     return null;
   }
 
@@ -114,22 +117,21 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   const fp = String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? '');
   if (!fp) return null;
 
-  // ─── cwd ≠ repoRoot guard (subdir-write protection) ───────────────────────────
-  // repoRoot is always cwd or an ancestor (hasActiveFlow walks up to find .ai-flow).
-  // When the session cwd is a subdirectory, a RELATIVE file_path is resolved by the
-  // write tool against cwd — so it silently lands at <cwd>/<fp> instead of the flow
-  // root, and the scope check below (which assumes repoRoot) would validate the wrong
-  // path. Write also auto-creates parent dirs, so the misplacement is silent. Force
-  // an absolute, repoRoot-anchored path before any path-based check runs.
+  // ─── Relative-write-while-drifted guard (silent-misplacement protection) ──────
+  // cd is now unrestricted (the flow is resolved by session binding, not cwd). But a
+  // RELATIVE file_path is still resolved by the Write tool against the CURRENT cwd —
+  // so if the agent has cd'd away, a relative write silently lands under the wrong
+  // dir, and the scope check below (which assumes repoRoot) would validate the wrong
+  // path. We can't know the intended base, so require an absolute path when drifted.
+  // Stage prompts anchor flow artifacts on the injected absolute {{project_root}},
+  // so well-formed writes pass; this only catches stray relative writes.
   if (!fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
     await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
     return deny(
-      `feat-flow expects the working directory to be the flow root (${repoRoot}), but the current ` +
-      `cwd has drifted into a subdirectory (${cwd}). Relative paths resolve against cwd, so '${fp}' ` +
-      `would be written under the subdirectory — not the flow root — and Write would silently create ` +
-      `it there. Re-issue the write with an absolute path to the location you actually intend: ` +
-      `a flow artifact rooted at the flow root is ${join(repoRoot, fp)}; ` +
-      `a file under the current subdirectory is ${resolve(cwd, fp)}.`
+      `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a ` +
+      `relative path — the Write tool would resolve it against the current cwd and silently create it ` +
+      `there. Re-issue the write with an absolute path to the location you actually intend: ` +
+      `a flow-root artifact is ${join(repoRoot, fp)}; a file under the current dir is ${resolve(cwd, fp)}.`
     );
   }
 

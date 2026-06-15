@@ -18,12 +18,12 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 决策、AC、UI 状态、项目命令、TDD 基建决策
-- `docs/feat-flows/<flow_id>/architecture.md` — 架构决策、build 顺序、文件清单、接口设计
+- `{{project_root}}/docs/feat-flows/<flow_id>/design.md` — 决策、AC、UI 状态、项目命令、TDD 基建决策
+- `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md` — 架构决策、build 顺序、文件清单、接口设计
 
 ## 步骤
 
-**入场判断（/clear 重入）**：若 `docs/feat-flows/<flow_id>/plan.md` 已存在 → 跳过步骤 1–3，直接从步骤 5 重跑三轮 review；plan.md 不存在 → 按完整步骤 1→2→3→4→5 执行。
+**入场判断（/clear 重入）**：若 `{{project_root}}/docs/feat-flows/<flow_id>/plan.md` 已存在 → 跳过步骤 1–3，直接从步骤 5 重跑三轮 review；plan.md 不存在 → 按完整步骤 1→2→3→4→5 执行。
 
 1. **生成 task 草稿**：按「任务格式规范」+「粒度标准」，把 architecture.md 的模块/接口/build 顺序拆成 task。每 task 填 `done` / `files`（符号锚点）/ `TDD` / `depends_on` / `touches_shared` / `output_size`。
    - TDD 约束：
@@ -93,7 +93,7 @@ output_size: small | large # large 强制拆骨架+填充，见「粒度标准�
 2. **文件可枚举且 ≤ 3–4**：`files` 能逐条列全，且数量 ≤ 3–4。列不全或超数 → 拆。
 3. **输出体量装得进单上下文（`output_size`）**：判据是**数 plan 已知量，不是预测代码体量**——以 `files.Create` 数量 + architecture.md 中该文件**已列明**需实现的方法/导出/枚举条目数为准。单文件需实现 ≥ 一批已列明成员（如「包装全部 rpc 方法」）→ 标 `output_size: large` → **强制拆骨架 task（建接口/空壳）+ 填充 task（逐批实现）**。
 
-**output_size 前置门（修截断根因）**：若 architecture.md **没列全**某文件要实现的成员（如只写「包装全部 rpc 方法」却没枚举是哪些），stage-3 **估不出体量 → 不许猜**，走 `references/revision-protocol.md` 入口 B 退回要求 Stage 2 补全枚举，再继续。这是把「预测代码体量」这个不可静态化的事，换成「architecture 是否列全」这个可静态检查的前置条件。
+**output_size 前置门（修截断根因）**：若 architecture.md **没列全**某文件要实现的成员（如只写「包装全部 rpc 方法」却没枚举是哪些），stage-3 **估不出体量 → 不许猜**，走 `{{flow_root}}/references/revision-protocol.md` 入口 B 退回要求 Stage 2 补全枚举，再继续。这是把「预测代码体量」这个不可静态化的事，换成「architecture 是否列全」这个可静态检查的前置条件。
 
 > 非枚举型的大（纯逻辑复杂度高、无法静态估）→ 标 `output_size: small` 正常拆，运行时若仍超大由 Stage 4 截断自保护协议兜底。
 
@@ -200,12 +200,12 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 - **有分歧**（Round 3 仍有任何 `done` 准确性或覆盖完整性问题未解决）→ gate 等用户决策，用户决策后写 signal
 
 冲突处理：
-- 开发者提异议 → `references/revision-protocol.md`（入口 A）
-- AI 自查发现 design.md / architecture.md 漏写 / 错了 → `references/revision-protocol.md`（入口 B）
+- 开发者提异议 → `{{flow_root}}/references/revision-protocol.md`（入口 A）
+- AI 自查发现 design.md / architecture.md 漏写 / 错了 → `{{flow_root}}/references/revision-protocol.md`（入口 B）
 
 ## 输出规格
 
-文件 → `docs/feat-flows/<flow_id>/plan.md`
+文件 → `{{project_root}}/docs/feat-flows/<flow_id>/plan.md`
 
 格式：
 - 每 task = `### Task N` + `unit` + `TDD` + `done` + `verify` + `read_first` + `decisions` + `files`（符号锚点）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `contract`（stub task）
@@ -222,4 +222,4 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。

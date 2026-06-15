@@ -232,87 +232,68 @@ stage prompt 中应包含此协议，避免 AI 在用户提异议时反射性接
 - 产出文件路径汇总
 - 环境要求
 
-### `.ai-flow/{flow-name}/preflight.sh`
+### `.ai-flow/{flow-name}/preflight.cjs`
 
-有外部依赖时必须生成。按以下模板填充，空节（无该类依赖）直接省略整节：
+有外部依赖时必须生成。preflight 是 **Node 脚本**（`.cjs` 强制 CommonJS，纯 node builtin，跨平台、不依赖 shell/python——Node 是 ai-flow 唯一的普适前置）。按模板填充，空节（无该类依赖）省略整节。插件自带的 `feat-flow/preflight.cjs` 是可直接照抄的完整范例。
 
-```sh
-#!/bin/sh
-# {flow-name} preflight — runs once when '{flow-name} start' is called.
-# Exit 0 = all checks pass. Non-zero = blocked with error message.
+```js
+#!/usr/bin/env node
+'use strict';
+const { existsSync, readdirSync } = require('fs');
+const { join } = require('path');
+const { homedir } = require('os');
+const { spawnSync } = require('child_process');
 
-PASS=0
-FAIL=1
-MISSING=0
-SKILLS_DIR="$HOME/.claude/skills"
-PLUGINS_CACHE="$HOME/.claude/plugins/cache"  # 实现细节路径，跨版本不保证稳定
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+const SKILLS_DIR = join(claudeDir, 'skills');
+const PLUGINS_CACHE = join(claudeDir, 'plugins', 'cache'); // 实现细节路径，跨版本不保证稳定
+let missing = false;
 
-err()          { printf "❌  %s\n" "$1" >&2; }
-cmd()          { printf "    %s\n" "$1" >&2; }
-ok()           { printf "✅  %s\n" "$1"; }
-check_cmd()    { command -v "$1" >/dev/null 2>&1; }
-check_skill()  { [ -f "$SKILLS_DIR/$1/SKILL.md" ]; }
-check_plugin() { find "$PLUGINS_CACHE" -maxdepth 4 -type d -name "$1" 2>/dev/null | grep -q .; }
-check_mcp()    { claude mcp list 2>/dev/null | grep -qE "(^|[[:space:]])$1([[:space:]]|$)"; }
+const err = (m) => process.stderr.write('❌  ' + m + '\n');
+const cmd = (m) => process.stderr.write('    ' + m + '\n');
+const ok  = (m) => process.stdout.write('✅  ' + m + '\n');
 
-# ── 系统工具 ────────────────────────────────────────────────────────
-# 每个系统工具一个独立 check 块，按需添加：
-# if ! check_cmd {tool}; then
-#   err "{tool} not found. Install: {官方安装命令}"
-#   MISSING=1
-# else
-#   ok "{tool} $(${tool} --version 2>/dev/null | head -1)"
-# fi
+// 命令是否在 PATH：spawn 无 ENOENT 即存在（--version 退出码无关）
+const cmdExists  = (bin) => !spawnSync(bin, ['--version'], { stdio: 'ignore' }).error;
+const checkSkill = (n) => existsSync(join(SKILLS_DIR, n, 'SKILL.md'));
+function checkPlugin(name, maxDepth = 4) {        // 目录名匹配，最多下探 maxDepth 层
+  if (!existsSync(PLUGINS_CACHE)) return false;
+  const stack = [{ dir: PLUGINS_CACHE, depth: 0 }];
+  while (stack.length) {
+    const { dir, depth } = stack.pop();
+    let es; try { es = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of es) {
+      if (!e.isDirectory()) continue;
+      if (e.name === name) return true;
+      if (depth < maxDepth) stack.push({ dir: join(dir, e.name), depth: depth + 1 });
+    }
+  }
+  return false;
+}
+const checkMcp = (n) => {
+  const r = spawnSync('claude', ['mcp', 'list'], { encoding: 'utf-8' });
+  return !r.error && new RegExp('(^|\\s)' + n + '(\\s|$)', 'm').test(r.stdout || '');
+};
 
-# ── Skills ─────────────────────────────────────────────────────────
-# 每个 skill 一个独立块，安装命令来自第二点五阶段解析结果。
-# 所有 skill 检测完后统一 exit，让用户一次看到全部缺失项。
+// ── 系统工具（每个独立块，按需添加）──
+// if (!cmdExists('{tool}')) { err('{tool} not found. Install: {官方命令}'); missing = true; } else ok('{tool}');
 
-if check_skill "{skill-a}"; then
-  ok "skill: {skill-a}"
-else
-  err "Missing skill: {skill-a}"
-  cmd "npx skills add {owner-a/repo-a}@{skill-a} -g -y"
-  MISSING=1
-fi
+// ── Skills（安装命令来自第二点五阶段解析；逐个检测、最后统一 exit）──
+if (checkSkill('{skill-a}')) ok('skill: {skill-a}');
+else { err('Missing skill: {skill-a}'); cmd('npx skills add {owner-a/repo-a}@{skill-a} -g -y'); missing = true; }
 
-if check_skill "{skill-b}"; then
-  ok "skill: {skill-b}"
-else
-  err "Missing skill: {skill-b}"
-  cmd "npx skills add {owner-b/repo-b}@{skill-b} -g -y"
-  MISSING=1
-fi
+// ── Plugins ──
+// if (checkPlugin('{plugin-name}')) ok('plugin: {plugin-name}');
+// else { err('Missing plugin: {plugin-name}'); cmd('claude plugin install {name}@{registry} --scope user'); missing = true; }
 
-# ── Plugins ────────────────────────────────────────────────────────
-# 同 Skills 模式：每个 plugin 独立块，收集后统一 exit。
-# if check_plugin "{plugin-name}"; then
-#   ok "plugin: {plugin-name}"
-# else
-#   err "Missing plugin: {plugin-name}"
-#   cmd "claude plugin install {name}@{registry} --scope user"
-#   MISSING=1
-# fi
+// ── MCP（只检测是否已配置）──
+// if (checkMcp('{mcp-name}')) ok('mcp: {mcp-name}');
+// else { err('{mcp-name} MCP not configured.'); err('Install: {官方文档}'); missing = true; }
 
-# ── MCP ────────────────────────────────────────────────────────────
-# MCP 安装方式各异，只检测是否已配置，安装需用户手动操作。
-# if check_mcp "{mcp-name}"; then
-#   ok "mcp: {mcp-name}"
-# else
-#   err "{mcp-name} MCP not configured."
-#   err "Install: {按官方文档的安装命令或配置路径}"
-#   MISSING=1
-# fi
-
-[ "$MISSING" = "1" ] && exit $FAIL
-exit $PASS
+process.exit(missing ? 1 : 0);
 ```
 
-脚本的 cwd 是 `.ai-flow/{flow-name}/`。若需在项目根目录执行命令：
-```sh
-REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT" || exit 1
-```
+preflight 运行时 cwd = 项目根（repoRoot）：检查项目文件可用相对路径；检查 skill/plugin/mcp 用上面基于 `CLAUDE_CONFIG_DIR`/home 的绝对路径，与 cwd 无关。
 
 ### `.ai-flow/{flow-name}/scripts/`（如有 Script Validator）
 

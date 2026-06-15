@@ -1,4 +1,3 @@
-import { join } from 'path';
 import {
   readActiveState,
   readSignal,
@@ -8,6 +7,7 @@ import {
 } from '../state.js';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { advanceStage } from '../advance-stage.js';
+import { buildAiFlowPreamble } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 
 export async function handleApprove(
@@ -45,7 +45,6 @@ export async function handleApprove(
   const systemMessage = result.terminal
     ? `[${flowName}] ✅ 流程已结束`
     : `[${flowName}] ✅ 已进入 ${enteredStage} · 正在读取阶段文档…`;
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
-  const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+  const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
   return { action: 'allow', systemMessage, additionalContext: pathsPreamble + result.additionalContext };
 }

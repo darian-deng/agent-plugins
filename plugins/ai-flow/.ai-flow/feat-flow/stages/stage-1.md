@@ -17,7 +17,7 @@
    - 其内容由 grounded-design 接地时完整读取（本地 Read / URL→tavily-extract / 飞书→lark-doc），此处不重复读取
 
 2. **ADR 查阅**
-   - 执行 `references/adr-scan.md`
+   - 执行 `{{flow_root}}/references/adr-scan.md`
 
 3. **项目命令探测**
    - 读 `package.json` scripts / `pyproject.toml` / `Makefile` 等
@@ -48,7 +48,7 @@
 
 ## UI 设计来源对齐（若需求涉及 UI）
 
-涉及任何 UI 改动（新页面、新组件、视觉调整）**必须读 `references/ui-protocol.md` 并逐步执行**：六类状态维度逐项 gap closure、每项未覆盖独立代码探索找现有复用组件、复用组件需开发者显式确认沿用。
+涉及任何 UI 改动（新页面、新组件、视觉调整）**必须读 `{{flow_root}}/references/ui-protocol.md` 并逐步执行**：六类状态维度逐项 gap closure、每项未覆盖独立代码探索找现有复用组件、复用组件需开发者显式确认沿用。
 
 ## 独立审计（写完 design.md 后必做）
 
@@ -69,11 +69,11 @@ dispatch 一个 fresh subagent（general-purpose 类型）对 design.md 做独�
 
 ## 前置产物修订（开发者异议 / AI 自查）
 
-详见 `references/revision-protocol.md`。开发者对产出有异议走入口 A，AI 自查发现前置漏 / 错走入口 B；均先评估对全部上游产物的影响并分级 L1/L2/L3，不反射性接受、不私下消化。
+详见 `{{flow_root}}/references/revision-protocol.md`。开发者对产出有异议走入口 A，AI 自查发现前置漏 / 错走入口 B；均先评估对全部上游产物的影响并分级 L1/L2/L3，不反射性接受、不私下消化。
 
 ## 输出规格
 
-文件 → `docs/feat-flows/<flow_id>/design.md`
+文件 → `{{project_root}}/docs/feat-flows/<flow_id>/design.md`
 
 `flow_id` 是引擎在 start 时生成的唯一标识，AI 看到 context 顶部注入的实际值（形如 `2026-05-21-x7k3`）。直接用此值作为 docs 文件夹名，**不要自己重新拼日期或加描述性后缀**。
 
@@ -119,7 +119,7 @@ design.md 骨架：
 
 ## 完成条件
 
-- `docs/feat-flows/<flow_id>/design.md` 存在且包含全部规定 section
+- `{{project_root}}/docs/feat-flows/<flow_id>/design.md` 存在且包含全部规定 section
 - 需求源（若为外部 PRD / URL / 文档）已记入「外部参考」节
 - 若涉及 UI：UI 状态清单 gap closure 完成（每项有归属来源）
 - TDD 基建决策已记录
@@ -129,4 +129,4 @@ design.md 骨架：
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。

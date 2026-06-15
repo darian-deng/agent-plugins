@@ -17,12 +17,12 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 含决策记录 + ADR 候选（Stage 1 问询中即时草拟的）
-- `docs/feat-flows/<flow_id>/architecture.md`
-- `docs/feat-flows/<flow_id>/plan.md`
-- `docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**。本 stage 只取候选字段 `ADR 候选` / `新术语或模式` / `context 候选`；`前置修订` 已在 Stage 4/5 当场走 revision-protocol 处理完，本 stage 不再动它（仅作存档）
-- `docs/feat-flows/<flow_id>/review.md` — 审查结论 + 待开发者决策项（供汇总报告引述「本次核心改动」，不作候选来源——Stage 5 的 context 候选已落在 context-delta.md `## Stage 5`）
-- `docs/feat-flows/<flow_id>/` 全部工件
+- `{{project_root}}/docs/feat-flows/<flow_id>/design.md` — 含决策记录 + ADR 候选（Stage 1 问询中即时草拟的）
+- `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md`
+- `{{project_root}}/docs/feat-flows/<flow_id>/plan.md`
+- `{{project_root}}/docs/feat-flows/<flow_id>/task-reports.md` — **Stage 4 每 task 的 task report 累积文件**。本 stage 只取候选字段 `ADR 候选` / `新术语或模式` / `context 候选`；`前置修订` 已在 Stage 4/5 当场走 revision-protocol 处理完，本 stage 不再动它（仅作存档）
+- `{{project_root}}/docs/feat-flows/<flow_id>/review.md` — 审查结论 + 待开发者决策项（供汇总报告引述「本次核心改动」，不作候选来源——Stage 5 的 context 候选已落在 context-delta.md `## Stage 5`）
+- `{{project_root}}/docs/feat-flows/<flow_id>/` 全部工件
 
 ## 环节 A：验证 + 候选收集（静默，不向开发者输出）
 
@@ -33,8 +33,8 @@
 进入 stage-6（开发者已 approve stage-5）后第一步——把 Stage 4/5 的全部改动压成一个功能提交：
 
 ```bash
-BASE_SHA=$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code',''))")
-[ -z "$BASE_SHA" ] && { echo "ERROR: base_sha_code 缺失"; exit 1; }
+BASE_SHA="<注入的 base_sha_code 值>"   # = 引擎 [ai-flow:paths] 块里的 base_sha_code
+[ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 Stage 4 重写 mark-base 重新捕获"; exit 1; }
 # 幂等锚点：squash 提交 body 固定带一行 flow-squash: <flow_id>；HEAD 已含该锚点 = 已 squash 过（/clear 重入）→ 跳过
 if ! git log -1 --format=%B | grep -q "flow-squash: <flow_id>"; then
   git reset --soft "$BASE_SHA" && git add -A && git commit -m "feat: <一句话功能概述>
@@ -53,8 +53,8 @@ fi
 
 - 列本次 flow 涉及的所有改动文件路径：
   ```bash
-  BASE_SHA=$(python3 -c "import json; print(json.load(open('.ai-flow/feat-flow/state/active.json')).get('base_sha_code',''))")
-  [ -z "$BASE_SHA" ] && { echo "ERROR: base_sha_code 缺失"; exit 1; }
+  BASE_SHA="<注入的 base_sha_code 值>"   # = 引擎 [ai-flow:paths] 块里的 base_sha_code
+  [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 Stage 4 重写 mark-base 重新捕获"; exit 1; }
   git diff "$BASE_SHA" HEAD --name-only
   ```
 - 计算「最深公共祖先目录」
@@ -62,7 +62,7 @@ fi
 
 ### A2. context-delta 验证
 
-读取 `docs/feat-flows/<flow_id>/context-delta.md`，验证写入完整性：
+读取 `{{project_root}}/docs/feat-flows/<flow_id>/context-delta.md`，验证写入完整性：
 
 - `## Stage 2` 节缺失 → **abort**：返回 Stage 2 执行 Context 变化捕获，写入后重新触发 S6
 - `## Stage 5` 节缺失 → **abort**：返回 Stage 5 执行 Context 变化捕获，写入后重新触发 S6
@@ -131,7 +131,7 @@ Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 ## Signal
 
 **触发条件**：上述「完成条件」全部满足、汇总表已呈现。**不要**在讨论中自觉「应该结束了」就写 signal——终端 stage 的误完成不可逆。
-**动作**：用 Write 向 `.ai-flow/feat-flow/state/signal` 写入 `done` → 引擎进入 gate-pending，等待开发者 `feat-flow approve` 才结束流程。**汇总表即 gate 呈现**；写 done 后若引擎再提示「呈现审查摘要」，不要重复铺陈，直接等 approve。
+**动作**：用 Write 向 `{{flow_root}}/state/signal` 写入 `done` → 引擎进入 gate-pending，等待开发者 `feat-flow approve` 才结束流程。**汇总表即 gate 呈现**；写 done 后若引擎再提示「呈现审查摘要」，不要重复铺陈，直接等 approve。
 
 **approve 后**（流程结束）向开发者报告：
 

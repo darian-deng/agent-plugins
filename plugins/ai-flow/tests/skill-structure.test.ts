@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'fs';
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -8,7 +8,7 @@ import { execSync } from 'child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
 const SKILLS_DIR = join(PLUGIN_ROOT, 'skills');
-const PREFLIGHT = join(PLUGIN_ROOT, '.ai-flow', 'feat-flow', 'preflight.sh');
+const PREFLIGHT = join(PLUGIN_ROOT, '.ai-flow', 'feat-flow', 'preflight.cjs');
 
 function checkSkill(name: string) {
   const skillMd = join(SKILLS_DIR, name, 'SKILL.md');
@@ -31,7 +31,7 @@ describe('ai-flow skills — structure', () => {
   checkSkill('update');
 });
 
-describe('feat-flow preflight.sh — integration', () => {
+describe('feat-flow preflight.cjs — integration', () => {
   const tmpDirs: string[] = [];
 
   afterEach(() => {
@@ -45,62 +45,68 @@ describe('feat-flow preflight.sh — integration', () => {
     return d;
   }
 
-  it('preflight.sh exists and is executable', () => {
+  // Run the node preflight with a mocked claude config dir. CLAUDE_CONFIG_DIR is
+  // set explicitly (overriding the test-suite's setup.ts value) so the preflight
+  // resolves skills/plugins under the fake home. node is invoked by absolute path
+  // so a restricted PATH doesn't break the runner itself.
+  function runPreflight(env: { home: string; path: string }): string {
+    return execSync(
+      `"${process.execPath}" "${PREFLIGHT}" 2>&1 || true`,
+      {
+        encoding: 'utf-8',
+        env: {
+          ...process.env,
+          HOME: env.home,
+          CLAUDE_CONFIG_DIR: join(env.home, '.claude'),
+          PATH: env.path,
+        },
+      }
+    );
+  }
+
+  it('preflight.cjs exists', () => {
     expect(existsSync(PREFLIGHT)).toBe(true);
-    const mode = statSync(PREFLIGHT).mode;
-    expect(mode & 0o111).toBeGreaterThan(0);
   });
 
   it('fails when claude CLI is not in PATH', () => {
     const fakeHome = makeFakeHome();
-    const result = execSync(
-      `HOME="${fakeHome}" PATH="/usr/bin:/bin" sh "${PREFLIGHT}" 2>&1 || true`,
-      { encoding: 'utf-8' }
-    );
+    const result = runPreflight({ home: fakeHome, path: '/usr/bin:/bin' });
     expect(result).toMatch(/claude CLI not found/i);
   });
 
-  it('fails with missing skills when HOME has no .claude/skills', () => {
+  it('fails with missing skills when config dir has no skills', () => {
     const fakeHome = makeFakeHome();
     const binDir = join(fakeHome, 'bin');
     mkdirSync(binDir);
-    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\necho "feature-dev@claude-plugins-official"\n');
+    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\nexit 0\n');
     chmodSync(join(binDir, 'claude'), 0o755);
 
-    const result = execSync(
-      `HOME="${fakeHome}" PATH="${binDir}:$PATH" sh "${PREFLIGHT}" 2>&1 || true`,
-      { encoding: 'utf-8' }
-    );
+    const result = runPreflight({ home: fakeHome, path: `${binDir}:${process.env.PATH}` });
     expect(result).toMatch(/Missing required skills/i);
   });
 
   it('passes when all prerequisites are mocked', () => {
     const fakeHome = makeFakeHome();
 
-    // 新 feat-flow preflight 需要的 6 个用户 skill（含来自 darian-deng/agent-skills 的 2 个）
+    // The 4 user skills feat-flow's preflight requires.
     const skills = [
-      'grounded-design', 'writing-plans', 'subagent-driven-development', 'receiving-code-review',
-      'optimize-claude-context', 'adr-manage',
+      'grounded-design', 'subagent-driven-development', 'receiving-code-review', 'optimize-claude-context',
     ];
     for (const skill of skills) {
       mkdirSync(join(fakeHome, '.claude', 'skills', skill), { recursive: true });
       writeFileSync(join(fakeHome, '.claude', 'skills', skill, 'SKILL.md'), '# mock');
     }
 
-    // Mock claude CLI
+    // Mock claude CLI on PATH.
     const binDir = join(fakeHome, 'bin');
     mkdirSync(binDir);
-    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\necho "mocked claude CLI"\n');
+    writeFileSync(join(binDir, 'claude'), '#!/bin/sh\nexit 0\n');
     chmodSync(join(binDir, 'claude'), 0o755);
 
-    // 新 preflight 用 `find $HOME/.claude/plugins/cache -name <plugin>` 检测插件
-    // 在 fakeHome 下建空目录占位即可（find -name 匹配目录名）
+    // preflight walks <config>/plugins/cache for a dir named feature-dev.
     mkdirSync(join(fakeHome, '.claude', 'plugins', 'cache', 'mock-marketplace', 'feature-dev'), { recursive: true });
 
-    const result = execSync(
-      `HOME="${fakeHome}" PATH="${binDir}:$PATH" sh "${PREFLIGHT}" 2>&1; echo "EXIT:$?"`,
-      { encoding: 'utf-8' }
-    );
-    expect(result).toContain('EXIT:0');
+    const result = runPreflight({ home: fakeHome, path: `${binDir}:${process.env.PATH}` });
+    expect(result).toMatch(/plugin: feature-dev/);
   });
 });

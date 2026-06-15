@@ -9,31 +9,19 @@
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/plan.md` — 主 session 读它拿 **task 列表 + 执行单元清单**；plan.md 的每 task 已自带 `decisions` / `verify` / `files` / `output_size`，dispatch 时机械拼装、不再运行时即兴补信息
+- `{{project_root}}/docs/feat-flows/<flow_id>/plan.md` — 主 session 读它拿 **task 列表 + 执行单元清单**；plan.md 的每 task 已自带 `decisions` / `verify` / `files` / `output_size`，dispatch 时机械拼装、不再运行时即兴补信息
 
 design.md / architecture.md **不在主 session 读取，也不再默认注入子代理 prompt**——管每个 task 的决策已由 Stage 3 抽成 `decisions` 切片内联进 plan。design.md / architecture.md 全文**降级为兜底路径**：仅当某 task 的 `decisions` 切片不足、子代理报 `需补充信息` 时，才作为路径给出（见「异常处理」）。主 session 提前读会污染 context，并诱导在主 session 内联写代码。
 
 ## 入场动作
 
-**先判首次进入还是 /clear 重入**：
+**先判首次进入还是 /clear 重入**：看引擎注入的 `[ai-flow:paths]` 块里是否已有 `base_sha_code` 行（Step 1 触发引擎捕获后才会注入它），或 plan.md 是否已有 `[x]`。
 
-```bash
-# 检查 active.json 中是否已有 base_sha_code（Step 1 写入后才存在）
-HAS_BASE=$(python3 -c "
-import json
-try:
-    d = json.load(open('.ai-flow/feat-flow/state/active.json'))
-    print('yes' if d.get('base_sha_code') else 'no')
-except:
-    print('no')
-" 2>/dev/null)
-```
-
-- **`HAS_BASE == yes`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——覆写 base_sha_code 会污染 Stage 5 的 diff 基准）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。其中：
+- **注入 context 已含 `base_sha_code`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——重新捕获会污染 Stage 5 的 diff 基准；引擎也会在已存在时拒绝覆写）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。其中：
   - 遇到**已 commit 但 task report 缺失 / 不全的 task**（无 `**审查**` 行，或缺 `context 候选` / `ADR 候选` 等只有子代理能产出的字段）→ 派一个子代理读 `git show <sha>` **重跑两段评审 + 重跑 assess-candidate**，据回报重建该 task report。主 session 不读代码、跑不了 assess-candidate，故这类字段必须由子代理重建；重跑安全（diff 已含该 task 最终改动）。
   - 遇到 task-reports.md 里有 **`[partial]` commit + 「剩余工作」清单**的 task（截断自保护留下的）→ 按清单续跑该 task，**不做 git 考古**（见「截断自保护」）。
   - Step 0 的分支复核仍要做。
-- **`HAS_BASE == no` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
+- **注入 context 无 `base_sha_code` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
 
 **Step 0：分支 + 工作树预检（任何 commit 之前）**
 
@@ -45,37 +33,28 @@ git status --porcelain
 - **分支**：当前在 `main` / `master`（或仓库默认分支）→ **停下，要求开发者先 checkout 一个需求分支再继续**。绝不在 main 上落任何一笔 commit（连下面起点的 docs commit 也不行）。
 - **工作树**：输出非空且含**代码文件**改动 → 停下问开发者：「检测到工作树有未提交的代码改动，是上次 task 执行中途崩溃的残留，还是预期的中间状态？请确认如何处理。」（仅 docs/feat-flows/ 改动属正常）
 
-**Step 1：起点 commit + 记录 base_sha_code**
+**Step 1：起点 commit + 触发引擎记录 base_sha_code**
 
 ```sh
-git add docs/feat-flows/<flow_id>/
+git add {{project_root}}/docs/feat-flows/<flow_id>/
 git commit -m "docs: <feature> stage1-3 outputs"
-# 将 base_sha_code 写入 active.json（与 flow 生命周期绑定，自然 flow-scoped）
-python3 - << 'PYEOF'
-import json, os, subprocess
-path = '.ai-flow/feat-flow/state/active.json'
-data = json.load(open(path))
-data['base_sha_code'] = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
-tmp = path + '.tmp'
-with open(tmp, 'w') as f:
-    json.dump(data, f, indent=2)
-os.rename(tmp, path)
-PYEOF
 ```
 
-把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 写入 active.json 作为 Stage 5/6 的 diff 起点（只看代码、不看 docs）。存入 active.json 而非独立文件，是因为 active.json 跟随 flow 的生命周期——新 flow 创建新 active.json，天然不会读到上个 flow 的基准 SHA。
+docs 提交后，**用 Write 工具写 `{{flow_root}}/state/mark-base`（内容任意，如 `capture`）**。引擎据此在「docs 已提交」的此刻捕获 `git rev-parse HEAD` 作为 `base_sha_code`，写入引擎状态并注入后续 context——**stage 自己不碰 active.json**（active.json 是控制面，直接写会被引擎拒绝）。引擎确认后会回注一行 `base_sha_code: <sha>`。
+
+把 Stage 1-3 累积的 docs 一次性提交；`base_sha_code` 是 Stage 5/6 的代码 diff 起点（只看代码、不看 docs）。它由引擎管理、随 flow 生命周期绑定——新 flow 自然不会读到上个 flow 的基准 SHA。若引擎回报捕获失败（无提交等），先确认 docs commit 已成功再重写 mark-base。
 
 **Step 2：初始化 task-reports.md**
 
 ```sh
-touch docs/feat-flows/<flow_id>/task-reports.md
+touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 ```
 
 每 task 完成后主 session 把 task report 追加进来——这是跨 /clear 保留 task 级元信息的唯一手段。
 
 **Step 3：定位 ADR 目录**
 
-按 `references/adr-scan.md` 定位本仓库的 ADR 目录 / 读索引，**知道有哪些 ADR（标题 + 状态）** 即可。**不在此处一次性选定**——每个 task 涉及的模块不同、相关 ADR 也不同，相关性筛选放到每个 task 的 prompt 构造时做（见下）。
+按 `{{flow_root}}/references/adr-scan.md` 定位本仓库的 ADR 目录 / 读索引，**知道有哪些 ADR（标题 + 状态）** 即可。**不在此处一次性选定**——每个 task 涉及的模块不同、相关 ADR 也不同，相关性筛选放到每个 task 的 prompt 构造时做（见下）。
 
 ## 主循环：用 SDD 逐执行单元串行执行
 
@@ -93,7 +72,7 @@ touch docs/feat-flows/<flow_id>/task-reports.md
 **开跑前**：解析 plan.md 的 task 列表 + 执行单元清单——解析到 0 个 task 或无执行单元清单 → 停下问开发者（疑似 plan.md 损坏或 Stage 3 未完成）。
 
 **抑制 SDD 的越界默认行为**（feat-flow 接管这些，不让 SDD 冲出 stage-4 边界）：
-- **不建 worktree**——feat-flow 在当前工作树跑（引擎靠 `cwd/.ai-flow` 定位状态，worktree 会让 cwd 漂走、base_sha 失效）
+- **不建 worktree**——feat-flow 在当前工作树跑（引擎按 session 绑定定位 flow、用 base_sha_code 框定代码 diff，worktree 会另起工作树、base_sha 基准失效）
 - **不调用 `finishing-a-development-branch`**——merge / PR 收尾归 Stage 6 + 开发者
 - **不跑 SDD 的「整体 final reviewer」**——整体审查是 Stage 5 的职责（`base_sha..HEAD` + 组装级双视角审查），在此重复且可能给出打架结论
 - **continuous execution 的边界**：SDD 默认「task 间不停顿、不向开发者要确认」——这指**不做「要不要继续」式的人类 check-in**，**不等于**省略主 session 每 task 之间的落盘 / 待沉淀术语重组 / 审查行回填。这几步是必做的调度动作，不算 check-in，不要为「连续执行」跳过
@@ -219,13 +198,13 @@ dispatch 第 N 个 task 前，主 session：读 `task-reports.md`（**从文件�
 **需补充信息**（严于 SDD 默认）：
 1. 查答案是否在三份 docs / 该 task 相关 ADR 里
 2. **在** → 改 prompt 加更明确指向（**此处即给 design.md / architecture.md 兜底路径**——decisions 切片不足时，把全文路径补给子代理按需读），重 dispatch 一次；仍 需补充信息 → 停下问开发者
-3. **不在** → 直接停下问开发者，**不许凭空补答案**（主 session 的信息源就是这些 docs；子代理读了还问 = 文档真缺信息 = 主 session 也编不出）。**若反复缺的是某 task 的护栏 → 是 Stage 3 的 `decisions` 切片漏了，走 `references/revision-protocol.md` 入口 B 回补 plan**
+3. **不在** → 直接停下问开发者，**不许凭空补答案**（主 session 的信息源就是这些 docs；子代理读了还问 = 文档真缺信息 = 主 session 也编不出）。**若反复缺的是某 task 的护栏 → 是 Stage 3 的 `decisions` 切片漏了，走 `{{flow_root}}/references/revision-protocol.md` 入口 B 回补 plan**
 
 **受阻**：按 SDD 规则尝试一次（补 context / 换更强模型 / 拆 task / plan 错则上报开发者）；同一 task 第 2 次 受阻 → 停下问开发者。
 
 **重 dispatch 前**（受阻 / 需补充信息 重试）：先确认工作树状态——上次尝试若留下未提交改动，先决定 reset 还是保留，并把这个决定写进重 dispatch 的 prompt（否则会与 Step 0「工作树非空」预检在重入时叠加误报）。
 
-**自查前置 stage 问题**（运行时随时可能触发）：implementer 或主 session 发现前置 stage 漏 / 错 → 走 `references/revision-protocol.md` 入口 B（已含「L2 改了上游后评估已完成 task 是否需 fix-up task」的兜底）。**L1 / L2 必须停下等开发者**——stage-4 无 Gate、又自动连跑，更要主动停，不能借「连续执行」冲过去；**L3** 才 inline 修 + 在 task report 的「前置修订」字段注记。
+**自查前置 stage 问题**（运行时随时可能触发）：implementer 或主 session 发现前置 stage 漏 / 错 → 走 `{{flow_root}}/references/revision-protocol.md` 入口 B（已含「L2 改了上游后评估已完成 task 是否需 fix-up task」的兜底）。**L1 / L2 必须停下等开发者**——stage-4 无 Gate、又自动连跑，更要主动停，不能借「连续执行」冲过去；**L3** 才 inline 修 + 在 task report 的「前置修订」字段注记。
 
 ## 收口（全部 task 完成后）
 
@@ -247,4 +226,4 @@ dispatch 第 N 个 task 前，主 session：读 `task-reports.md`（**从文件�
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。

@@ -350,13 +350,11 @@ describe('handlePreTool — cwd ≠ repoRoot guard (subdir-write bug)', () => {
   });
 });
 
-describe('handlePreTool — Bash cwd-drift guard', () => {
-  // The cwd guard for Write/Edit covers structured file_path. Bash commands are free
-  // text and were previously waved through after the three control-plane checks. When
-  // the session cwd drifts into a subdir, repo-root-anchored relative paths in Bash
-  // (e.g. `git add apps/x/...`) get a doubled prefix. We DENY on drift, but MUST allow
-  // `cd `-prefixed commands or the escape hatch (`cd <root> && ...`) itself deadlocks —
-  // the hook sees the still-drifted pre-command cwd.
+describe('handlePreTool — Bash control-plane + cd freedom', () => {
+  // cd is no longer fenced for Bash: the flow is resolved by session binding and
+  // stage prompts anchor paths on the injected absolute {{project_root}}, so the
+  // agent may freely `cd` into a sub-project to run scoped commands. Only the three
+  // control-plane paths (signal / active.json / scripts) stay blocked in Bash.
   function makeBashInput(cwd: string, command: string): PreToolInput {
     return {
       hook_event_name: 'PreToolUse',
@@ -373,19 +371,17 @@ describe('handlePreTool — Bash cwd-drift guard', () => {
     return subdir;
   }
 
-  it('drifted cwd + repo-root-relative git add (no cd) → DENY with cd-back instruction', async () => {
+  it('drifted cwd + ordinary git command → allowed (cd freedom)', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const subdir = subdirOf(repo.repoRoot);
     const out = await handlePreTool(
       makeBashInput(subdir, 'git diff --stat && git add apps/plaud-desktop/src/main/service.ts')
     );
-    expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toContain(repo.repoRoot);
-    expect(out?.permissionDecisionReason).toMatch(/cd /);
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 
-  it('drifted cwd + cd-prefixed escape command → allowed (no deadlock)', async () => {
+  it('drifted cwd + cd-prefixed command → allowed', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const subdir = subdirOf(repo.repoRoot);
@@ -395,22 +391,22 @@ describe('handlePreTool — Bash cwd-drift guard', () => {
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 
-  it('cwd == repoRoot + relative git add → allowed (guard does not fire)', async () => {
+  it('cwd == repoRoot + relative git add → allowed', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const out = await handlePreTool(makeBashInput(repo.repoRoot, 'git add src/main.ts'));
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 
-  it('drifted cwd + absolute-path non-cd command → DENY (intentional over-block, safe direction)', async () => {
+  it('drifted cwd + ordinary non-cd command (cat) → allowed (cd freedom)', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const subdir = subdirOf(repo.repoRoot);
     const out = await handlePreTool(makeBashInput(subdir, `cat ${join(repo.repoRoot, 'README.md')}`));
-    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 
-  it('drifted cwd + signal write via Bash → DENY with signal message (control plane before cwd guard)', async () => {
+  it('drifted cwd + signal write via Bash → DENY (control plane still blocked)', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const subdir = subdirOf(repo.repoRoot);
@@ -420,7 +416,7 @@ describe('handlePreTool — Bash cwd-drift guard', () => {
     expect(out?.permissionDecisionReason).toMatch(/signal/i);
   });
 
-  it('drifted cwd + scripts write via Bash → DENY with scripts message (control plane before cwd guard)', async () => {
+  it('drifted cwd + scripts write via Bash → DENY (control plane still blocked)', async () => {
     const repo = makeRepo();
     activateFlow(repo.repoRoot, 'work');
     const subdir = subdirOf(repo.repoRoot);
@@ -435,6 +431,38 @@ describe('handlePreTool — Bash cwd-drift guard', () => {
     const subdir = subdirOf(repo.repoRoot);
     const out = await handlePreTool(makeBashInput(subdir, 'git add apps/x.ts'));
     expect(out).toBeNull();
+  });
+
+  // C3 regression: an agent NOT cd'd typically writes the repoRoot-RELATIVE path.
+  // The absolute-only match used to miss this; guard the relative fragment so a
+  // refactor that drops it from cpFragments fails here.
+  it('cwd == repoRoot + relative signal path via Bash → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const out = await handlePreTool(
+      makeBashInput(repo.repoRoot, 'echo done > .ai-flow/test-flow/state/signal')
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/signal|control-plane/i);
+  });
+
+  it('cwd == repoRoot + relative active.json path via Bash → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const out = await handlePreTool(
+      makeBashInput(repo.repoRoot, 'echo {} > .ai-flow/test-flow/state/active.json')
+    );
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  // The control-plane match must be path-scoped to the flow: an unrelated file
+  // that merely happens to be named active.json (the user's own config) must NOT
+  // be blocked. Guards against re-introducing an over-broad bare-name match.
+  it('unrelated file named active.json → allowed (no false-positive)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    const out = await handlePreTool(makeBashInput(repo.repoRoot, 'cat src/config/active.json'));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 });
 

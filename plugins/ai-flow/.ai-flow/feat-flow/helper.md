@@ -59,8 +59,9 @@ docs/feat-flows/<flow_id>/
 └── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取）
 
 .ai-flow/feat-flow/state/
-├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等；含 base_sha_code 字段：Stage 4 起点 SHA，天然 flow-scoped）
+├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等；含 base_sha_code 字段：Stage 4 起点 SHA，由引擎在 mark-base 触发时捕获，stage 不直接写）
 ├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
+├── mark-base                # AI 写此 marker → 引擎捕获 HEAD 为 base_sha_code（Stage 4 Step 1）
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
 └── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）
 
@@ -119,7 +120,7 @@ stage-3/4 重构详见 `docs/feat-flows/stage-3-4-redesign/design.md`（含对�
 - **decisions 切片取代 design.md 默认注入**：管每个 task 的决策内联进 plan（矩阵投影 + 四类过滤 + 四道结构门）；design.md/architecture.md 全文降级为 Stage 4 兜底路径。
 - **Stage 4 = 机械执行器**：按执行单元串行派（**绝不并行**）、dispatch 机械拼装、`touches_shared` 注入前序 diff、**截断自保护协议**（近上限先 commit + 写「剩余工作」清单，续跑读清单不做 git 考古）、耦合簇内逐 task commit/verify + 越界升簇并集层、verify 假绿检测。
 - NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答；反复缺护栏 = decisions 漏 → 回补 plan）。
-- **cwd 漂移防护在引擎层**（pretool-handler 守卫，不在 stage 提示词写「禁止 cd」）。
+- **flow 归属靠 session→锚点绑定**（引擎按 session_id 反查锚点，cwd 漂移/cd 到任意目录都不会认错 flow）；stage 提示词里的 flow 路径用引擎注入的绝对 `{{project_root}}` / `{{flow_root}}` 锚定，故 **cd 不再受限**。引擎只在控制面（signal / active.json / scripts）保留写保护。
 
 ## 异常恢复
 

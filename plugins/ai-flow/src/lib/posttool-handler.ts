@@ -1,12 +1,14 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { execSync } from 'child_process';
 import type { PostToolInput } from './types.js';
 import {
-  hasActiveFlow,
+  resolveActiveFlow,
   writeActiveState,
   writeSignalFile,
   appendLog,
   signalPath,
+  markBasePath,
   readSignal,
   nextStage,
 } from './state.js';
@@ -14,6 +16,7 @@ import { truncateError } from './format.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { advanceStage } from './advance-stage.js';
+import { buildAiFlowPreamble } from './prompt-render.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const DEFAULT_WARN_AT_PCT = 50;
@@ -25,7 +28,7 @@ export async function handlePostTool(
   const { cwd, tool_name, session_id, context_size_pct } = input;
 
   if (!WRITE_TOOLS.has(tool_name)) return null;
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
 
   const { flowName, state, repoRoot } = active;
@@ -35,6 +38,31 @@ export async function handlePostTool(
   // ─── Signal detection ──────────────────────────────────────────────────────
   const rawFp = String((input.tool_input as Record<string, unknown>)?.['file_path'] ?? '');
   const fp = rawFp.startsWith('/') ? rawFp : join(repoRoot, rawFp);
+
+  // ─── base_sha_code capture (mark-base marker) ───────────────────────────────
+  // The AI writes the mark-base file right after committing the Stage 1-3 docs.
+  // The engine then captures HEAD as base_sha_code (the diff base for Stages 5/6),
+  // owning the active.json write so stages never touch active.json themselves.
+  // git runs at repoRoot, so capture is cwd-independent.
+  const markBase = markBasePath(repoRoot, flowName);
+  if (fp === markBase) {
+    try { if (existsSync(markBase)) unlinkSync(markBase); } catch { /* marker cleanup best-effort */ }
+    if (state.base_sha_code) {
+      return { additionalContext: `[ai-flow] base_sha_code 已存在(${state.base_sha_code}),跳过重复捕获。` };
+    }
+    let sha = '';
+    try {
+      sha = execSync('git rev-parse HEAD', { cwd: repoRoot, encoding: 'utf-8' }).trim();
+    } catch { /* not a git repo / no commits */ }
+    if (!sha) {
+      await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURE_FAIL`);
+      return { additionalContext: `[ai-flow] base_sha_code 捕获失败:无法 git rev-parse HEAD(仓库是否已有提交?)。请先完成 docs 提交再写 mark-base。` };
+    }
+    await writeActiveState(repoRoot, flowName, { ...state, base_sha_code: sha });
+    await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURED ${sha}`);
+    return { additionalContext: `[ai-flow] ✓ base_sha_code 已捕获:${sha}(Stage 5/6 的代码 diff 基准,已写入引擎状态)。` };
+  }
+
   const sig = signalPath(repoRoot, flowName);
   if (fp === sig) {
     // Signal file was just written — trigger only on the new 'done' keyword
@@ -71,8 +99,7 @@ export async function handlePostTool(
       // none/script completion — advance immediately
       await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
       const result = await advanceStage(repoRoot, flowName, session_id);
-      const flowRoot = join(repoRoot, '.ai-flow', flowName);
-      const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+      const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
       return { additionalContext: pathsPreamble + result.additionalContext };
     }
     // Signal content is not 'done' — fall through to context monitoring
@@ -87,7 +114,10 @@ export async function handlePostTool(
 
   // Use injected value (tests / future hook support) or compute from transcript.
   const contextWindow = state.context_size > 0 ? state.context_size : DEFAULT_CONTEXT_WINDOW;
-  const pct = context_size_pct ?? contextPct(session_id, repoRoot, contextWindow);
+  // Read the transcript by its real location: prefer the hook-provided
+  // transcript_path; fall back to the session's launch cwd (NOT repoRoot — the
+  // anchor isn't where the transcript lives in a monorepo sub-project).
+  const pct = context_size_pct ?? contextPct(session_id, cwd, contextWindow, input.transcript_path);
 
   const warning = state.context_warning;
   const warnAt = flowContextCfg?.warn_at_pct ?? DEFAULT_WARN_AT_PCT;

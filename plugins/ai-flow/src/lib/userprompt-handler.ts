@@ -8,7 +8,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { hasActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
+import { resolveActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -47,9 +47,10 @@ function resultToHookOutput(result: { action: string; reason?: string; additiona
 
 export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutput> {
   const { cwd, prompt, session_id } = input;
-  // Walk up from cwd to find the real repo root (where .ai-flow lives).
-  // Active flow gives us repoRoot directly; otherwise walk up to find .ai-flow.
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  // Resolve the active flow by session binding first (cwd-independent), then
+  // walk up from cwd. Active flow gives us repoRoot directly; otherwise walk up
+  // to find .ai-flow (handles "no active flow yet" — e.g. a `<flow> start`).
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
 
   // ── Global session mutex guard ──────────────────────────────────────────────
@@ -152,7 +153,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   switch (subCmd as typeof VALID_COMMANDS[number]) {
     case 'start': {
       const requirement = args || prompt.replace(new RegExp(`^${escapeRegex(flowName)}\\s+start\\s*`, 'i'), '').trim();
-      result = await handleStart(repoRoot, flowName, requirement, session_id, 0);
+      result = await handleStart(repoRoot, flowName, requirement, session_id, 0, cwd, input.transcript_path);
       break;
     }
     case 'approve':

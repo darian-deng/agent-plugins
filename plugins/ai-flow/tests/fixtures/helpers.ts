@@ -105,6 +105,8 @@ export interface ActiveState {
   context_size: number;
   context_warning: ContextWarning;
   context_blocked: boolean;
+  first_prompt_handled?: boolean;
+  base_sha_code?: string;
 }
 
 export interface ContextWarning {

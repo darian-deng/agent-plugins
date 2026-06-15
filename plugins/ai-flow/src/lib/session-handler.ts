@@ -2,18 +2,21 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { SessionStartInput } from './types.js';
 import {
-  hasActiveFlow,
+  resolveActiveFlow,
   writeActiveState,
   readSignal,
   isGatePending,
   nextStage,
   appendLog,
   activeJsonPath,
+  gcRegistry,
 } from './state.js';
+import { bindSession } from './session-registry.js';
 import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
+import { renderPrompt, buildAiFlowPreamble } from './prompt-render.js';
 
 
 export async function handleSessionStart(
@@ -21,7 +24,10 @@ export async function handleSessionStart(
 ): Promise<{ additionalContext: string; systemMessage?: string } | null> {
   const { cwd, session_id, model } = input;
 
-  const active = await hasActiveFlow(cwd).catch(() => null);
+  // Prune dead bindings opportunistically (best-effort, never throws).
+  await gcRegistry().catch(() => {});
+
+  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
 
   const { flowName, state, repoRoot } = active;
@@ -87,6 +93,9 @@ export async function handleSessionStart(
     updated.first_prompt_handled = false;
   }
   await writeActiveState(repoRoot, flowName, updated);
+  // (Re)bind this session to the anchor. Covers flows started before bindings
+  // existed, and re-anchors after a session takeover / resume.
+  bindSession(session_id, repoRoot, flowName);
 
   const config = await loadFlowConfig(repoRoot, flowName);
   const stageCfg = getStageConfig(config, state.current_stage);
@@ -105,8 +114,7 @@ export async function handleSessionStart(
   // S2: flow-complete signal at terminal stage
   const isFlowComplete = signal === 'flow-complete' && expectedNext === null;
 
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
-  const pathsPreamble = `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n`;
+  const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
 
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {
@@ -160,7 +168,7 @@ export async function handleSessionStart(
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
-      promptContent = readFileSync(promptPath, 'utf-8');
+      promptContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
     } catch { /* non-fatal */ }
   }
 

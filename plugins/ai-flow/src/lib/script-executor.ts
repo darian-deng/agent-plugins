@@ -16,11 +16,15 @@ export async function runScript(
 ): Promise<ScriptResult> {
   const timeout = opts?.timeout_ms ?? 30_000;
 
-  const result = spawnSync('sh', ['-c', command], {
+  // shell:true runs `command` via the platform default shell (sh on POSIX,
+  // cmd.exe on Windows) instead of hardcoding `sh` — so a Node-based preflight
+  // (`node "..."`) and ordinary validator commands work cross-platform.
+  const result = spawnSync(command, {
     cwd,
     timeout,
     encoding: 'utf-8',
     maxBuffer: 1024 * 1024,
+    shell: true,
   });
 
   if (result.signal === 'SIGTERM' || result.error?.message?.includes('ETIMEDOUT') || (result.status === null && result.signal)) {

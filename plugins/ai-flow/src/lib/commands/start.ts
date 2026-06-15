@@ -3,6 +3,9 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { hasActiveFlow, writeActiveState, appendLog, type ActiveState } from '../state.js';
+import { bindSession } from '../session-registry.js';
+import { renderPrompt, buildAiFlowPreamble } from '../prompt-render.js';
+import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 import type { CommandResult } from '../types.js';
@@ -37,16 +40,23 @@ export async function handleStart(
   flowName: string,
   requirement: string,
   sessionId: string,
-  contextSizePct: number
+  contextSizePct: number,
+  cwd?: string,
+  transcriptPath?: string
 ): Promise<CommandResult> {
   if (!requirement.trim()) {
     return { action: 'deny', reason: `A requirement description is required. Usage: ${flowName} start <requirement>` };
   }
 
-  // Use injected value (tests) or compute from transcript if not provided
+  // Use injected value (tests) or compute from transcript if not provided.
+  // The transcript lives at the session's launch dir, not repoRoot — pass the
+  // hook-provided transcript_path / real cwd so the read targets the right file.
+  // If neither is available (cwd omitted), fall back to '' rather than repoRoot:
+  // a wrong-dir guess silently mis-reads, whereas '' just misses the file and
+  // yields 0 (no false context reading). Production always supplies cwd.
   const effectivePct = contextSizePct > 0
     ? contextSizePct
-    : contextPct(sessionId, repoRoot, DEFAULT_CONTEXT_WINDOW);
+    : contextPct(sessionId, cwd ?? '', DEFAULT_CONTEXT_WINDOW, transcriptPath);
   if (effectivePct >= BLOCK_START_IF_ABOVE_PCT) {
     return {
       action: 'deny',
@@ -76,9 +86,9 @@ export async function handleStart(
     };
   }
 
-  const preflightPath = join(repoRoot, '.ai-flow', flowName, 'preflight.sh');
-  if (existsSync(preflightPath)) {
-    const result = await runScript(`sh "${preflightPath}"`, repoRoot);
+  const preflightCmd = findPreflightCommand(join(repoRoot, '.ai-flow', flowName));
+  if (preflightCmd) {
+    const result = await runScript(preflightCmd, repoRoot);
     if (!result.ok) {
       return {
         action: 'deny',
@@ -106,17 +116,19 @@ export async function handleStart(
   };
 
   await writeActiveState(repoRoot, flowName, state);
+  // Bind this session to the anchor so hooks resolve the flow by session_id
+  // (cwd-independent) even after the agent cd's away from the flow root.
+  bindSession(sessionId, repoRoot, flowName);
   await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
 
   const promptPath = join(repoRoot, '.ai-flow', flowName, firstStage.prompt);
   let stageContent = '';
   if (existsSync(promptPath)) {
-    stageContent = readFileSync(promptPath, 'utf-8');
+    stageContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
   }
 
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const ctx =
-    `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n` +
+    buildAiFlowPreamble(repoRoot, flowName) +
     `Flow '${flowName}' started!\n\n` +
     `flow_id: ${flowId}\nrequirement: ${requirement.trim()}\ncurrent_stage: ${firstStage.id}\n\n` +
     stageContent;

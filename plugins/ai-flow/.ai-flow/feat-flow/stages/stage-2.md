@@ -11,11 +11,11 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 
 ## 前置读取
 
-- `docs/feat-flows/<flow_id>/design.md` — 需求 / 决策记录 / UI 状态清单 / 项目命令 / TDD 基建决策
+- `{{project_root}}/docs/feat-flows/<flow_id>/design.md` — 需求 / 决策记录 / UI 状态清单 / 项目命令 / TDD 基建决策
 
 ## 入场动作
 
-1. **ADR 查阅**：执行 `references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
+1. **ADR 查阅**：执行 `{{flow_root}}/references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
 
 ## 步骤
 
@@ -28,13 +28,13 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
    - 蓝图是否覆盖 design.md 每个决策？
    - 蓝图是否引入了 design.md「不在范围内」的内容？
    - 蓝图是否与 design.md 冲突？
-   - 任一处需要改前面已对齐的东西 → 走 `references/revision-protocol.md`（开发者提的走入口 A，AI 自查的走入口 B）
+   - 任一处需要改前面已对齐的东西 → 走 `{{flow_root}}/references/revision-protocol.md`（开发者提的走入口 A，AI 自查的走入口 B）
 
-3. 写入新文件 `docs/feat-flows/<flow_id>/architecture.md`
+3. 写入新文件 `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md`
 
 ## 输出规格
 
-文件 → `docs/feat-flows/<flow_id>/architecture.md`
+文件 → `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md`
 
 骨架：
 
@@ -50,7 +50,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 ## 接口设计
 （每个 service / hook 的方法签名）
 
-**批量成员必须枚举（供 Stage 3 估算任务体量、防截断）**：若某个文件会获得 / 包装 / 注册**一批成员**（如「为 contextIsolation 包装全部 rpc 方法」「建一张含 N 条的映射表 / handler 注册表」），**必须在此列出完整成员清单或明确数量**，不能只写「全部 xxx」。Stage 3 的 `output_size` 体量门依赖这个枚举：列不全 → Stage 3 估不出体量 → 会退回本 stage 补全（`references/revision-protocol.md` 入口 B），徒增往返。
+**批量成员必须枚举（供 Stage 3 估算任务体量、防截断）**：若某个文件会获得 / 包装 / 注册**一批成员**（如「为 contextIsolation 包装全部 rpc 方法」「建一张含 N 条的映射表 / handler 注册表」），**必须在此列出完整成员清单或明确数量**，不能只写「全部 xxx」。Stage 3 的 `output_size` 体量门依赖这个枚举：列不全 → Stage 3 估不出体量 → 会退回本 stage 补全（`{{flow_root}}/references/revision-protocol.md` 入口 B），徒增往返。
 
 ## 数据流
 （端到端链条 + 错误冒泡 + loading 归属）
@@ -93,7 +93,7 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 - architecture.md 引入的新约定 / 模式 / 架构选型
 - design.md 决策记录中 `**决策**:` 已填写、且未在「ADR 候选」节列入的条目
 
-写入 `docs/feat-flows/<flow_id>/context-delta.md`（新文件）。无候选时写「（无）」，不跳过——此节是 Stage 6 验证本 stage 已执行的标记。
+写入 `{{project_root}}/docs/feat-flows/<flow_id>/context-delta.md`（新文件）。无候选时写「（无）」，不跳过——此节是 Stage 6 验证本 stage 已执行的标记。
 
 ```markdown
 ## Stage 2 — <flow_id>
@@ -129,4 +129,4 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/feat-flow/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
