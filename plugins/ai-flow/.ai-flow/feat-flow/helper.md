@@ -24,7 +24,7 @@
 | **从零自建基建** | 首次跑就建知识基础设施（docs/adr/、CLAUDE.md），不等开发者手动建 |
 | **缺陷右移到最早可捕获点** | 每类缺陷在信息最早齐备的 stage 抓：需求理解→stage-1，架构/复用→stage-2，局部 bug→stage-4 每 task，组装级（跨 task 一致/集成/需求闭环/整体安全）→stage-5。同一缺陷不在多 stage 重复地毯审 |
 | **3 轮验证** | 派发+综合处理记为轮 1，阻塞项修复后由独立 reviewer 复核轮 2、轮 3（硬上限 3 轮），分歧上报开发者——既防模型幻觉（独立复核把失败率 5% 压到 5%×5%）也避免无限循环 |
-| **前置产物修订** | 中后期 stage 发现「前面已对齐的东西要改」时（开发者异议 或 AI 自查），按 L1（abort）/ L2（回改 + 下游兜底）/ L3（inline）分级，并评估对**全部**上游产物的影响，禁止 AI 自判 L3 后默默改（详见 `references/revision-protocol.md`） |
+| **前置产物修订** | 中后期 stage 发现「前面已对齐的东西要改」时（开发者异议 或 AI 自查），按 L1（abort）/ L2（回改 + 下游兜底）/ L3（inline）分级，并评估对**全部**上游产物的影响，禁止 AI 自判 L3 后默默改；回改一律覆盖为当前态，产物正文不留「原本…改成…」演化叙事（审计交给 git，详见 `references/revision-protocol.md`） |
 
 ## 命令速查
 
@@ -42,7 +42,7 @@ feat-flow help                      # 查看本文档
 | ID | 名称 | Gate | 关键工具 |
 |----|------|------|---------|
 | stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grounded-design + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
-| stage-2 | 实施蓝图（+ 独立架构/复用审查） | ✅ | feature-dev:code-architect + general-purpose（架构审查） |
+| stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成 tech-design.html 开发者对齐视图） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ baoyu-diagram（配图） |
 | stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
 | stage-5 | 质量门（回归 + 组装级双视角 + 人审闭环：集成闭环 + 强制安全 + 人工 review→修复→最终 CR） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
@@ -54,6 +54,7 @@ feat-flow help                      # 查看本文档
 docs/feat-flows/<flow_id>/
 ├── design.md                # 需求 / 决策记录 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
 ├── architecture.md          # 模块定位 / 接口 / 数据流 / build 顺序（Stage 2）
+├── tech-design.html         # 开发者对齐视图：决策台账 / 架构图 / 实施路径（Stage 2 Gate 主审面；从 md 生成的单向视图，重生成而非手改）
 ├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
 ├── task-reports.md          # Stage 4 每 task 的元信息累积（新术语 / ADR 候选 等）
 ├── review.md                # 审查结论 + 待开发者决策（Stage 5）
@@ -94,6 +95,7 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 ### 必需 plugins
 
 - `feature-dev` — 提供 code-architect（Stage 2 蓝图）subagent
+- `baoyu-skills`（plugin marketplace `JimLiu/baoyu-skills`）— 提供 `baoyu-diagram` skill，Stage 2 生成 tech-design.html 的配图（架构落位图 / 数据流图，原生深色主题）。`claude plugin marketplace add JimLiu/baoyu-skills` → `claude plugin install baoyu-skills@baoyu-skills --scope user`；安装后 materialize 进 ~/.claude/skills/（preflight 按 skill 检测）。references/ 布局算法缺失不阻塞
 
 > Stage 2 的架构/复用审查、Stage 5 的集成与安全双视角审查均用内置 `general-purpose` 子代理（审查专长写在 stage 提示词里），不依赖额外插件。
 

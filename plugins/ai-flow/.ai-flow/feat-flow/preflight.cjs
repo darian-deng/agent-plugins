@@ -110,4 +110,20 @@ if (checkPlugin('feature-dev', 4)) {
   process.exit(FAIL);
 }
 
+// ── 6. baoyu-diagram skill (Stage 2 tech-design.html 配图) ────────────────────
+// 经 plugin marketplace 安装后 materialize 进 ~/.claude/skills/，故按 skill 检测。
+// SKILL.md 为硬依赖（单独足以产出可用图）；references/ 的布局算法为增强，缺失不阻塞。
+if (checkSkill('baoyu-diagram')) {
+  ok('skill: baoyu-diagram');
+  if (!existsSync(join(SKILLS_DIR, 'baoyu-diagram', 'references', 'architecture.md'))) {
+    process.stderr.write('ℹ️  baoyu-diagram 缺 references/（布局算法增强，非必需，diagram 仍可生成）\n');
+  }
+} else {
+  err('baoyu-diagram skill not found. Stage 2 生成 tech-design.html 的配图依赖它。');
+  err('经 plugin marketplace 安装（会 materialize 进 ~/.claude/skills/）：');
+  cmd('claude plugin marketplace add JimLiu/baoyu-skills');
+  cmd('claude plugin install baoyu-skills@baoyu-skills --scope user');
+  process.exit(FAIL);
+}
+
 process.exit(PASS);

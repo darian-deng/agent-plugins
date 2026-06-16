@@ -101,12 +101,20 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 - <一句话描述> — 来源: <来源节>[；被否决替代: <X> 为何不选]
 ```
 
+## 生成开发者对齐视图（tech-design.html）
+
+architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 生成 `{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html`——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施），含决策台账、风险、未决假设、实施路径，以及架构图（若有架构足迹）。
+
+dispatch 一个 **sonnet 子代理**执行（读 design.md + architecture.md + 该契约）；配图按契约由 baoyu-diagram 原生画 + **强制截图自检**（无箭头穿盒/压线/溢出/重叠）后内联。主 session 保持 context 干净。
+
+md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
+
 ## 开发者审批清单（Gate 前主动呈现）
 
-完成 architecture.md（含架构审查阻塞项已回改）+ context-delta.md 后，向开发者呈现以下 7 点 **+ 独立架构审查的建议项**供逐项审：
+完成 architecture.md（架构审查阻塞项已回改）+ context-delta.md + tech-design.html 后，请开发者打开 `tech-design.html` 审阅整体方案，并以下列 7 点 **+ 独立架构审查的建议项**作为审查引导逐项确认：
 
 ```
-请按以下 7 点审 architecture.md：
+对照 tech-design.html / architecture.md 逐项审：
 
 1. 覆盖：design.md 每个决策是否都在蓝图里有对应实现位置？
 2. 模块定位：新建模块/文件的目录位置是否符合项目既有惯例？
@@ -124,7 +132,8 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 - **批量成员已枚举**：凡「包装/注册/映射一批成员」的文件,接口设计节已列出完整成员清单或明确数量（供 Stage 3 体量门用，防截断）
 - **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
-- 开发者审批 7 点 + 架构审查建议项已主动呈现
+- **`tech-design.html` 已生成**（按 `{{flow_root}}/references/tech-design-view.md`：决策台账穷举有后果的决策、正文无时间性叙事、有架构足迹则架构图已内联并套全屏查看器）
+- 开发者审批以 tech-design.html 为主审面，7 点 + 架构审查建议项已主动呈现
 
 ## Signal
 
