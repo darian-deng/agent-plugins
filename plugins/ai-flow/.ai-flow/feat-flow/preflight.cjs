@@ -81,7 +81,6 @@ ok('git');
 
 // ── 4. Required user-installed skills ─────────────────────────────────────────
 const SKILL_INSTALL = {
-  'grounded-design': 'npx skills add darian-deng/agent-skills@grounded-design -g -y',
   'subagent-driven-development': 'npx skills add obra/superpowers@subagent-driven-development -g -y',
   'receiving-code-review': 'npx skills add obra/superpowers@receiving-code-review -g -y',
   'optimize-claude-context': 'npx skills add darian-deng/agent-skills@optimize-claude-context -g -y',

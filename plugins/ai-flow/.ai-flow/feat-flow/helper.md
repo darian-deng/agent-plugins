@@ -41,7 +41,7 @@ feat-flow help                      # 查看本文档
 
 | ID | 名称 | Gate | 关键工具 |
 |----|------|------|---------|
-| stage-1 | 需求确认（含需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | grounded-design + figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
+| stage-1 | 需求确认（接地式问询 / 重大决策走 AskUserQuestion / 术语表 / 需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成 tech-design.html 开发者对齐视图） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ baoyu-diagram（配图） |
 | stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
@@ -52,7 +52,7 @@ feat-flow help                      # 查看本文档
 
 ```
 docs/feat-flows/<flow_id>/
-├── design.md                # 需求 / 决策记录 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
+├── design.md                # 需求 / 决策记录 / 术语表 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
 ├── architecture.md          # 模块定位 / 接口 / 数据流 / build 顺序（Stage 2）
 ├── tech-design.html         # 开发者对齐视图：决策台账 / 架构图 / 实施路径（Stage 2 Gate 主审面；从 md 生成的单向视图，重生成而非手改）
 ├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
@@ -87,7 +87,6 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 ### 必需 skills
 
 用 `ls ~/.claude/skills/` 检查：
-- `grounded-design` — Stage 1 接地式需求拆解（来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）
 - `subagent-driven-development` — Stage 4 实施
 - `receiving-code-review` — Stage 5 处理反馈
 - `optimize-claude-context` — Stage 6 治理全 4 层 context：CLAUDE.md + .claude/rules/ + .claude/skills/ + **ADR**（其 `handle-one-directive` 的 Priority 4 路由到 ADR，自带跨层冲突检测、ADR 重叠 → 原地更新 / supersede、README 索引维护；来自 [darian-deng/agent-skills](https://github.com/darian-deng/agent-skills)）

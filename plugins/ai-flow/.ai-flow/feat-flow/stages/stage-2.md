@@ -105,7 +105,7 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 
 architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 生成 `{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html`——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施），含决策台账、风险、未决假设、实施路径，以及架构图（若有架构足迹）。
 
-dispatch 一个 **sonnet 子代理**执行（读 design.md + architecture.md + 该契约）；配图按契约由 baoyu-diagram 原生画 + **强制截图自检**（无箭头穿盒/压线/溢出/重叠）后内联。主 session 保持 context 干净。
+配图由一个 **sonnet 子代理**只画 SVG 写盘（baoyu-diagram 原生 + 截图自检 ≤2 轮、禁止再 spawn 子代理）；HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
 
 md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
 
