@@ -2,15 +2,26 @@
 
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
-import { existsSync, statSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync, unlinkSync, readdirSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 
+// Fixed port. Binding it IS the singleton lock: the OS lets exactly one process hold a TCP port and
+// releases it automatically on process death — atomic, race-free, no stale-lock problem. We do NOT
+// auto-bump to another port on conflict: that would let two instances live on different ports and
+// reintroduce the very concurrency/stale-lock races a file lock would need (and can't cleanly win).
+// 7475 sits below the ephemeral range (macOS 49152+, Linux 32768+) so it's never grabbed as a random
+// outbound port, and isn't a common app default. Override via ESLINT_IDE_PORT if it ever collides.
 const PORT = parseInt(process.env.ESLINT_IDE_PORT ?? '7475', 10)
 const PROJECT_ROOT = process.env.ESLINT_PROJECT_ROOT ?? process.cwd()
 
 const PID_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.pid')
+// Discovery file: lets the PostToolUse hook learn the ACTUAL listening port and confirm identity,
+// instead of hardcoding a port. Kept separate from PID_FILE (which stays a bare pid string so the
+// SessionStart shell check `cat`/`ps` keeps working unchanged).
+const DISCOVERY_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.json')
+const IDE_NAME = 'eslint-aggregator'
 
 const FLAT_CONFIGS = [
   'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
@@ -120,17 +131,37 @@ function writePid() {
 }
 
 function removePid() {
-  try { unlinkSync(PID_FILE) } catch { /* gone */ }
+  // Only remove the PID file if it is OURS. A second instance that exits (port taken, or yielding
+  // to a live instance) never called writePid(), so the file still holds the FIRST (live)
+  // instance's pid — unconditionally unlinking it would delete a live instance's PID file and
+  // corrupt the SessionStart "is it running?" check. Guard by content equality.
+  try {
+    if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE)
+  } catch { /* gone */ }
 }
 
-process.on('exit', removePid)
-process.on('SIGTERM', () => { removePid(); process.exit(0) })
-process.on('SIGINT', () => { removePid(); process.exit(0) })
+// The discovery file is NOT a lock (the port is — see PORT above); it just publishes our identity
+// and port so the hook can find us. Written once we've bound the port (i.e. once we're the singleton).
+function writeDiscovery(port) {
+  writeFileSync(DISCOVERY_FILE, JSON.stringify({ ideName: IDE_NAME, pid: process.pid, port }))
+}
+
+function removeDiscovery() {
+  // Ownership guard: only unlink if the discovery file is ours. A second instance that exits on
+  // EADDRINUSE never wrote it, so the file still holds the live owner's pid — don't delete it.
+  try {
+    if (JSON.parse(readFileSync(DISCOVERY_FILE, 'utf8')).pid === process.pid) unlinkSync(DISCOVERY_FILE)
+  } catch { /* gone or not ours */ }
+}
+
+process.on('exit', () => { removePid(); removeDiscovery() })
+process.on('SIGTERM', () => { removePid(); removeDiscovery(); process.exit(0) })
+process.on('SIGINT', () => { removePid(); removeDiscovery(); process.exit(0) })
 process.on('uncaughtException', (err) => process.stderr.write(`eslint-aggregator: uncaught — ${err.message}\n`))
 process.on('unhandledRejection', (reason) => process.stderr.write(`eslint-aggregator: unhandledRejection — ${reason}\n`))
 
 const server = createServer((req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`)
+  const url = new URL(req.url, 'http://localhost') // base host only; req.url is a path, port irrelevant
 
   // Hook endpoint: GET /lint?uri=file:///path/to/file — returns ESLint results as plain text
   if (req.method === 'GET' && url.pathname === '/lint') {
@@ -171,11 +202,20 @@ const server = createServer((req, res) => {
 })
 
 server.on('error', (err) => {
+  // EADDRINUSE = someone already holds PORT — either our own already-running instance (singleton
+  // enforced by the OS) or a foreign program. Either way, yield: exit and let the hook fall back to
+  // lintDirect. No port bump — a fixed port is the lock, deliberately (see PORT).
+  if (err.code === 'EADDRINUSE') {
+    process.stderr.write(`eslint-aggregator: port ${PORT} already in use, yielding\n`)
+    process.exit(0)
+  }
   process.stderr.write(`eslint-aggregator: server error — ${err.message}\n`)
   process.exit(0)
 })
 
-server.listen(PORT, '127.0.0.1', () => {
+server.on('listening', () => {
+  // We hold the port (the singleton lock). Publish discovery (before prewarm) so the hook finds us ASAP.
+  writeDiscovery(PORT)
   writePid()
   process.stderr.write(`eslint-aggregator: listening on port ${PORT}\n`)
 
@@ -208,3 +248,6 @@ server.listen(PORT, '127.0.0.1', () => {
     process.stderr.write(`eslint-aggregator: prewarmed ESLint instance for ${pkgRoot}\n`)
   }
 })
+
+// Bind the fixed port. Success = we are the singleton owner; conflict → 'error' handler yields.
+server.listen(PORT, '127.0.0.1')

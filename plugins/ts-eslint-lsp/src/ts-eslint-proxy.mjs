@@ -8,23 +8,28 @@ import { spawn } from 'node:child_process'
 
 // ─── JSON-RPC framing ─────────────────────────────────────────────────────────
 
+// Frame buffer is a Buffer (not a JS string): Content-Length is a UTF-8 BYTE count,
+// so length comparison and slicing must be byte-based. Using a string + `.length`
+// (UTF-16 code-unit count) under-counts multi-byte characters (e.g. CJK), making
+// `buf.length < len` perpetually true → the frame never completes and every
+// subsequent request stalls. See regression: opening a file with CJK comments.
 function makeFrameParser(onMessage) {
-  let buf = ''
+  let buf = Buffer.alloc(0)
   let len = -1
   return (chunk) => {
-    buf += chunk
+    buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8')])
     while (true) {
       if (len === -1) {
         const sep = buf.indexOf('\r\n\r\n')
         if (sep === -1) break
-        const m = buf.slice(0, sep).match(/Content-Length:\s*(\d+)/i)
-        if (!m) { buf = buf.slice(sep + 4); continue } // skip unrecognised header block
+        const m = buf.subarray(0, sep).toString('utf8').match(/Content-Length:\s*(\d+)/i)
+        if (!m) { buf = buf.subarray(sep + 4); continue } // skip unrecognised header block
         len = +m[1]
-        buf = buf.slice(sep + 4)
+        buf = buf.subarray(sep + 4)
       }
-      if (buf.length < len) break
-      try { onMessage(JSON.parse(buf.slice(0, len))) } catch { /* malformed — skip */ }
-      buf = buf.slice(len)
+      if (buf.length < len) break // buf.length is now a byte count, matching Content-Length
+      try { onMessage(JSON.parse(buf.subarray(0, len).toString('utf8'))) } catch { /* malformed — skip */ }
+      buf = buf.subarray(len)
       len = -1
     }
   }
@@ -57,6 +62,8 @@ function findTsBin(startDir) {
 
 const tsBin = findTsBin(process.cwd()) ?? 'typescript-language-server'
 
+let tsServerAlive = true
+
 const tsServer = spawn(tsBin, ['--stdio'], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: process.env,
@@ -64,55 +71,106 @@ const tsServer = spawn(tsBin, ['--stdio'], {
 
 tsServer.stderr.on('data', () => { /* suppress ts-server stderr noise */ })
 
-tsServer.on('close', () => {
+// Resilience: tls may fail to spawn (binary missing) or die mid-flight. Without an
+// 'error' handler the EPIPE on a broken stdin pipe is an unhandled 'error' event and
+// crashes the whole proxy — defeating the degraded-mode design goal (ESLint should
+// keep working even if TypeScript intelligence is gone). Mark tls dead instead.
+function markTsServerDead(reason) {
+  if (!tsServerAlive) return
   tsServerAlive = false
-  for (const [, { reject }] of pendingRequests) {
-    reject(new Error('typescript-language-server exited'))
+  for (const [, { reject, timer }] of pendingRequests) {
+    clearTimeout(timer)
+    reject(new Error(reason))
   }
   pendingRequests.clear()
+  clientToProxy.clear()
   // Degraded mode: ESLint diagnostics continue, TypeScript intelligence unavailable.
-})
+}
 
-let tsServerAlive = true
+tsServer.on('error', () => markTsServerDead('typescript-language-server spawn/runtime error'))
+tsServer.stdin.on('error', () => markTsServerDead('typescript-language-server stdin error (EPIPE)'))
+tsServer.on('close', () => markTsServerDead('typescript-language-server exited'))
 
-// Pending request map: proxyId → { clientId, resolve, reject }
+// Pending request map: proxyId → { clientId, resolve, reject, timer }
 const pendingRequests = new Map()
+// Reverse map: clientId → proxyId, so $/cancelRequest (which carries the client id)
+// can be translated to the proxyId the tls actually knows the request by.
+// Assumption: the client never reuses one id across two simultaneously in-flight requests
+// (LSP/JSON-RPC requires in-flight request ids to be unique). If it did, the later set()
+// would overwrite the earlier mapping and a cancel could only reach the most recent one —
+// a known limitation that only triggers on a protocol-violating client.
+const clientToProxy = new Map()
 let _nextProxyId = 1
+
+// A request that tls never answers must not pend forever (that is exactly how the
+// whole channel "hung" before). Fail it after a ceiling so the caller degrades to null.
+const REQUEST_TIMEOUT_MS = Number(process.env.TS_ESLINT_PROXY_TIMEOUT_MS) || 15000
 
 function sendToTsServer(msg) {
   if (!tsServerAlive) return
-  tsServer.stdin.write(frame(msg))
+  // Guard the write: a race between "pipe broke" and the async 'close'/'error' event
+  // can let a write through onto a dead pipe → synchronous throw / EPIPE.
+  try {
+    tsServer.stdin.write(frame(msg))
+  } catch {
+    markTsServerDead('typescript-language-server write failed')
+  }
 }
 
-tsServer.stdout.setEncoding('utf8')
 tsServer.stdout.on('data', makeFrameParser((msg) => {
-  if (msg.method === 'textDocument/publishDiagnostics') {
-    const uri = msg.params?.uri
-    if (uri) {
-      const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
-      entry.ts = msg.params.diagnostics ?? []
-      diagMap.set(uri, entry)
-      mergeDiagnostics(uri)
+  // Notifications (no id): diagnostics are merged with ESLint output, the rest pass through.
+  if (msg.id == null) {
+    if (msg.method === 'textDocument/publishDiagnostics') {
+      const uri = msg.params?.uri
+      if (uri) {
+        const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
+        entry.ts = msg.params.diagnostics ?? []
+        diagMap.set(uri, entry)
+        mergeDiagnostics(uri)
+      }
+      return
     }
+    sendToClient(msg)
     return
   }
 
-  // Route response back to awaiting promise (msg.id here is the proxyId)
-  if (msg.id != null && pendingRequests.has(msg.id)) {
-    const { clientId, resolve } = pendingRequests.get(msg.id)
+  // Server→client REQUEST (has id AND method): forward to the client untouched. Its id
+  // is the tls's own id (we don't rewrite it), so the client's reply carries the same id
+  // and the client-side dispatcher forwards that reply straight back to tls.
+  // NOTE: this branch must come before the response lookup — otherwise a server→client
+  // request whose id happens to collide with an outstanding proxyId would be misrouted
+  // as if it were a response.
+  if (msg.method != null) {
+    sendToClient(msg)
+    return
+  }
+
+  // Response (has id, no method): route back to the awaiting promise (msg.id is the proxyId)
+  if (pendingRequests.has(msg.id)) {
+    const { clientId, resolve, timer } = pendingRequests.get(msg.id)
+    clearTimeout(timer)
     pendingRequests.delete(msg.id)
+    if (clientId != null) clientToProxy.delete(clientId)
     resolve({ ...msg, id: clientId })
     return
   }
 
-  // All other notifications and responses pass through to the client
-  sendToClient(msg)
+  // Unknown / late response (e.g. arrived after our timeout already rejected it): drop it.
+  // Passing it through would emit an orphan response carrying a proxyId the client never sent.
 }))
 
 function requestTsServer(msg) {
   return new Promise((resolve, reject) => {
     const proxyId = _nextProxyId++
-    pendingRequests.set(proxyId, { clientId: msg.id, resolve, reject })
+    if (msg.id != null) clientToProxy.set(msg.id, proxyId)
+    const timer = setTimeout(() => {
+      if (pendingRequests.has(proxyId)) {
+        pendingRequests.delete(proxyId)
+        if (msg.id != null) clientToProxy.delete(msg.id)
+        reject(new Error(`tsserver request timed out after ${REQUEST_TIMEOUT_MS}ms: ${msg.method}`))
+      }
+    }, REQUEST_TIMEOUT_MS)
+    pendingRequests.set(proxyId, { clientId: msg.id, resolve, reject, timer })
     sendToTsServer({ ...msg, id: proxyId })
   })
 }
@@ -182,6 +240,12 @@ function watchConfigs(pkgRoot) {
     try {
       const w = watch(configPath, { persistent: false }, () => {
         eslintCache.delete(pkgRoot)
+        // Drop the watcher registration too, so the next getESLint() rebuilds both the
+        // ESLint instance AND the watcher set (otherwise a newly-added config file at
+        // this pkgRoot would never be picked up — watchConfigs early-returns on `has`).
+        const ws = configWatchers.get(pkgRoot)
+        if (ws) { for (const x of ws) { try { x.close() } catch {} } }
+        configWatchers.delete(pkgRoot)
       })
       watchers.push(w)
     } catch { /* file disappeared */ }
@@ -189,17 +253,29 @@ function watchConfigs(pkgRoot) {
   if (watchers.length) configWatchers.set(pkgRoot, watchers)
 }
 
+function closeAllWatchers() {
+  for (const ws of configWatchers.values()) {
+    for (const w of ws) { try { w.close() } catch {} }
+  }
+  configWatchers.clear()
+}
+
 const lintDebounce = new Map()
 const uriGeneration = new Map() // uri → generation counter; incremented on didClose
+const lintSeq = new Map()       // uri → monotonic lint sequence; guards against out-of-order overwrite
+
+// Real debounce delay: collapses bursts of didChange into a single lint. A 0ms timeout
+// did not debounce at all (every keystroke spawned an overlapping runLint).
+const LINT_DEBOUNCE_MS = 150
 
 function scheduleLint(uri, text) {
   clearTimeout(lintDebounce.get(uri))
-  lintDebounce.set(uri, setTimeout(() => runLint(uri, text ?? '').catch(() => {}), 0))
+  lintDebounce.set(uri, setTimeout(() => runLint(uri, text ?? '').catch(() => {}), LINT_DEBOUNCE_MS))
 }
 
 async function runLint(uri, text) {
   const filePath = uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri
-  if (!/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(filePath)) return
+  if (!/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(filePath)) return
 
   const pkgRoot = findPkgRoot(filePath)
   if (!pkgRoot) return
@@ -212,12 +288,17 @@ async function runLint(uri, text) {
 
   // Capture generation before async work; abort if file was closed while awaiting
   const gen = uriGeneration.get(uri) ?? 0
+  // Capture a per-lint sequence; abort if a newer lint for this uri started while awaiting
+  // (debounce alone cannot cancel a lint already inside `await eslint.lintText`).
+  const seq = (lintSeq.get(uri) ?? 0) + 1
+  lintSeq.set(uri, seq)
 
   let results
   try {
     results = await eslint.lintText(text, { filePath })
   } catch (err) {
     if ((uriGeneration.get(uri) ?? 0) !== gen) return // file was closed while awaiting
+    if ((lintSeq.get(uri) ?? 0) !== seq) return        // superseded by a newer lint
     const msg = err?.message ?? String(err)
     const isScopeError = /addGlobals|scopeManager/i.test(msg)
     entry.eslint = [{
@@ -235,6 +316,7 @@ async function runLint(uri, text) {
   }
 
   if ((uriGeneration.get(uri) ?? 0) !== gen) return // file was closed while awaiting
+  if ((lintSeq.get(uri) ?? 0) !== seq) return        // superseded by a newer lint
 
   const messages = results[0]?.messages ?? []
   entry.eslint = messages.map((m) => ({
@@ -271,14 +353,35 @@ async function warmUpEslint(filePath) {
 
 let initializePromise = null // guard: delay 'initialized' until 'initialize' completes
 
-process.stdin.setEncoding('utf8')
 process.stdin.on('data', makeFrameParser(async (msg) => {
   const { method, id } = msg
+
+  // Client's RESPONSE to a server→client request (has id, no method): forward back to
+  // tls untouched. The id is tls's own server-request id (we never rewrote it), so tls
+  // matches it directly. Without this, the dispatcher below would mistake the response
+  // for a brand-new request and re-issue it to tls, leaking a pendingRequests entry and
+  // leaving tls's original request unanswered forever.
+  if (method == null && id != null) {
+    sendToTsServer(msg)
+    return
+  }
 
   if (method === 'initialize') {
     const projectDir = msg.params?.rootUri?.replace(/^file:\/\//, '') ?? process.cwd()
     if (tsServerAlive) {
       initializePromise = requestTsServer(msg).then(tsResponse => {
+        // Force full-document sync (textDocumentSync: 1) in the capabilities we advertise
+        // to the client. The didChange handler below assumes contentChanges carries the
+        // full text; tls defaults to Incremental (2), under which the client would send
+        // only deltas and ESLint would lint fragments. Rewrite change kind to full.
+        const caps = tsResponse?.result?.capabilities
+        if (caps) {
+          if (caps.textDocumentSync != null && typeof caps.textDocumentSync === 'object') {
+            caps.textDocumentSync.change = 1
+          } else {
+            caps.textDocumentSync = 1
+          }
+        }
         sendToClient(tsResponse)
       }).catch(() => {
         sendToClient({ jsonrpc: '2.0', id, result: {
@@ -305,6 +408,16 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
     return
   }
 
+  if (method === '$/cancelRequest') {
+    // The cancel carries the CLIENT's request id, but tls knows the request by its proxyId.
+    // Translate before forwarding; if it no longer maps, the request already settled — drop.
+    const proxyId = clientToProxy.get(msg.params?.id)
+    if (proxyId != null) {
+      sendToTsServer({ ...msg, params: { ...msg.params, id: proxyId } })
+    }
+    return
+  }
+
   if (method === 'textDocument/didOpen') {
     sendToTsServer(msg)
     const { uri, text } = msg.params.textDocument
@@ -316,8 +429,9 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'textDocument/didChange') {
     sendToTsServer(msg)
-    // contentChanges[].text is the full document when textDocumentSync:1 (full).
-    // We negotiate sync:1 in our initialize response, so .at(-1).text is always full content.
+    // contentChanges[].text is the full document because we advertise textDocumentSync:1
+    // (full) in our initialize response (capabilities rewrite above). So .at(-1).text is
+    // always the complete content — safe to hand straight to ESLint.
     const text = msg.params.contentChanges.at(-1)?.text ?? ''
     scheduleLint(msg.params.textDocument.uri, text)
     return
@@ -329,6 +443,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
     clearTimeout(lintDebounce.get(uri))
     lintDebounce.delete(uri)
     diagMap.delete(uri)
+    lintSeq.delete(uri)
     uriGeneration.set(uri, (uriGeneration.get(uri) ?? 0) + 1)
     sendToClient('textDocument/publishDiagnostics', { uri, diagnostics: [] })
     return
@@ -349,6 +464,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
   }
 
   if (method === 'exit') {
+    closeAllWatchers()
     sendToTsServer(msg)
     process.exit(0)
   }
@@ -369,3 +485,33 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
     sendToTsServer(msg)
   }
 }))
+
+// Last-resort guard: this proxy is long-lived and losing it kills all intelligence for the
+// session. Keep it alive on an unexpected throw rather than crashing (degraded-mode intent).
+process.on('uncaughtException', (err) => {
+  try { process.stderr.write(`[ts-eslint-proxy] uncaughtException: ${err?.stack ?? err}\n`) } catch {}
+})
+// The client dispatcher is an async callback that makeFrameParser does NOT await, so a throw
+// inside it surfaces as an unhandledRejection. Don't crash (degraded-mode intent) — but DO log
+// to stderr, symmetric with uncaughtException, so a real dispatcher bug isn't silently swallowed.
+process.on('unhandledRejection', (err) => {
+  try { process.stderr.write(`[ts-eslint-proxy] unhandledRejection: ${err?.stack ?? err}\n`) } catch {}
+})
+
+// Signal teardown: Claude Code typically tears an LSP server down via SIGTERM/SIGINT, not the
+// LSP `exit` notification. Without this, the spawned tls child is orphaned (real process leak)
+// and config watchers stay open. Mirror the `exit` handler's cleanup for the signal path.
+function shutdownProxy() {
+  closeAllWatchers()
+  try { tsServer.kill() } catch {}
+  process.exit(0)
+}
+process.on('SIGTERM', shutdownProxy)
+process.on('SIGINT', shutdownProxy)
+
+// Client teardown via stream, not signal: when the client closes our stdin (EOF) or the
+// stdout pipe breaks, the client is gone. Tear down rather than lingering — otherwise the
+// proxy survives as a zombie (its event loop kept alive by the tls child's stdout pipe) and
+// the tls child is orphaned. Standard LSP behaviour: exit when stdin closes.
+process.stdin.on('end', shutdownProxy)
+process.stdout.on('error', shutdownProxy)

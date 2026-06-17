@@ -3,11 +3,16 @@
 // Runs ESLint on the written file and outputs errors to stdout for same-turn fix.
 
 import { createRequire } from 'node:module'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { get } from 'node:http'
 import { homedir } from 'node:os'
+
+// aggregator 监听成功后把 {ideName, pid, port} 写入此发现文件。hook 读它拿端口（而非在 hook 这边
+// 重复硬编码端口——由 aggregator 如实上报，单一真相来源），并用 ideName + pid 验活确认对面确实是
+// 存活的 aggregator，避免误连占用同端口的无关程序。
+const DISCOVERY_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.json')
 
 const FLAT_CONFIGS = [
   'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
@@ -27,22 +32,18 @@ function findPkgRoot(filePath) {
 }
 
 function getAggregatorPort() {
+  // 早期实现去 ~/.claude/ide/*.lock 找一张 aggregator 从不写的「名片」，于是恒返回 null、每次都退化到
+  // 慢路径 lintDirect，预热服务形同虚设。改为读 aggregator 实际写的发现文件：校验 ideName + pid 存活
+  // （避免误连占用同端口的无关程序），返回它如实上报的端口。任一校验不过 → null 走直跑慢路径。
   try {
-    const lockDir = join(homedir(), '.claude', 'ide')
-    const files = readdirSync(lockDir).filter(f => f.endsWith('.lock'))
-    for (const f of files) {
-      try {
-        const lock = JSON.parse(readFileSync(join(lockDir, f), 'utf8'))
-        if (lock.ideName !== 'eslint-aggregator') continue
-        // Verify process is alive before waiting 10s on a dead socket
-        if (lock.pid) {
-          try { process.kill(lock.pid, 0) } catch { continue }
-        }
-        return parseInt(f)
-      } catch {}
-    }
-  } catch {}
-  return null
+    const info = JSON.parse(readFileSync(DISCOVERY_FILE, 'utf8'))
+    if (info.ideName !== 'eslint-aggregator' || !info.port) return null
+    // Verify process is alive before waiting 10s on a dead socket
+    try { process.kill(info.pid, 0) } catch { return null }
+    return info.port
+  } catch {
+    return null
+  }
 }
 
 function httpGet(url) {
