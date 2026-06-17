@@ -30,6 +30,20 @@ plugins/
   ai-flow/          # AI 工作流控制系统（TypeScript，需编译）
 ```
 
+## 版本管理（push 前必读）
+
+**修改任何插件并 push 到远程后，必须 bump 该插件版本号**——否则 `claude plugin update <plugin>@darian-agent-plugins` 检测不到变化、不会更新用户本地安装。改完代码就顺手 bump，别等到「下次」。
+
+按插件分两种维护方式：
+
+- **ts-eslint-lsp / eslint-lsp（无 CI 构建）**：手动同步**两处** `version`，且**必须一致**：
+  1. `plugins/<plugin>/.claude-plugin/plugin.json` → `"version"`
+  2. `.claude-plugin/marketplace.json` 中该插件条目 → `"version"`
+  - `claude plugin update` 以 marketplace.json 的版本为更新索引；只改 plugin.json 不改 marketplace.json，更新不生效。两处不一致是真实教训（曾出现 plugin.json `0.1.3` / marketplace.json `0.1.2`）。
+- **ai-flow（有 CI 构建）**：只改 `package.json` + `plugin.json`，CI 从 plugin.json 读版本自动同步到 marketplace.json（见下方「ai-flow 发布流程」）。
+
+**push 前用 `git diff` 确认版本号已写入磁盘**（版本号要在 `git add` 之前落盘）。
+
 ## ai-flow 开发规范
 
 ### 三层内容，别搞混
