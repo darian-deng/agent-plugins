@@ -12,7 +12,7 @@
 - **组装级双视角审查**：① 集成 & 需求闭环 ② 安全专项（**强制，不可跳过**）
 - 阻塞项经 **3 轮验证**确认修复到位（模型会幻觉，修复也会——独立审查者复核是核心防线）
 
-本 stage 只产生**修复类 commit**——验证修复（`fix: resolve verification errors`）或审查修复（`fix: address review finding`），不新增功能。
+本 stage 的环节 A/B 只产生**修复类 commit**——验证修复（`fix: resolve verification errors`）或审查修复（`fix: address review finding`），不新增功能；环节 C 走完后把 base_sha_code 之后的全部改动 squash 成单个 `feat:` commit（见环节 C）。
 
 ## 前置读取
 
@@ -161,7 +161,11 @@ echo "${ADDED_DEPS:-NONE}"
 
 ### /clear 后的恢复
 
-新 session 重启前先判定停在哪个环节：读 review.md——**有「人工 review（环节 C）」节且记有「本环节起点 SHA」→ 处于环节 C**，不重派双视角，直接续环节 C（重呈 `git diff base_sha_code..HEAD` + review.md 结论，从「还有其他问题吗」继续人审-修复循环，delta 起点用记录的 SHA）；**否则处于环节 A/B**，按下面重派双视角。
+新 session 重启前按 **git 状态 + review.md** 判定停在哪个环节（环节 C 入场会 `git reset --soft` 到 base，故 `HEAD == base_sha_code` 是环节 C 的强标志——环节 A/B 期间 HEAD 一直领先 base）：
+
+- **HEAD 提交 body 含 `flow-squash: <flow_id>` 锚点、且 signal 未写** → 环节 C 已 squash、只差 signal：校验完成条件后补写 signal，不重做任何审查
+- **`HEAD == base_sha_code` 且（staged 或 working tree 有改动）** → 处于环节 C 人审中（A/B 期间 HEAD 恒领先 base，故 HEAD==base 唯一对应「已 reset 进环节 C」，**不再 AND review.md 节是否已写**——reset 与首次写 review.md 之间有窗口，那段时间 review.md 可能还没「人工 review」节）：不重派双视角，直接续——重呈 `git diff base_sha_code`（staged = 已确认基线，unstaged = 上轮待开发者确认的 AI 改动）+ review.md 结论，从「还有其他问题吗」继续人审-修复循环
+- **否则** → 处于环节 A/B，按下面重派双视角
 
 审查中途 /clear（审查者子代理 agent ID session-scoped 会丢失）→ 新 session 重启环节 B：
 
@@ -206,9 +210,9 @@ BASE_SHA_CODE: <SHA>
 - <如有> 改测试的位置 + 理由 + 复核者意见
 
 ## 人工 review（环节 C）
-本环节起点 SHA: <SHA>
-- <开发者指出的问题>：<修复 commit> — 回归：通过
-- 最终 CR：<跳过（零改动）| delta 聚焦 CR 结论 | 全量安全重跑结论>
+- <开发者指出的问题>：AI 改动文件 <file1, file2…> — 回归：通过
+- 最终 CR：<跳过（零改动）| 聚焦 CR 结论（视角① / +视角②）>
+- squash：<feat commit 概要>
 
 ## 结论
 <总体评估>
@@ -218,35 +222,73 @@ BASE_SHA_CODE: <SHA>
 
 环节 A/B 是 AI 自查，这一环是**开发者**把关；开发者的修改同样要过回归与最终 CR（与 AI 代码同等把关）。**本环节走完前绝不写 signal。**
 
-入场记下当前 HEAD 为**本环节起点 SHA**，写进 review.md「人工 review」节标题（`/clear` 后从那里读，用于算 delta）。
+本环节用 git index 当**滚动基线**、working tree 当 **AI 本轮草稿**，全程不 commit，直到最终 squash。开发者据此在 IDE 源码管理面板看「相对 base 的一整坨改动」，而非被一串 fix commit 切碎。
 
-1. **请开发者 review**：呈现组装后改动（`git diff base_sha_code..HEAD`）+ review.md 结论摘要，明确告知：「你指出的每个问题都会修 + 重跑回归，全部满意后我做一次整体 CR 才推进」。
-2. **人审-修复循环**（开发者每提一个问题）：
-   - 修代码 → `git commit -m "fix: address human review"`（每问题一笔，/clear 安全）
-   - **重跑环节 A 的自动化回归，必须全绿**——人改的代码同样过回归，不放行未验证改动
-   - 把问题 + 处理记入 review.md「人工 review」节
-   - 回开发者：「已修复 + 回归通过，还有其他问题吗？」
-   - **持续判断开发者是否审完**；开发者明确表示无更多问题前，不进下一步、不写 signal（即便讨论中说「可以了」，也要先跑完步骤 3 的最终 CR）
-3. **最终 CR（条件式）**——开发者确认无更多问题后：
-   - 循环**零代码改动**（只 review、没让改）→ **跳过**（环节 B 双视角已覆盖当前 HEAD）
-   - 循环**有改动** → 对本环节 delta（`git diff <本环节起点 SHA>..HEAD`）做聚焦 CR：质量看 reuse / simplification / altitude，正确性看 delta 是否引入回归或与既有改动冲突
-   - delta **含安全敏感改动**（鉴权 / 输入处理 / 密钥 / 序列化 等）→ 升级为对 `base_sha_code..HEAD` 全量重跑视角②（安全）
-   - CR 发现问题 → 回步骤 2 修复循环；**CR 干净 → 方可进入完成条件、写 signal**
+### 入场：把改动摊平到工作区
+
+环节 B 全部结束、改动都已 commit 后：
+
+```bash
+BASE_SHA="<注入的 base_sha_code 值>"   # = 引擎 [ai-flow:paths] 块里的 base_sha_code
+[ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 Stage 4 重写 mark-base 重新捕获"; exit 1; }
+git reset --soft "$BASE_SHA" && git add -A
+```
+
+`reset --soft` 把 base 之后所有提交折成暂存改动、HEAD 退回 base；`add -A` 把散落的未提交工件（review.md / context-delta.md / task-reports.md 等）一并纳入 index。此刻 working tree **相对 index** 干净（相对 base 仍是全部改动），`git diff --staged` = 相对 base 的全部改动。**告知开发者**：去 IDE 源码管理面板看 staged changes，这就是组装后的完整 diff。
+
+reset 完成后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕暂无内容）——作为 `/clear` 落在「reset 已跑、开发者还没提第一个问题」窗口时的恢复标记。
+
+### 人审-修复循环（开发者每提一个问题）
+
+1. **改前先 `git add -A` 归一**：把上轮已确认改动吸进 index、working tree 清零。开发者手动 stage 不影响本机制；**请勿手动 unstage 已确认改动**——下一轮 `add -A` 会把它重新纳入 index，该意图会被吞掉（要回退某改动，口头说，让 AI 改回）
+2. **AI 改 working tree**（不 commit）→ `git diff`（working tree vs index）即本轮 AI 改动，开发者和 AI 都能精确看清这一轮动了什么
+3. **重跑环节 A 自动化回归，必须全绿**——在 working tree 当前状态直接跑；人改 / AI 改同等过回归，不放行未验证改动
+4. 把「开发者问题 + AI 改动的文件清单 + 回归结果」记入 review.md「人工 review」节——这份**文件清单是最终 CR 圈范围的依据**，替代 0-commit 下缺失的 git delta 锚点
+5. 回开发者：「本轮改动见工作区 unstaged diff + 回归通过，确认无误吗？还有其他问题吗？」
+6. **持续判断开发者是否审完**；开发者明确表示无更多问题前，不进下一步、不写 signal（即便讨论中说「可以了」，也要先跑完最终 CR）
+
+### 最终 CR（条件式）→ squash
+
+开发者确认无更多问题后：
+
+1. `git add -A` 收尾，index = 全部累积改动
+2. **依改动量选择性 CR**：
+   - 本环节**零代码改动**（只 review、没让改）→ **跳过 CR**（环节 B 双视角已覆盖当前内容，`reset --soft` 不改内容）
+   - **有改动** → 按 review.md 记录的「人审动过的文件清单」**取各轮并集**圈范围：
+     - 实质改动 → 派**视角①**聚焦审这些文件的最终形态 + 与既有改动的集成（质量看 reuse / simplification / altitude，正确性看是否引入回归或与既有改动冲突）
+     - 清单含安全敏感改动（鉴权 / 输入处理 / 密钥 / 序列化 等）→ 加派**视角②**（安全）
+     - 纯拼写 / import 级小修 → 主 session 自核即可
+   - CR 发现问题 → 回人审-修复循环
+3. **CR 干净（或零改动跳过 CR）→ 先做 Context 变化捕获**（见下方「Context 变化捕获」节，写 `context-delta.md` 的 `## Stage 5` 节），再 squash。把 context-delta 一并纳入 squash，保证 squash 后 working tree 干净。两个分支都汇流到此收尾，零改动也必须写 `## Stage 5` 节 + squash（否则 Stage 6 A2 会因缺节 abort）
+4. **squash 成单个 feat commit**（改动已全 staged，直接 commit）：
+
+```bash
+git add -A && git commit -m "feat: <一句话功能概述>
+
+<2-4 行 what / why>
+
+详细需求设计与架构见 docs/feat-flows/<flow_id>/（design.md · architecture.md · plan.md）
+
+flow-squash: <flow_id>"
+```
+
+commit message **自包含**：概述与 what/why 不引用 `Task N` / `U<k>` / `Phase X` 等 flow 内部临时指代。body 末行 `flow-squash: <flow_id>` 是校验锚点——Stage 6 A0 据此只读校验代码已 squash。**commit 成功后方可写 signal。**
 
 ## 完成条件
 
-- 自动化回归全过（最后一个 commit 后跑一次确认）
+- 自动化回归全过（squash commit 前在 working tree 跑一次确认）
 - **视角① 与视角② 都已跑**（安全视角强制，不可跳过）
-- **环节 C 已走完**：开发者确认无更多问题，人审 fix 全部过回归，最终 CR 已跑（或按条件跳过）且干净
+- **环节 C 已走完**：开发者确认无更多问题，人审改动全部过回归，最终 CR 已跑（或按条件跳过）且干净
+- **环节 C 已把全部改动 squash 成单个 `feat` commit**（body 末行带 `flow-squash: <flow_id>` 锚点），working tree 干净
 - review.md 存在且完整（**含安全节**）
-- 所有阻塞项（视角① 阻塞 + 安全 Critical/High）已修复 + commit
+- 所有阻塞项（视角① 阻塞 + 安全 Critical/High）已修复
 - 「待开发者决策」类问题由开发者拍板后已应用
 - 建议项已呈开发者（非阻塞，无需全部修）
-- `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `（无）`）
+- `context-delta.md` 已追加 `## Stage 5` 节（无候选时写 `（无）`）且已纳入 squash commit
 
-## Context 变化捕获（写 signal 前、判定完成条件时执行——其产出满足上面完成条件的 `## Stage 5` 节项）
+## Context 变化捕获（最终 CR 干净后 / 零改动跳过 CR 后、squash commit 前执行——其产出满足上面完成条件的 `## Stage 5` 节项）
 
-派一个 `general-purpose` 子代理做知识沉淀——它 `git diff <base_sha_code>..HEAD` 看本次全部最终改动，**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
+派一个 `general-purpose` 子代理做知识沉淀——它 `git diff --staged <base_sha_code>` 看本次全部最终改动（此时 HEAD 已 reset 回 base、改动全在 index，故用 `--staged` 比 index 与 base，**不要用 `<base>..HEAD`**——那是空 diff），**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
 
 - 从 review.md 已解决项 + diff 识别命中 helper「注释与 context 归置」4 类之一（缘由 / 否定 / 约定 / 边界）、且属代码行为模式（非一次性局部 bug）的候选
 - 对每条调用 `optimize-claude-context` 的 `assess-candidate`，只回它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**（其余由 skill 自理）
@@ -263,5 +305,5 @@ BASE_SHA_CODE: <SHA>
 
 ## Signal
 
-**触发条件**：本阶段「完成条件」全部满足——**含环节 C 走完（开发者确认无更多问题 + 最终 CR 干净）**。在此之前不写 signal；即便讨论中开发者说「可以了」，也要先跑完最终 CR。
+**触发条件**：本阶段「完成条件」全部满足——**含环节 C 走完（开发者确认无更多问题 + 最终 CR 干净 + 全部改动已 squash 成单个 feat commit）**。在此之前不写 signal；即便讨论中开发者说「可以了」，也要先跑完最终 CR 并 squash。
 **动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`。写入后引擎进入 gate-pending，开发者 `feat-flow approve` 方才推进。
