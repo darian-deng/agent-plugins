@@ -116,8 +116,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 - 极少数确信测试在测实现细节（而非行为）→ 报 完成但有顾虑 附理由（必须复核）
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
 - **复用优先 + 最简实现**：写新代码前先 grep 相邻 / 共享模块，已有 helper 直接调用、不重复造；只写完成本 task `done` 所需的最简实现——不加可推导的冗余状态、不留死代码、不复制粘贴改两行。**仅限本 task 范围**——需泛化底层机制属架构级，留给 Stage 5，不在此越界重构
-- **注释纪律**：加任何注释前先问「不加，下一个读这段代码的 AI 会犯错吗」——只解释代码答不出的『为什么』（缘由 / 否定 / 约定 / 边界四类），凡复述代码『在做什么』的不写；改动代码时同步检查**相邻注释**是否已失准、需更新
-- **持久产物自包含**：代码注释与本 task 的 commit message 禁止引用 flow 内部临时指代（`Task N` / `U<k>` / `Phase X` / 「见上文」等）——要表达就直接写实质内容。task-reports.md 等 flow 内归档不受限。
+- **注释规则**：注释只服务一种读者——未来维护此代码、无本次 flow 上下文（不在本会话、不翻 `docs/feat-flows/`）的人/AI；一切以此读者判断。默认不写；命名 / 类型 / 结构 / 测试能表达的不注释。仅写代码表达不了、且该读者不知道就会改错的「为什么」——缘由 / 否定 / 约定 / 边界四类。不写（即便"有点用"）：复述代码在做什么、标榜设计（「高内聚自管」）、复读 linter / 团队已强制规则（「禁 try/catch」）、把背景时序写成小作文（属 design.md / PR）。**自包含**：注释只用未来读者手上有的信息，禁指向 flow 临时产物——`Task N` / `U<k>` / `Phase X` / 「见上文」/ `design.md D-xx` / ADR 编号裸引用；要留该信息就把背后实质展开进注释，不写指针。commit message 同此；task-reports.md 等 flow 内归档不受限。改代码时同步修 / 删失准的相邻注释。
 - **单元是耦合簇时**：见「耦合簇执行」——簇内**逐 task commit、逐 task 跑 verify**，不是一坨做完只 commit/verify 一次
 - **知识沉淀（测试通过后、返回前——你在代码里，故由你做）**：识别本 task 引入、命中『缘由 / 否定 / 约定 / 边界』4 类的知识（非显然选择含为何不选 X · 验证某方案不可行 · 不确定是否已记录的命名/架构/接口约定 · 依赖外部条件会静默失效），对每条调用 `optimize-claude-context` 的 `assess-candidate`，只把它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**纳入精简回报（其余由 skill 自理，不必回报）。跳过：调试试验 / 临时绕过 / 个人偏好。
 
@@ -134,15 +133,13 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 - **越界检查升到「簇 `files` 并集」层**：簇内 task 间互相写对方文件属正常协作，单 task 越界检查在簇内失效；改为对比簇 `files` 并集，并**要求子代理回报「每个 task 实际碰了哪些文件」**供细粒度核对（见精简回报形状）。
 - 簇内每个 task 都各自落一份 task report（与独立 task 同格式）。
 
-**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **知识沉淀：幸存的 context / ADR 候选及其 assess-candidate 路由（目标层 + 理由 + file:line；无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕里 `新增注释` / `前置修订` 由**主 session** 据这份回报 + diff 补全；`context 候选` / `ADR 候选` **直接取子代理回报里的 assess-candidate 路由，主 session 只记录、不重判**（理由见下「知识沉淀的归属」）。
+**子代理的精简回报形状**（写进 prompt——子代理只回这几项，不背完整 report 模板）：状态（完成/完成但有顾虑/受阻/需补充信息）+ commit SHA + 改了哪些文件做了什么（一两句）+ verify 结果（含匹配到几个测试）+ 本 task 引入的新术语/模式（无则「无」）+ **知识沉淀：幸存的 context / ADR 候选及其 assess-candidate 路由（目标层 + 理由 + file:line；无则「无」）** + 顾虑或受阻原因（无则「无」）。**单元是耦合簇时**：每个 task 各回一组（commit SHA + **该 task 实际碰了哪些文件** + verify 结果），供越界并集层核对。下面〔task report 格式〕里 `前置修订` 由**主 session** 据这份回报 + diff 补全；`context 候选` / `ADR 候选` **直接取子代理回报里的 assess-candidate 路由，主 session 只记录、不重判**（理由见下「知识沉淀的归属」）。
 
 **立即落盘**：子代理精简回报到手后**立即**落盘到 task-reports.md（`## Task N: <标题>`），再读 diff 补全剩余字段。若 /clear 落在补全中途（commit 已在、report 不全）——由入场恢复规则重建（见「入场动作」）。
 
 **两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
 
-**质量审查额外维度（注释误删检查）**：质量审查者对 `git show <sha>` 里被删除的注释行，套同一 litmus 核——「这条注释不在了，下一个读代码的 AI 会犯错吗？会 → 误删了有价值注释，要求恢复」。
-
-**质量审查额外维度（新增注释 / commit 自包含检查）**：对 `git show <sha>` 里新增注释行与 commit message，核是否出现 `Task N` / `U<k>` / `Phase X` / 「见上文」等临时指代。命中 → 要求改写成自包含表述后重 commit。
+**质量审查额外维度（注释审查）**：双向核 `git show <sha>` 的注释增删，基准是「对无本次 flow 上下文、不翻 `docs/feat-flows/` 的未来读者是否自包含、必要」——非以审查者能否读懂为准（你能翻 design.md，未来读者翻不到）。新增注释（diff `+`）逐条核，命中即删 / 改写：复述 what、标榜设计、复读 linter / 团队规则 → 删；指向 flow 临时产物（`Task N` / `design.md D-xx` / ADR 编号 / 「见上文」）→ 对未来读者必要则展开自包含、否则删；背景小作文 → 砍到只剩会改错的那句 why。留：自包含的 why（四类）、非显然约束、外部稳定文档 / issue 链接。删除注释（diff `-`）核误删：删掉的属自包含 why / 非显然约束 → 要求恢复。commit message 含 flow 临时指代 → 要求改写后重 commit。
 
 **规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。
@@ -154,7 +151,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 **主 session 每 task 终态后按此序处理（串行 checklist，避免并发判断导致漂移）**：
 
 1. 收到子代理精简回报 → **立即**落盘到 task-reports.md（`## Task N: <标题>`，见上「立即落盘」）
-2. 据回报 + diff 补全 `新增注释` / `前置修订` 字段；把回报里的幸存候选 + 路由记入 `context 候选` / `ADR 候选`（不重判）
+2. 据回报 + diff 补全 `前置修订` 字段；把回报里的幸存候选 + 路由记入 `context 候选` / `ADR 候选`（不重判）
 3. 跑两段评审 → 回填 `**审查**` 行（见上「两段评审」）
 4. 确认本 task 段完整后，再 dispatch 下一执行单元
 
@@ -169,9 +166,6 @@ implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下�
 **Commit**: <commit-sha>
 **日期**: YYYY-MM-DD
 **审查**: 规格 PASS|FAIL，质量 PASS|FAIL
-
-### 新增注释
-加缘由注释的位置（文件头 / 块 / 行内）+ 注释了什么
 
 ### 新术语或模式
 本 task 引入的术语 / 命名规范（如 "LRUEvictionPolicy"）——后续 task 靠它避免命名漂移
