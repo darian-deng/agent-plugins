@@ -48,8 +48,13 @@ function getAggregatorPort() {
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    const req = get(url, (res) => {
-      if (res.statusCode === 204) { resolve(''); return }
+    // agent:false → 不走 keep-alive。这个 hook 是一次性进程：发一个请求、拿到结果就该立刻退出。
+    // Node 19+ 默认 http.globalAgent.keepAlive=true，池化的连接会滞留；更要命的是下面 204 分支
+    // resolve 时不消费响应体，未 drain 的响应流会一直 ref 住 socket，直到服务端 keepAliveTimeout
+    // （默认 5s）才关——于是每次「无报错」的 hook（最常见路径）都白等 ~5s。agent:false 让连接随请求关闭。
+    const req = get(url, { agent: false }, (res) => {
+      // 即使忽略响应体（204 = 无问题）也要 drain：未消费的响应流会吊住 socket、阻止进程退出。
+      if (res.statusCode === 204) { res.resume(); resolve(''); return }
       let data = ''
       res.on('data', chunk => { data += chunk })
       res.on('end', () => resolve(data))

@@ -23,6 +23,26 @@ const PID_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.pid')
 const DISCOVERY_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.json')
 const IDE_NAME = 'eslint-aggregator'
 
+// Idle self-exit: this is an orphaned (reparented to init), session-independent singleton —
+// nothing reaps it when every session closes, so without this it lingers for days holding its
+// memory high-water mark. Each /lint request resets the timer; after this long with no request
+// at all (i.e. no session is doing anything) it exits and releases pid/discovery/port. The next
+// edit's hook falls back to direct ESLint, and the next SessionStart respawns a fresh instance.
+// Set ESLINT_AGG_IDLE_EXIT_MS=0 to disable.
+const IDLE_EXIT_MS = Number(process.env.ESLINT_AGG_IDLE_EXIT_MS ?? 30 * 60 * 1000)
+let idleTimer = null
+function resetIdleTimer() {
+  if (!(IDLE_EXIT_MS > 0)) return
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(() => {
+    process.stderr.write(`eslint-aggregator: idle ${Math.round(IDLE_EXIT_MS / 60000)}min, exiting to release memory\n`)
+    process.exit(0) // 'exit' handler removes pid + discovery; OS releases the port
+  }, IDLE_EXIT_MS)
+  // Don't let the idle timer itself keep the loop alive — the HTTP server already does that.
+  // It still fires while the server is up; this only avoids blocking a would-be-clean exit.
+  idleTimer.unref?.()
+}
+
 const FLAT_CONFIGS = [
   'eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs',
   'eslint.config.ts', 'eslint.config.mts', 'eslint.config.cts',
@@ -165,6 +185,7 @@ const server = createServer((req, res) => {
 
   // Hook endpoint: GET /lint?uri=file:///path/to/file — returns ESLint results as plain text
   if (req.method === 'GET' && url.pathname === '/lint') {
+    resetIdleTimer() // activity → push back the idle self-exit
     const uri = url.searchParams.get('uri')
     if (!uri) { res.writeHead(400); res.end('Missing uri'); return }
     runLint(uri).then((diags) => {
@@ -217,6 +238,7 @@ server.on('listening', () => {
   // We hold the port (the singleton lock). Publish discovery (before prewarm) so the hook finds us ASAP.
   writeDiscovery(PORT)
   writePid()
+  resetIdleTimer() // arm the idle self-exit from startup, in case no request ever arrives
   process.stderr.write(`eslint-aggregator: listening on port ${PORT}\n`)
 
   // Scan up to 3 levels deep for eslint.config.* — handles monorepos where the
