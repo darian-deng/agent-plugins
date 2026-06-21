@@ -124,9 +124,26 @@ tsServer.stdout.on('data', makeFrameParser((msg) => {
       const uri = msg.params?.uri
       if (uri) {
         const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
-        entry.ts = msg.params.diagnostics ?? []
+        // Drop UNUSED-code SUGGESTION diagnostics (severity Hint=4). tsserver always computes these
+        // regardless of tsconfig; when the project does NOT enable noUnusedLocals/noUnusedParameters,
+        // `tsc` never reports them, so surfacing them only tempts edits the project policy
+        // deliberately allows. Match by the unused-suggestion codes (tls does not reliably attach the
+        // Unnecessary tag) OR an explicit Unnecessary tag. Real unused-as-ERROR (flag on) is severity
+        // 1 → kept. Other Hints (e.g. deprecations) → kept.
+        entry.ts = (msg.params.diagnostics ?? []).filter(
+          (d) => !(d.severity === 4 && (TS_UNUSED_SUGGESTION_CODES.has(Number(d.code)) || (Array.isArray(d.tags) && d.tags.includes(1)))),
+        )
         diagMap.set(uri, entry)
         mergeDiagnostics(uri)
+        // A TS publish is frequently a dependency-driven re-check of a file we did NOT just edit.
+        // The ESLint half only refreshes on this uri's own didOpen/didChange, so re-broadcasting it
+        // here can resurrect a STALE diagnostic (e.g. a prettier warning already fixed on disk by a
+        // CLI formatter, never seen as a didChange). If we're holding any ESLint diagnostics for this
+        // uri, re-lint from disk (debounced + content-deduped) so the stale half self-corrects.
+        // Assumes disk content is authoritative for the file — true for clients that write edits
+        // straight to disk (e.g. Claude Code); a client with unsaved in-memory buffers could see a
+        // brief disk-based ESLint result until its next didChange re-lints the buffer.
+        if (entry.eslint.length) scheduleDiskRelint(uri)
       }
       return
     }
@@ -178,6 +195,11 @@ function requestTsServer(msg) {
 // ─── Diagnostic merge map ─────────────────────────────────────────────────────
 
 const diagMap = new Map() // uri → { ts: Diagnostic[], eslint: Diagnostic[] }
+
+// TypeScript "unused code" suggestion diagnostic codes. Reported at severity Hint when the project
+// does NOT enable noUnusedLocals/noUnusedParameters (so `tsc` never errors on them); reported at
+// severity Error when it does (different severity → not matched here, correctly kept).
+const TS_UNUSED_SUGGESTION_CODES = new Set([6133, 6192, 6196, 6198, 6199, 6205])
 
 function mergeDiagnostics(uri) {
   const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
@@ -271,6 +293,44 @@ const LINT_DEBOUNCE_MS = 150
 function scheduleLint(uri, text) {
   clearTimeout(lintDebounce.get(uri))
   lintDebounce.set(uri, setTimeout(() => runLint(uri, text ?? '').catch(() => {}), LINT_DEBOUNCE_MS))
+}
+
+// Debounced re-lint that reads the file from DISK (not from an LSP text param). Used when a TS
+// re-check signals the file may have changed underneath a stale ESLint half. Separate debounce map
+// from scheduleLint so it never cancels a pending didChange-driven lint. runLint's own
+// generation/seq guards make a late completion (e.g. after didClose) a no-op.
+const diskRelintDebounce = new Map()
+const diskRelintHash = new Map() // uri → hash of the disk content we last re-linted
+// Cheap 32-bit string hash (djb2). Only used to skip redundant re-lints; a collision merely skips
+// one re-lint, never produces a wrong diagnostic.
+function hashText(s) {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) | 0
+  return h
+}
+function scheduleDiskRelint(uri) {
+  clearTimeout(diskRelintDebounce.get(uri))
+  diskRelintDebounce.set(uri, setTimeout(() => {
+    diskRelintDebounce.delete(uri)
+    const filePath = uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri
+    readFile(filePath, 'utf8').then((text) => {
+      // didClose may have arrived during the readFile hop — it deletes diagMap[uri]. Bail so we
+      // don't re-publish ESLint diagnostics onto an already-closed file. (runLint captures its
+      // generation guard only AFTER this async hop, so it cannot catch this window on its own.)
+      if (!diagMap.has(uri)) return
+      // A dependency-driven TS re-check fires often, but the file's own bytes rarely changed since
+      // our last disk re-lint. Skip the (expensive) ESLint run when the content is identical — this
+      // bounds the cost to one readFile + hash, not a full lint, on every downstream re-check.
+      // This assumes a file's lint result depends only on its own bytes — true for the syntactic
+      // rules in use (type-aware @typescript-eslint rules are off: getESLint forces project:false on
+      // ESLint v10). If type-aware rules were enabled, a dependency change could alter this file's
+      // result with its bytes unchanged; the dedup would briefly miss it until the next didChange.
+      const h = hashText(text)
+      if (diskRelintHash.get(uri) === h) return
+      diskRelintHash.set(uri, h)
+      return runLint(uri, text)
+    }).catch(() => {})
+  }, LINT_DEBOUNCE_MS))
 }
 
 async function runLint(uri, text) {
@@ -442,6 +502,9 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
     sendToTsServer(msg)
     clearTimeout(lintDebounce.get(uri))
     lintDebounce.delete(uri)
+    clearTimeout(diskRelintDebounce.get(uri))
+    diskRelintDebounce.delete(uri)
+    diskRelintHash.delete(uri)
     diagMap.delete(uri)
     lintSeq.delete(uri)
     uriGeneration.set(uri, (uriGeneration.get(uri) ?? 0) + 1)
