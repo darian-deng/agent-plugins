@@ -65,6 +65,10 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 每个单元通过 `Agent` 工具 dispatch（`subagent_type='general-purpose'`）。
 
+**模型与 effort 分层（降本提速、质量不降）**：
+- **实施子代理**：`model='sonnet'`（1M context）。`effort` 默认 `medium`；该单元 plan 标了 `output_size: large` **或** `effort_hint: high` → 升 `high`。这两个字段已涵盖 Stage 3 的全部升档信号（`output_size: large` = 截断防御 / 跨域多接驳；`effort_hint: high` = 高风险隔离 / 非枚举型复杂度），主 session 机械读字段即可、不自行判断复杂度。依据：plan 已把 `decisions` / `verify` / `files` 喂到位，实施退化为机械执行 + TDD 红绿棘轮兜底，故执行侧可降档；它又是 token 大头（读文件 + 写码 + 跑全量测试 + 多轮红绿），降这里省得最多、提速最明显。
+- **两段评审子代理**：保持强——`model='opus'`，或至少 `sonnet` + `effort='high'`，**绝不与实施侧对称下调**。依据：评审是让实施侧敢降档的质量门（抓越界 / 假绿 / 注释 / spec 偏离），它只读 `git show` 的 diff、本身很便宜，降它省不了多少却拆掉整道安全网。「便宜生产者 + 强检查者」是安全形态；「便宜生产者 + 便宜检查者」才会出事。
+
 **钉死串行（修并行 race）**：**绝不并行 dispatch 实现子代理**。SDD 本就禁并行 implementer；耦合的 task 已被 Stage 3 合并进同一簇/同一子代理，不存在「并行两个子代理改同一文件」的场景。即使两个单元无文件交集，也串行派，不并行。
 
 **dispatch = 机械拼装**：plan 的每 task 已自带 `decisions` / `verify` / `files`（符号锚点）/ `read_first`，主 session **照着拼 prompt，不即兴构造、不补 plan 没给的信息**。要补的信息缺失 = plan 缺信息 = 走异常处理，不在 dispatch 时现编。
@@ -144,6 +148,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 **规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。
 - **行为越界**：diff 中是否存在与本 task `done` 语义无关的新增函数 / 方法（对比 diff 中新增的函数/方法名是否超出 `done` 断言所描述的行为范围）？
+- **枚举负空间检查**：若本 task 的 `done` / `decisions` 蕴含一个有限枚举集（N 个错误码 / N 个状态 / N 路分派），逐项核对 diff 是否每项都有实现 + 对应测试断言，缺项即 FAIL——diff-only 审查只看「写了什么」，此项补审「该写而没写的」负空间（实施侧降档后最易漏的失败模式）。
 越界发现 → 规格 FAIL，要求 subagent revert 越界部分后重新 commit。
 
 **知识沉淀的归属**：知识沉淀本身由 implementer 子代理在 task 终态完成（见〔实施要求〕的「知识沉淀」条——它在代码里，满足 `assess-candidate` 的契约）。主 session **不自己跑 assess-candidate、不重判**（主 session 不读代码，litmus / comment-check / lint 毕业都无现场依据），只把子代理回报的**幸存候选 + 路由**记入 task report 的 `context 候选` / `ADR 候选` 字段。

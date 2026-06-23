@@ -109,19 +109,14 @@ if (checkPlugin('feature-dev', 4)) {
   process.exit(FAIL);
 }
 
-// ── 6. baoyu-diagram skill (Stage 2 tech-design.html 配图) ────────────────────
-// 经 plugin marketplace 安装后 materialize 进 ~/.claude/skills/，故按 skill 检测。
-// SKILL.md 为硬依赖（单独足以产出可用图）；references/ 的布局算法为增强，缺失不阻塞。
-if (checkSkill('baoyu-diagram')) {
-  ok('skill: baoyu-diagram');
-  if (!existsSync(join(SKILLS_DIR, 'baoyu-diagram', 'references', 'architecture.md'))) {
-    process.stderr.write('ℹ️  baoyu-diagram 缺 references/（布局算法增强，非必需，diagram 仍可生成）\n');
-  }
+// ── 6. mermaid-cli (mmdc) — Stage 2 tech-design.html 配图渲染 ─────────────────
+// Stage 2 由子代理手写 .mmd → mmdc 渲染 SVG → 主 session 内联进 tech-design.html。
+// mmdc 为 npm 全局 CLI（底层 puppeteer/headless chromium），按命令存在性检测。
+if (cmdExists('mmdc')) {
+  ok('mmdc (mermaid-cli)');
 } else {
-  err('baoyu-diagram skill not found. Stage 2 生成 tech-design.html 的配图依赖它。');
-  err('经 plugin marketplace 安装（会 materialize 进 ~/.claude/skills/）：');
-  cmd('claude plugin marketplace add JimLiu/baoyu-skills');
-  cmd('claude plugin install baoyu-skills@baoyu-skills --scope user');
+  err('mmdc (mermaid-cli) not found. Stage 2 生成 tech-design.html 的配图依赖它。');
+  cmd('npm install -g @mermaid-js/mermaid-cli');
   process.exit(FAIL);
 }
 

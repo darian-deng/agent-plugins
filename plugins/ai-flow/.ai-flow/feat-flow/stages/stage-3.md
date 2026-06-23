@@ -1,20 +1,20 @@
 # Stage 3：实施计划
 
 > feat-flow 第 3/6 步 · [流程总览](../helper.md)
-> 当前 stage 目的：把 architecture.md 转成 plan.md——每 task = 一个可独立验证的行为变化，串行子代理按序执行
+> 当前 stage 目的：把 architecture.md 转成 plan.md——主粒度 = 执行单元（最大内聚切片），串行子代理按执行单元派发
 
 **元规则**：禁止 git commit，stage-4 起点统一提交。
 
 ## 目标
 
-产出 `plan.md`——每 task = 一个可独立验证的行为变化，自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含四道结构门），无分歧直接进 Stage 4，有分歧 gate 等用户决策。
+产出 `plan.md`——主粒度 = 执行单元（最大内聚切片），每个 task 自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含四道结构门），无分歧直接进 Stage 4，有分歧 gate 等用户决策。
 
 **plan.md 由本 stage 按下方「任务格式规范」直接生成**（feat-flow 原生格式，不依赖外部 plan 生成 skill）。
 
 **核心职责（本 stage 相对旧版的三个上移）**：
-1. **粒度加体量维度**：语义内聚不够，还要文件可枚举、单子代理输出装得进上下文（见「粒度标准」）。
+1. **粒度上移到执行单元**：主粒度 = fresh subagent 单上下文能做完且可独立 verify 的最大内聚切片；拆分由优先级化轴（截断防御 > 内聚、风险等级独立轴、跨上下文写冲突）决定，不数 `files` 个数（见「粒度标准」）。
 2. **决策切片内联**：从 design.md / architecture.md 抽出管每个 task 的决策，内联进 task 的 `decisions` 字段（见「decisions 抽取」），取代「把 design.md 整份路径丢给子代理按需取」。
-3. **执行单元静态划分**：把耦合 task 合并成簇、独立 task 各自成单元，输出「执行单元清单」供 Stage 4 照着串行派（见「执行单元划分」）。
+3. **执行单元清单**：内聚切片即单元、被拆分轴拆开的各自成独立单元，输出「执行单元清单」供 Stage 4 照着串行派（见「执行单元划分」）。
 
 ## 前置读取
 
@@ -30,13 +30,13 @@
      - 若 design.md TDD 基建决策为「建立」→ **Task 0 必须是基建**（标 `TDD: 否`，不走 TDD）
      - 若「已有」或「建立」之后的 task → 走 TDD
      - 若「不建立」→ 全部 task 标 `TDD: 否`
-   - **粒度三硬门逐 task 自检**（任一不满足必拆，见「粒度标准」）。
+   - **逐单元按「粒度标准」自检**（最大内聚切片 + 优先级化拆分轴，命中即拆）。
 
 2. **建决策↔task 矩阵 → 投影 `decisions`**：见「decisions 抽取」。逐 task 填 `decisions`（带 `⟵ 来源` 引用）。
 
 3. **推导 `verify` + 划执行单元**：
    - 读 design.md 项目命令节，把每个 task 的 `done` 翻译成可直接运行的 `verify` 命令，填入 task。
-   - 按「执行单元划分」把耦合 task 合并成簇、独立 task 各自成单元 → 写 plan.md 末尾「执行单元清单」。
+   - 按「粒度标准 / 执行单元划分」把内聚切片定为单元、被拆分轴拆开的各自成独立单元 → 写 plan.md 末尾「执行单元清单」。
 
 4. **self-review checklist（主 session 自查，不依赖外部 skill）**：对照以下四条通用纪律逐条扫 plan，发现问题 inline 修：
    - **spec coverage**：design.md 每条需求 / AC 都有 task 承接（与「决策矩阵无 orphan」同源，见步骤 5 门 5）
@@ -68,6 +68,7 @@ files:                     # 符号锚点定位，禁止行号
 depends_on: [Task N]       # 可选，仅编码线性顺序依赖
 touches_shared: [Task N]   # 可选，与哪些前序 task 改同一文件（供 Stage 4 注入前序 diff）
 output_size: small | large # large 强制拆骨架+填充，见「粒度标准」
+effort_hint: normal | high # 可选，默认 normal；high = 高风险隔离单元 或 非枚举型复杂度 → Stage 4 实施 effort 升 high（见「粒度标准」）
 ```
 
 - stub task 额外必须有 `contract` 字段（见「Stub / Contract 协议」）。
@@ -85,17 +86,21 @@ output_size: small | large # large 强制拆骨架+填充，见「粒度标准�
 - ❌ 错误示例：`"处理认证逻辑"`（不可测试，太模糊）
 - ❌ 错误示例：`"authMiddleware 正确处理 Authorization header"`（"正确"无法翻译成测试断言）
 
-### 粒度标准（三硬门，任一不满足必拆）
+### 粒度标准（执行单元 = 最大内聚切片 + 优先级化拆分轴）
 
-**一个 task = 一个可独立验证的行为变化**，不是时间估计。在此基础上**三条硬门全过才算合格**：
+**主粒度单位 = 执行单元**：一个 fresh subagent 在单上下文里能正确做完、且能独立 verify 的**最大内聚切片**——不「1 行为 = 1 task」碎拆，也不「先碎拆再合并」。architecture.md 一个模块通常就 = 一个单元。每个单元仍要求：`files` 可枚举列全（**无数量上限**）、能独立 `verify`、若走 TDD 则在单元内逐行为红绿。
 
-1. **语义内聚**：一个独立可验证的行为。architecture.md 模块划分为起点；一个模块对应 1–3 个 task；跨模块行为按主变更模块归属，两模块变更量相当 → 拆两个 task + `depends_on`。
-2. **文件可枚举且 ≤ 3–4**：`files` 能逐条列全，且数量 ≤ 3–4。列不全或超数 → 拆。
-3. **输出体量装得进单上下文（`output_size`）**：判据是**数 plan 已知量，不是预测代码体量**——以 `files.Create` 数量 + architecture.md 中该文件**已列明**需实现的方法/导出/枚举条目数为准。单文件需实现 ≥ 一批已列明成员（如「包装全部 rpc 方法」）→ 标 `output_size: large` → **强制拆骨架 task（建接口/空壳）+ 填充 task（逐批实现）**。
+内聚是默认归并原则，但被下列**优先级化拆分轴**否决（命中即拆，不留主观判断）：
+
+1. **截断防御 > 内聚（最高优先级）**：单元若需在**单文件**实现**一批已枚举成员**（architecture.md 列明的 N 个方法/导出/handler），或含**跨域多接驳**（同一单元接驳 ≥3 个其它域），**无条件**标 `output_size: large` 拆「骨架（建接口/空壳，编译过）+ 填充（逐批实现）」——**不许用「装不装得下」这种主观词放过**。判据是数 plan 已知量（`files.Create` 数 + architecture 已列明成员数），不是预测代码体量。
+2. **风险等级 = 独立拆分轴**：高风险动作（某能力**首次在生产激活**、数据迁移、删除被多处依赖的旧路径）**不与低风险清债 / 纯增量合进同一单元**，即便它们内聚——否则回滚粒度被绑死、单元自带的 verify 会掩盖真正需专项回归才暴露的风险。
+3. **跨上下文写冲突**：两段工作改同一文件、却无法放进同一上下文 → 拆成不同单元，用 `touches_shared` 标注、由 Stage 4 注入前序 diff。
+
+**`effort_hint` 标注（供 Stage 4 选 effort，把无法静态拆开的复杂度落成可读字段）**：以下单元标 `effort_hint: high`——① 拆分轴 2 命中的**高风险隔离单元**；② **非枚举型复杂度**（architecture 描述含「重写 / 迁移 / 复杂状态机」，或单元 `done` 蕴含 ≥ ~5 路枚举分派（错误码 / 状态 / 类型），或 `decisions` 含 ≥3 条相互制约约束）——这类拆分轴静态拆不开、但实施需更高 effort。其余默认 `normal`。（`output_size: large` 已独立触发 Stage 4 升 high，被它覆盖的不必再标 `effort_hint`。）
 
 **output_size 前置门（修截断根因）**：若 architecture.md **没列全**某文件要实现的成员（如只写「包装全部 rpc 方法」却没枚举是哪些），stage-3 **估不出体量 → 不许猜**，走 `{{flow_root}}/references/revision-protocol.md` 入口 B 退回要求 Stage 2 补全枚举，再继续。这是把「预测代码体量」这个不可静态化的事，换成「architecture 是否列全」这个可静态检查的前置条件。
 
-> 非枚举型的大（纯逻辑复杂度高、无法静态估）→ 标 `output_size: small` 正常拆，运行时若仍超大由 Stage 4 截断自保护协议兜底。
+> 非枚举型的大（纯逻辑复杂度高、无法静态估）→ 标 `output_size: small` 正常处理，运行时若仍超大由 Stage 4 截断自保护协议兜底。
 
 ### Stub / Contract 协议
 
@@ -151,15 +156,13 @@ output_size: small
 
 ## 执行单元划分
 
-把 task 归成**执行单元**，写到 plan.md 末尾「执行单元清单」，供 Stage 4 串行派发。单元 = 1 个独立 task，或一个**耦合簇**。
+按「粒度标准」切出的内聚切片即**执行单元**，写到 plan.md 末尾「执行单元清单」，供 Stage 4 串行派发。
 
-**够格合并成簇的「硬耦合」判据（仅以下两种）**：
-1. `touches_shared` 文件交集非空（改同一文件），或
-2. 一个 task 的 `done` 验证依赖另一 task 在**同一上下文内**的未提交中间状态（硬 contract 依赖，跨子代理传不过去）。
-
-**仅逻辑顺序依赖（有 `depends_on` 但不共享文件/状态）不够格合并**，保持独立单元串行。
-
-**簇大小上限**：簇内 `files` 并集必须仍满足粒度门 2（≤ 3–4 文件）且不触发 `large`；否则簇过大会回到长上下文 context rot——宁可不合并，保独立单元串行。
+- **默认**：一个内聚切片 = 一个执行单元（其内部可含多个 task，若该切片自然含多个可验证行为）。
+- 被拆分轴拆开的（截断防御的骨架/填充、风险等级隔离、跨上下文写冲突）各自成**独立单元**串行。
+- **仅逻辑顺序依赖**（有 `depends_on` 但不共享文件/未提交状态）**不强行并入同一单元**——保持独立单元串行。
+- **单元上限**：单元内 `files` 并集若命中截断防御（一批已枚举成员 / 跨域多接驳）→ 必须按拆分轴 1 拆骨架+填充，不许留超大单元导致长上下文 context rot。
+- **跨上下文未提交中间状态**（一个 task 的 `done` 验证依赖另一 task 在同一上下文内的未提交状态、跨子代理传不过去）→ 这两个 task 必须落在同一单元（硬 contract 依赖）。
 
 清单格式：
 
@@ -188,7 +191,7 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 7. **错配检测（符号锚定类）**：若一条 `decisions` 引用了具体符号（接口名/类型名/文件路径/导出名），该符号必须出现在所属 task 的 `files ∪ read_first` 里；否则疑似错配 → FAIL。**边界**：行为/风格类约束（如「抛 X 而非返回 null」）可能任何 files 都无该符号 → 门 7 放行，错配残差交 Stage 4 per-task 规格审查兜底（规格审本就核「代码是否符合本 task 的 decisions/契约」）。
 
 结构门(8)：
-8. **粒度/单元/锚点机检**：每 task 三硬门过（语义内聚 / files≤3–4 / output_size 判据正确，含「architecture 未列全则应已退回 Stage 2」）；`files` 无行号；执行单元清单存在且簇符合硬耦合判据 + 簇大小上限；每个 TDD task 的 `verify` 依赖的基建 task 在其 `depends_on` 闭包内。
+8. **粒度/单元/锚点机检**：每单元符合「粒度标准」（最大内聚切片；截断防御命中即拆骨架+填充，含「architecture 未列全则应已退回 Stage 2」；高风险动作不与低风险清债同单元；`files` 可枚举列全）；**高风险隔离单元与非枚举型复杂度单元已标 `effort_hint: high`**（未被 `output_size: large` 覆盖者）；`files` 无行号；执行单元清单存在且符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突）；每个 TDD task 的 `verify` 依赖的基建 task 在其 `depends_on` 闭包内。
 
 **三轮流程**：
 - Round 1：review subagent 独立检查，输出问题列表
@@ -208,15 +211,15 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 文件 → `{{project_root}}/docs/feat-flows/<flow_id>/plan.md`
 
 格式：
-- 每 task = `### Task N` + `unit` + `TDD` + `done` + `verify` + `read_first` + `decisions` + `files`（符号锚点）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `contract`（stub task）
+- 每 task = `### Task N` + `unit` + `TDD` + `done` + `verify` + `read_first` + `decisions` + `files`（符号锚点）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `effort_hint` + 可选 `contract`（stub task）
 - plan.md 末尾含「## 执行单元（串行）」清单
 
 ## 完成条件
 
-- `plan.md` 存在，所有 task 符合任务格式规范（含 `unit` / `verify` / `decisions` / 符号锚点 / `output_size`）
-- 每 task 三硬门过；无 `output_size: large` 未拆者；`files` 无行号
+- `plan.md` 存在，所有 task 符合任务格式规范（含 `unit` / `verify` / `decisions` / 符号锚点 / `output_size` / 命中项的 `effort_hint`）
+- 每单元符合「粒度标准」（最大内聚切片 + 优先级化拆分轴）；无 `output_size: large` 未拆者；`files` 无行号
 - 每个 `decisions` 条目带可解析 `⟵ 来源`；无 orphan 决策；无全局条目伪装成局部
-- 「执行单元清单」存在，簇符合硬耦合判据 + 簇大小上限
+- 「执行单元清单」存在，符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突），无超大单元
 - 三轮内部 review（语义维度 + 四道结构门 + 结构门 8）完成，无分歧（或有分歧但用户已决策）
 
 ## Signal

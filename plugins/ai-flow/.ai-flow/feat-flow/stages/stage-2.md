@@ -103,9 +103,9 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 
 ## 生成开发者对齐视图（tech-design.html）
 
-architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 生成 `{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html`——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施），含决策台账、风险、未决假设、实施路径，以及架构图（若有架构足迹）。
+architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 生成 `{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html`——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施）。结构与呈现全遵该契约：术语表靠前、现状落位图建心智模型、提议方案「概览先行→机制下钻 + 嵌入式为什么」、决策台账降为附录速查；配图遵**图优先**原则（凡能讲清的结构/流程/时序/状态都配，每张准确贴合本需求 + 图文同主题）。
 
-配图由一个 **sonnet 子代理**只画 SVG 写盘（baoyu-diagram 原生 + 截图自检 ≤2 轮、禁止再 spawn 子代理）；HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
+配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）；HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
 
 md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
 
@@ -132,7 +132,7 @@ md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视
 - **批量成员已枚举**：凡「包装/注册/映射一批成员」的文件,接口设计节已列出完整成员清单或明确数量（供 Stage 3 体量门用，防截断）
 - **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
-- **`tech-design.html` 已生成**（按 `{{flow_root}}/references/tech-design-view.md`：决策台账穷举有后果的决策、正文无时间性叙事、有架构足迹则架构图已内联并套全屏查看器）
+- **`tech-design.html` 已生成**（按 `{{flow_root}}/references/tech-design-view.md`：术语表靠前、实质默认展开只折附录、图优先且每张准确贴合本需求 + 图文同主题、决策台账作附录速查、正文无时间性叙事、正文/表/图/代码统一内容宽度且无横向滚动条）
 - 开发者审批以 tech-design.html 为主审面，7 点 + 架构审查建议项已主动呈现
 
 ## Signal
