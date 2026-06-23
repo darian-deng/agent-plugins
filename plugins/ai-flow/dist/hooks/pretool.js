@@ -95,6 +95,9 @@ async function appendLog(repoRoot, flowName, sessionId, message) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function activeJsonPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "active.json");
+}
 
 // src/lib/flow-config-loader.ts
 import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
@@ -4285,6 +4288,15 @@ async function handlePreTool(input2) {
   if (!active) return null;
   const { flowName: activeFlowName, state, repoRoot } = active;
   try {
+    if (state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
+      await appendLog(repoRoot, activeFlowName, session_id, `NON_OWNER_WRITE_BLOCKED owner=${state.last_session_id} tool=${tool_name}`);
+      const activeFile = activeJsonPath(repoRoot, activeFlowName);
+      return deny(
+        `\u5F53\u524D\u5DE5\u7A0B\u6B63\u5728\u8FDB\u884C\u6D41\u7A0B '${activeFlowName}'\uFF08\u7531\u53E6\u4E00 session \u63A7\u5236\uFF09\uFF0C\u4E3A\u907F\u514D\u6539\u52A8\u51B2\u7A81\uFF0C\u672C session \u7981\u6B62\u4FEE\u6539\u672C\u9879\u76EE\u6587\u4EF6\uFF0C\u4EC5\u53EF\u8BFB\u53D6\u4E0E\u68C0\u7D22\u3002
+
+\u5982\u9700\u4FEE\u6539\uFF1A\u8BF7\u5728\u63A7\u5236\u8BE5\u6D41\u7A0B\u7684 session \u4E2D\u8FDB\u884C\uFF1B\u82E5\u9700\u7531\u672C session \u63A5\u7BA1\uFF0C\u6267\u884C /clear \u63A5\u7BA1\uFF08\u539F session \u5DF2\u4E0D\u5B58\u5728\u5374\u4ECD\u88AB\u9501\u5B9A\u65F6\uFF0C\u5148\u5C06 ${activeFile} \u7684 "last_session_id" \u6539\u4E3A null \u518D /clear\uFF09\u3002`
+      );
+    }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
     if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
       const blockedPct = state.context_warning.warned_at_pct;
