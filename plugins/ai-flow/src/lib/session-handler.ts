@@ -35,29 +35,27 @@ export async function handleSessionStart(
   try {
   await appendLog(repoRoot, flowName, session_id, `SESSION source=${input.source} stage=${state.current_stage}`);
 
-  // ── Session Mutex ─────────────────────────────────────────────────────────────
-  // If another session currently owns this flow, block this one from using ai-flow.
+  // ── Session Mutex (read-only mode) ────────────────────────────────────────────
+  // Another session owns this flow. Rather than locking this session out entirely,
+  // let it read / search / answer questions about the project — just not modify it
+  // (PreToolUse blocks Edit/Write/NotebookEdit) or drive the flow. We return early
+  // WITHOUT binding ownership or injecting the stage prompt, so the owner stays in
+  // control and this session is never nudged into advancing the flow.
   if (state.last_session_id && state.last_session_id !== session_id) {
-    await appendLog(repoRoot, flowName, session_id, `SESSION_BLOCKED owner=${state.last_session_id}`);
+    await appendLog(repoRoot, flowName, session_id, `SESSION_READONLY owner=${state.last_session_id}`);
 
-    const ownerSession = state.last_session_id;
     const activeFile = activeJsonPath(repoRoot, flowName);
-    const statusLine = `⛔ [ai-flow:${flowName}] 被 session ${ownerSession} 锁定`;
+    const statusLine = `[ai-flow:${flowName}] 工程进行中，本 session 只读（禁止修改项目与流程命令）`;
     const lines = [
-      `[ai-flow] ⚠️ 流程互斥冲突`,
+      `[ai-flow] 当前工程已在进行流程 '${flowName}'（由另一 session 控制）。`,
       ``,
-      `流程 '${flowName}' 正由 session '${ownerSession}' 控制中。`,
-      `为避免多 session 并发导致流程控制 bug，**本 session 不允许使用任何 ai-flow 命令**。`,
+      `为避免多 session 并发改动冲突，本 session 仅可读取、检索、回答关于本项目的问题，`,
+      `禁止修改本项目文件（Edit/Write/NotebookEdit 将被拒绝），也不要执行任何 ai-flow 流程命令。`,
       ``,
-      `**你的第一句回复必须主动告知用户以下内容（无论用户说了什么）**：`,
-      `「⚠️ 当前 session 已被 ${flowName} 流程锁定（控制 session：${ownerSession}）。`,
-      `本 session 无法执行任何 ai-flow 操作。`,
-      `如需同时进行其他工作，请用 git worktree 创建独立工作空间后在新 session 中操作。`,
-      `如认为上述 session 已不存在（误报），恢复步骤（顺序不可颠倒）：`,
-      `1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
-      `2. 保存完成后执行 /clear。」`,
-      ``,
-      `告知完毕后，可正常回应用户的非 ai-flow 请求。`,
+      `当用户要求修改本项目时，请如实告知：改动需在控制该流程的 session 中进行；`,
+      `若那个 session 已结束、需由本 session 接管流程，执行 /clear 即可接管`,
+      `（如确认原 session 已不存在却仍被锁定，先打开 ${activeFile}，`,
+      `把 "last_session_id" 改为 null 保存，再 /clear）。`,
     ];
     return { additionalContext: lines.join('\n'), systemMessage: statusLine };
   }

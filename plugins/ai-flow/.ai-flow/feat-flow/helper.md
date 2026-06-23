@@ -46,7 +46,7 @@ feat-flow help                      # 查看本文档
 | stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
 | stage-5 | 质量门（回归 + 组装级双视角 + 人审闭环：集成闭环 + 强制安全 + 人工 review 在工作区 diff→修复→最终 CR→squash 成单 feat 提交） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
-| stage-6 | 知识沉淀（增 / 修 / 退役；代码已由 stage-5 squash） | ✅（汇总表即 gate 呈现，approve 结束流程） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
+| stage-6 | 知识沉淀（增 / 修 / 退役；代码已由 stage-5 squash） | ✅（汇总表即 gate 呈现，approve 后把知识沉淀 amend 进 feat 提交、结束流程） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
 
 ## 产出文件路径
 

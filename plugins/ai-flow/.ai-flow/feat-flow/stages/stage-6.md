@@ -4,7 +4,7 @@
 > 末步：本 stage 是流程末步
 > 当前 stage 目的：让本次 flow 让项目 context 净正向——增 + 修 + 退役三类操作平衡（不是只增不减）
 >
-> **元规则**：本 stage 不提交任何代码（代码已在 stage-5 环节 C squash 成单个 feat 提交）；知识沉淀的写入一律不 commit，留给开发者审。
+> **元规则**：环节 B 期间只写文件不 commit（先让开发者审）；待开发者 `feat-flow approve` 后，把知识沉淀 amend 进 stage-5 那笔 `feat:` 提交（整个 flow 仍是单个 commit，`flow-squash` 锚点保留），只 commit 不 push。
 
 ## 目标
 
@@ -28,15 +28,15 @@
 
 > A2 检测到 abort 条件时例外：仅输出 abort 原因（一句话），停止，不进入 环节 B。
 
-### A0. 确认代码已 squash（只读校验，本 stage 不提交代码）
+### A0. 确认代码已 squash（只读校验前置）
 
-代码的 squash 已在 stage-5 环节 C 结尾完成——HEAD 是单个 `feat:` 提交，body 末行带 `flow-squash: <flow_id>` 锚点。进入 stage-6 第一步只读校验这一前置，**本 stage 不做任何 reset / commit**：
+代码的 squash 已在 stage-5 环节 C 结尾完成——HEAD 是单个 `feat:` 提交，body 末行带 `flow-squash: <flow_id>` 锚点。进入 stage-6 第一步只读校验这一前置，**环节 B 期间不做任何 reset / commit**；知识沉淀的提交（amend 进这笔 feat）发生在开发者 approve 之后（见 Signal 段）：
 
 ```bash
 git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || { echo "ERROR: HEAD 无 flow-squash 锚点 — stage-5 未完成 squash，回 stage-5 环节 C 收尾后再进 stage-6"; exit 1; }
 ```
 
-校验通过后，`base_sha_code..HEAD` 即那一笔 feat 提交，后续 A1 / A3 据此读改动。**知识沉淀写入一律不 commit。**
+校验通过后，`base_sha_code..HEAD` 即那一笔 feat 提交，后续 A1 / A3 据此读改动。**环节 B 只写文件不 commit；approve 后再 amend 进这笔 feat。**
 
 ### A1. 解析写入根目录（monorepo 兼容）
 
@@ -87,7 +87,7 @@ git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || { echo "ERROR: HEAD
 ### 汇总表格式（严格遵守）
 
 ```
-Stage 6 知识沉淀完成。所有写入已完成，未 commit。
+Stage 6 知识沉淀完成。所有写入已完成，approve 后将 amend 进本次 feat 提交。
 
 | 操作 | 文件 | 改动和原因 |
 |------|------|----------|
@@ -97,9 +97,9 @@ Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 - [ADR 关键术语冲突提示，简述潜在冲突]
 
 查看本次知识沉淀写入：git diff HEAD
-撤回某文件：git restore <路径>
+撤回某文件：git restore <路径>（approve 后该文件不进提交）
 
-确认无误后执行 `feat-flow approve`，流程结束。
+确认无误后执行 `feat-flow approve`——知识沉淀会 amend 进本次 feat 提交，流程结束。
 ```
 
 **「操作」类型**：新建 ADR / 更新 ADR / supersede ADR（退役旧决策）/ 新增规则 / 更新规则 / 更新文档 / 新增路径规则 / linter 毕业（写进 linter 配置、不入 context 层）
@@ -114,7 +114,7 @@ Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 - A0 只读校验通过：HEAD 为 stage-5 squash 的单个 `feat:` 提交（带 `flow-squash` 锚点）
 - A2 context-delta.md 完整性验证通过
 - 环节 B 所有候选项已处理（handle-one-directive 逐条完成）
-- 所有知识沉淀写入已完成（未 commit）
+- 所有知识沉淀写入已完成（环节 B 内不 commit；approve 后 amend 进 feat 提交）
 - design.md 末尾已追加「Stage 6 沉淀记录」
 - 汇总表已呈现给开发者（作为 gate 呈现）
 
@@ -123,7 +123,18 @@ Stage 6 知识沉淀完成。所有写入已完成，未 commit。
 **触发条件**：上述「完成条件」全部满足、汇总表已呈现。**不要**在讨论中自觉「应该结束了」就写 signal——终端 stage 的误完成不可逆。
 **动作**：用 Write 向 `{{flow_root}}/state/signal` 写入 `done` → 引擎进入 gate-pending，等待开发者 `feat-flow approve` 才结束流程。**汇总表即 gate 呈现**；写 done 后若引擎再提示「呈现审查摘要」，不要重复铺陈，直接等 approve。
 
-**approve 后**（流程结束）向开发者报告：
+**approve 后**（流程结束）：先把知识沉淀 amend 进 stage-5 那笔 `feat:` 提交，再向开发者报告。
+
+approve 前开发者可能已 `git restore` 撤回部分写入，故 amend 必须在 approve 之后执行，只收幸存的文件：
+
+```bash
+git add -A && git commit --amend --no-edit
+git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || echo "WARN: amend 后 flow-squash 锚点丢失，检查 HEAD"
+```
+
+`--amend --no-edit` 把知识沉淀并入那笔 feat、保留原 commit message 与 `flow-squash` 锚点；整个 flow 仍是单个 commit。**只 commit 不 push**（push 留给开发者）。
+
+amend 完成后向开发者报告：
 
 ```
 feat-flow 流程完成。
@@ -132,10 +143,7 @@ feat-flow 流程完成。
 🧪 建议人工测试：[条件性——若 design.md AC 中有 [manual] 项，列对应场景；全部 [auto] 则跳过此行]
 📚 知识沉淀：[更新 N 个 ADR / 新增规则]
 
-代码与修复（Stage 4-5）：已在 stage-5 压成一个 `feat:` 提交（含 docs/feat-flows/ 设计与过程文档）
+代码 + 设计文档 + 知识沉淀已全部并入单个 `feat:` 提交（含 docs/feat-flows/ 工件），未 push
   → 用 `git show HEAD` 看完整改动；granular 细节见 docs/feat-flows/<flow_id>/
-
-知识沉淀（Stage 6）：写入完成，未 commit
-  → 用 `git diff HEAD` 看本 stage 写入了什么
-  → 审阅后按团队流程手动 git add + commit + push
+  → 确认后按团队流程 git push；若知识沉淀需调整，改后再 `git commit --amend --no-edit`
 ```

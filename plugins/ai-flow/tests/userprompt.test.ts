@@ -177,7 +177,7 @@ describe('handleUserPrompt — routing', () => {
     expect(o.permissionDecisionReason).toContain('owner-se'); // 8-char truncated owner id
   });
 
-  it('non-owner session sends any prompt → globally denied (not just flow commands)', async () => {
+  it('non-owner session sends plain prompt → allowed (read-only), no resume-guidance injected', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -187,11 +187,29 @@ describe('handleUserPrompt — routing', () => {
       base_sha: 'abc',
       last_session_id: 'owner-sess',
     });
-    // A plain non-flow-command prompt must also be denied
+    // A plain non-flow-command prompt must pass through so the second session can
+    // read/ask. It must NOT be nudged into driving the flow (no resume-guidance).
     const out = await handleUserPrompt(makeInput('hello world', repo.repoRoot, 'intruder-sess'));
-    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
-    expect(o.permissionDecision).toBe('deny');
-    expect(o.permissionDecisionReason).toContain('owner-se');
+    const o = out.hookSpecificOutput as { permissionDecision?: string; additionalContext?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+    expect(o.additionalContext ?? '').not.toMatch(/resume-guidance|第一句回复/);
+  });
+
+  it('non-owner plain prompt → does NOT mutate owner active.json (first_prompt_handled untouched)', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+    await handleUserPrompt(makeInput('hello world', repo.repoRoot, 'intruder-sess'));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    // Owner unchanged; observer never wrote first_prompt_handled into owner's state.
+    expect(state!.last_session_id).toBe('owner-sess');
+    expect(state!.first_prompt_handled ?? false).toBe(false);
   });
 
   it('owner session issues flow command → not denied', async () => {

@@ -466,6 +466,85 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
   });
 });
 
+describe('handlePreTool — non-owner read-only guard', () => {
+  // Another live session owns the flow; this session (makeInput default 'sess-1')
+  // is a second session in the same repo. It may read/search/Bash, but must not
+  // mutate project files, and must never reach signal/stage-advance logic.
+  function activateOwnedByOther(repoRoot: string, stage = 'work') {
+    writeActiveState(repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: stage,
+      base_sha: 'abc',
+      last_session_id: 'owner-sess',
+    });
+  }
+
+  it('non-owner + Write to project file → DENY (read-only)', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work'); // work is unrestricted — owner could write here
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: join(repo.repoRoot, 'src', 'main.ts'), content: 'x' }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/只读|仅可读取|禁止修改/);
+  });
+
+  it('non-owner + Edit → DENY (read-only)', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', { file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b' }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('non-owner + Write to signal → DENY by read-only guard, NOT signal-advance path', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work');
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    // Critical: must short-circuit before signal handling — a non-owner writing
+    // 'done' must never be ALLOWed (which would let it advance another session's flow).
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/只读|仅可读取|禁止修改/);
+  });
+
+  it('non-owner + Read non-stage file → ALLOW (reads not blocked)', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: '/tmp/some-file.ts' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('non-owner + ordinary Bash → ALLOW (Bash not fenced for read-only session)', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: 'grep -r foo src/' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('non-owner + Bash touching signal → DENY (control plane fenced for everyone)', async () => {
+    const repo = makeRepo();
+    activateOwnedByOther(repo.repoRoot, 'work');
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: `echo done > "${signalPath}"` }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('owner + Write → not denied by read-only guard', async () => {
+    const repo = makeRepo();
+    // owner == makeInput default session 'sess-1'
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      last_session_id: 'sess-1',
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: join(repo.repoRoot, 'src', 'main.ts'), content: 'x' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+});
+
 describe('handlePreTool — context block enforcement', () => {
   it('context_blocked=true + write tool → DENY with /clear message', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);

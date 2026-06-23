@@ -4,6 +4,7 @@ import {
   resolveActiveFlow,
   appendLog,
   signalPath,
+  activeJsonPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
@@ -41,6 +42,27 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   const { flowName: activeFlowName, state, repoRoot } = active;
 
   try {
+
+  // ─── Non-owner read-only guard ────────────────────────────────────────────────
+  // Another session owns this flow. A second session in the same repo may read,
+  // search and run Bash freely, but must not mutate project files — two sessions
+  // editing the same repo concurrently corrupts the work. This MUST run first and
+  // short-circuit: were a non-owner allowed to fall through, writing the signal
+  // file would advance another session's flow. It depends only on state + tool, so
+  // it runs before loadFlowConfig — a broken config must not fail open into letting
+  // a foreign session write. Bash stays governed by the control-plane block below
+  // (signal / active.json / scripts remain fenced for everyone), which is why Bash
+  // is intentionally not blocked here.
+  if (state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
+    await appendLog(repoRoot, activeFlowName, session_id, `NON_OWNER_WRITE_BLOCKED owner=${state.last_session_id} tool=${tool_name}`);
+    const activeFile = activeJsonPath(repoRoot, activeFlowName);
+    return deny(
+      `当前工程正在进行流程 '${activeFlowName}'（由另一 session 控制），为避免改动冲突，` +
+      `本 session 禁止修改本项目文件，仅可读取与检索。\n\n` +
+      `如需修改：请在控制该流程的 session 中进行；若需由本 session 接管，执行 /clear 接管` +
+      `（原 session 已不存在却仍被锁定时，先将 ${activeFile} 的 "last_session_id" 改为 null 再 /clear）。`
+    );
+  }
 
   const config = await loadFlowConfig(repoRoot, activeFlowName);
 

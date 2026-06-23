@@ -53,35 +53,21 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
 
-  // ── Global session mutex guard ──────────────────────────────────────────────
-  // If this session is not the owner of the active flow, deny ALL prompts
-  // unconditionally. This is a protocol-level block: Claude never sees the
-  // user's input; only the denial reason is shown.
-  if (active && active.state.last_session_id && active.state.last_session_id !== session_id) {
-    const ownerSession = active.state.last_session_id;
-    const activeFile = activeJsonPath(active.repoRoot, active.flowName);
-    return resultToHookOutput({
-      action: 'deny',
-      reason: [
-        `⚠️ 当前 session 未持有 '${active.flowName}' 流程控制权（持有者：session ${ownerSession}）。`,
-        ``,
-        `为避免多 session 并发导致流程状态损坏，本 session 的所有输入均被拒绝。`,
-        ``,
-        `如需同时进行其他工作：使用 git worktree 创建独立工作空间后在新 session 中操作。`,
-        `如认为持有者 session 已不存在（误报），恢复步骤（顺序不可颠倒）：`,
-        `  1. 在编辑器中打开 ${activeFile}，将 "last_session_id" 改为 null 并保存。`,
-        `  2. 保存完成后执行 /clear。`,
-      ].join('\n'),
-    });
-  }
-  // ───────────────────────────────────────────────────────────────────────────
+  // A second session in the same repo (not the flow owner) is allowed to read /
+  // search / answer questions: plain prompts pass through. It must NOT be nudged
+  // into driving the flow, so we skip the resume-guidance below and never write to
+  // the owner's active.json. Mutating flow commands stay blocked by the per-command
+  // ownership check further down; project-file edits are blocked in PreToolUse.
+  const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
 
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
 
   if (!parsed) {
-    // Layer 2: first-prompt resume guidance — inject once per session per active flow
-    if (active && !(active.state.first_prompt_handled ?? false)) {
+    // Layer 2: first-prompt resume guidance — inject once per session per active
+    // flow. Skip entirely for a non-owner session: it must not be told to drive the
+    // flow, and must not mutate the owner's active.json (first_prompt_handled).
+    if (active && !isNonOwner && !(active.state.first_prompt_handled ?? false)) {
       // Gather gate info BEFORE writing first_prompt_handled, so a config load
       // failure doesn't cause us to mark handled with incomplete information.
       let gatePending = false;

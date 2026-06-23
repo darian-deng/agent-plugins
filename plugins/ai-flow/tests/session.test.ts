@@ -299,7 +299,7 @@ describe('handleSessionStart', () => {
 
   // ── Session mutex ──────────────────────────────────────────────────────────
 
-  it('different session owns flow → returns blocked response, state unchanged', async () => {
+  it('different session owns flow → read-only context, no stage prompt, state unchanged', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -310,11 +310,14 @@ describe('handleSessionStart', () => {
       last_session_id: 'owner-session',
     });
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'intruder-session'));
-    // Response should warn about conflict
     expect(out).not.toBeNull();
-    expect(out!.additionalContext).toContain('owner-se'); // 8-char truncated owner id
+    // Read-only notice: names the flow, states the modify ban, points at recovery.
+    expect(out!.additionalContext).toContain('test-flow');
+    expect(out!.additionalContext).toMatch(/只读|仅可读取|禁止修改/);
     expect(out!.additionalContext).toContain('last_session_id');
-    // State must NOT be modified — owner session id preserved and intruder not in history
+    // Must NOT inject the stage prompt body — the observer must not drive the flow.
+    expect(out!.additionalContext).not.toContain('Do the work.');
+    // State must NOT be modified — owner session id preserved and intruder not in history.
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.last_session_id).toBe('owner-session');
     expect(state!.history_session_ids ?? []).not.toContain('intruder-session');
