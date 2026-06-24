@@ -132,4 +132,43 @@ describe('handleResume', () => {
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
     expect(ctx).toContain('Stage: work');
   });
+
+  it('resuming into a GATED stage injects the gate protocol note', async () => {
+    const repo = makeRepo();
+    const snapshot = {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'resume gated',
+      current_stage: 'review', // review has gate: true in MINIMAL_CONFIG
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00.000Z',
+      last_session_id: null,
+      context_size: 0,
+      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    };
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-gated', snapshot);
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-gated');
+    expect(result.action).toBe('allow');
+    const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
+    expect(ctx).toContain('Gate 协议');
+  });
+
+  it('seeds history_session_ids with the resuming session', async () => {
+    const repo = makeRepo();
+    const snapshot = {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'resume hist',
+      current_stage: 'work',
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00.000Z',
+      last_session_id: null,
+      context_size: 0,
+      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    };
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-hist', snapshot);
+    await handleResume(repo.repoRoot, 'test-flow', 'sess-resume', 'test-flow/aborted-hist');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toEqual(['sess-resume']);
+  });
 });

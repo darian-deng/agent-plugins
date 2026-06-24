@@ -8,6 +8,7 @@ import {
   type ActiveState,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 
 export async function handleResume(
@@ -79,6 +80,9 @@ export async function handleResume(
     base_sha: snapshot.base_sha ?? 'HEAD',
     started_at: snapshot.started_at ?? new Date().toISOString(),
     last_session_id: null,
+    // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
+    // (last_session_id) is left null so the next SessionStart binds normally.
+    history_session_ids: [sessionId],
     context_size: 0,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     context_blocked: false,
@@ -92,12 +96,12 @@ export async function handleResume(
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
   let stageContent = '';
   if (existsSync(promptPath)) {
-    stageContent = readFileSync(promptPath, 'utf-8');
+    stageContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
   }
+  if (stageCfg.completion.gate) stageContent += '\n' + gateProtocolNote();
 
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const ctx =
-    `[ai-flow:paths]\nproject_root: ${repoRoot}\nflow_root: ${flowRoot}\n\n` +
+    buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) +
     `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
     `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
     stageContent;

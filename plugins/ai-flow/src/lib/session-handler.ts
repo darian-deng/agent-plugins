@@ -16,7 +16,7 @@ import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
-import { renderPrompt, buildAiFlowPreamble } from './prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from './prompt-render.js';
 
 
 export async function handleSessionStart(
@@ -169,6 +169,7 @@ export async function handleSessionStart(
       promptContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
     } catch { /* non-fatal */ }
   }
+  if (stageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
 
   const statusLine = flowStatusLine({
     flowName,

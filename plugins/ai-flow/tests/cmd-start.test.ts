@@ -91,6 +91,15 @@ describe('handleStart', () => {
     expect(state!.flow_name).toBe('test-flow');
   });
 
+  it('seeds history_session_ids with the creating session', async () => {
+    const repo = makeRepo();
+    await handleStart(repo.repoRoot, 'test-flow', 'build feature X', 'sess-1', 0);
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    // The creating session owns last_session_id immediately, so SessionStart
+    // never appends it; start must seed history itself or it's lost forever.
+    expect(state!.history_session_ids).toEqual(['sess-1']);
+  });
+
   it('active.json base_sha matches current git HEAD', async () => {
     const repo = makeRepo();
     await handleStart(repo.repoRoot, 'test-flow', 'build feature X', 'sess-1', 0);

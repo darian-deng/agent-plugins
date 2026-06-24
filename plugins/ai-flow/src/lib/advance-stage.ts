@@ -9,7 +9,7 @@ import {
   signalPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
-import { renderPrompt } from './prompt-render.js';
+import { renderPrompt, gateProtocolNote } from './prompt-render.js';
 
 export interface AdvanceResult {
   additionalContext: string;
@@ -66,6 +66,7 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
       promptContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
     } catch { /* non-fatal */ }
   }
+  if (nextStageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
 
   return {
     additionalContext:

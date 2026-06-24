@@ -109,7 +109,9 @@ architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tec
 
 md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
 
-## 开发者审批清单（Gate 前主动呈现）
+## 开发者审批清单（写 signal 后随引擎确认一并呈现）
+
+> 呈现这份清单是给开发者审阅讨论用，**呈现 ≠ 到达 Gate**。到达 Gate 必须写 signal（见末尾「Signal」段）；只有写入 signal、收到引擎「已提交」确认后，才向开发者提示执行 `feat-flow approve`。不要在没写 signal 时就抛 approve 提示。
 
 完成 architecture.md（架构审查阻塞项已回改）+ context-delta.md + tech-design.html 后，请开发者打开 `tech-design.html` 审阅整体方案，并以下列 7 点 **+ 独立架构审查的建议项**作为审查引导逐项确认：
 

@@ -42,3 +42,29 @@ export function buildAiFlowPreamble(repoRoot: string, flowName: string, baseSha?
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join('\n') + '\n\n';
 }
+
+/**
+ * Universal Gate protocol reminder, appended by the engine to ANY gated stage's
+ * prompt at injection time (start / advance / session-recovery).
+ *
+ * Lives here — not in per-flow stage `.md` files — so every flow inherits the
+ * invariant automatically, including flows authored later via /ai-flow:create.
+ * Flow authors can't forget it and there's a single source of truth.
+ *
+ * Fixes the failure mode where the AI announces "run approve" WITHOUT first
+ * writing the signal: the approve command then rejects it (no pending signal),
+ * the user /clear-reenters, and the stage gets redone. The approve prompt must
+ * only follow a written signal + the engine's "已提交" confirmation (which the
+ * PostToolUse hook emits once the signal lands).
+ */
+export function gateProtocolNote(): string {
+  return [
+    ``,
+    `─── Gate 协议（本阶段含 Gate · 引擎强制，优先级高于本阶段提示词的任何措辞）───`,
+    `到达 Gate 的唯一方式：用 Write 向 signal 文件写入 'done'。**必须先写 signal**——`,
+    `写入后引擎会回注一条「Stage 已提交，等待人工确认」的消息，并指示你呈现审查摘要 + approve 提示。`,
+    `approve 的提示语以引擎那条为准，不要凭记忆自行复述。`,
+    `**未写 signal、未收到引擎确认，绝不向用户提示执行 approve**——此时 signal 不存在，approve 会被引擎拒绝，`,
+    `用户 /clear 重入后还得重做本阶段。准备说「approve」前先自查：signal 写了吗？引擎确认收到了吗？没有 → 立即补写 signal。`,
+  ].join('\n');
+}

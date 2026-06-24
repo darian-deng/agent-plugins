@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { hasActiveFlow, writeActiveState, appendLog, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
-import { renderPrompt, buildAiFlowPreamble } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
@@ -109,6 +109,10 @@ export async function handleStart(
     base_sha: baseSha,
     started_at: new Date().toISOString(),
     last_session_id: sessionId,
+    // Seed history with the creating session. SessionStart only appends when
+    // last_session_id !== session_id (a takeover); the creating session already
+    // owns last_session_id here, so without seeding it would never be recorded.
+    history_session_ids: [sessionId],
     context_size: DEFAULT_CONTEXT_WINDOW,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     context_blocked: false,
@@ -126,6 +130,7 @@ export async function handleStart(
   if (existsSync(promptPath)) {
     stageContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
   }
+  if (firstStage.completion.gate) stageContent += '\n' + gateProtocolNote();
 
   const ctx =
     buildAiFlowPreamble(repoRoot, flowName) +

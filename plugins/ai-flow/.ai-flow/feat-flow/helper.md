@@ -73,7 +73,7 @@ docs/feat-flows/<flow_id>/
 - signal 存在且为 `done` = 当前 stage 已申请推进
 
 写入后有两种行为，由 stage 配置决定：
-- **有 Gate 配置的 stage**：引擎暂停，等待开发者 `feat-flow approve`；AI 向开发者呈现产物摘要并等待确认
+- **有 Gate 配置的 stage**：引擎暂停，等待开发者 `feat-flow approve`。**顺序铁律**：approve 提示由引擎在 signal 写入后回注，AI 只能在写 signal、收到引擎「已提交」确认之后才呈现摘要 + 提示 approve；未写 signal 时 `approve` 会被引擎拒绝（见 `commands/approve.ts`）。这条铁律由引擎在注入任何 gated stage 提示词时**自动追加**（`prompt-render.ts` 的 `gateProtocolNote()`，覆盖 start / advance / session 恢复 / resume 四处注入点），不写在各 flow 的 stage `.md` 里——所以新 flow 经 `/ai-flow:create` 创建后也自动具备，flow 作者无需手写
 - **无 Gate 配置的 stage**：引擎立即推进，AI 无需等待开发者确认
 
 session 恢复时引擎会读取 signal 内容自动识别当前状态（gate 等待、自愈推进或正常恢复）
