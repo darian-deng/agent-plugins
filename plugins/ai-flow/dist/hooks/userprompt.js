@@ -4355,6 +4355,17 @@ function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
 }
+function gateProtocolNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 Gate \u534F\u8BAE\uFF08\u672C\u9636\u6BB5\u542B Gate \xB7 \u5F15\u64CE\u5F3A\u5236\uFF0C\u4F18\u5148\u7EA7\u9AD8\u4E8E\u672C\u9636\u6BB5\u63D0\u793A\u8BCD\u7684\u4EFB\u4F55\u63AA\u8F9E\uFF09\u2500\u2500\u2500`,
+    `\u5230\u8FBE Gate \u7684\u552F\u4E00\u65B9\u5F0F\uFF1A\u7528 Write \u5411 signal \u6587\u4EF6\u5199\u5165 'done'\u3002**\u5FC5\u987B\u5148\u5199 signal**\u2014\u2014`,
+    `\u5199\u5165\u540E\u5F15\u64CE\u4F1A\u56DE\u6CE8\u4E00\u6761\u300CStage \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u300D\u7684\u6D88\u606F\uFF0C\u5E76\u6307\u793A\u4F60\u5448\u73B0\u5BA1\u67E5\u6458\u8981 + approve \u63D0\u793A\u3002`,
+    `approve \u7684\u63D0\u793A\u8BED\u4EE5\u5F15\u64CE\u90A3\u6761\u4E3A\u51C6\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u81EA\u884C\u590D\u8FF0\u3002`,
+    `**\u672A\u5199 signal\u3001\u672A\u6536\u5230\u5F15\u64CE\u786E\u8BA4\uFF0C\u7EDD\u4E0D\u5411\u7528\u6237\u63D0\u793A\u6267\u884C approve**\u2014\u2014\u6B64\u65F6 signal \u4E0D\u5B58\u5728\uFF0Capprove \u4F1A\u88AB\u5F15\u64CE\u62D2\u7EDD\uFF0C`,
+    `\u7528\u6237 /clear \u91CD\u5165\u540E\u8FD8\u5F97\u91CD\u505A\u672C\u9636\u6BB5\u3002\u51C6\u5907\u8BF4\u300Capprove\u300D\u524D\u5148\u81EA\u67E5\uFF1Asignal \u5199\u4E86\u5417\uFF1F\u5F15\u64CE\u786E\u8BA4\u6536\u5230\u4E86\u5417\uFF1F\u6CA1\u6709 \u2192 \u7ACB\u5373\u8865\u5199 signal\u3002`
+  ].join("\n");
+}
 
 // src/lib/preflight.ts
 import { existsSync as existsSync4 } from "fs";
@@ -4503,6 +4514,10 @@ ${result.reason}`
     base_sha: baseSha,
     started_at: (/* @__PURE__ */ new Date()).toISOString(),
     last_session_id: sessionId,
+    // Seed history with the creating session. SessionStart only appends when
+    // last_session_id !== session_id (a takeover); the creating session already
+    // owns last_session_id here, so without seeding it would never be recorded.
+    history_session_ids: [sessionId],
     context_size: DEFAULT_CONTEXT_WINDOW,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     context_blocked: false,
@@ -4516,6 +4531,7 @@ ${result.reason}`
   if (existsSync6(promptPath)) {
     stageContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
   }
+  if (firstStage.completion.gate) stageContent += "\n" + gateProtocolNote();
   const ctx = buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
 
 flow_id: ${flowId}
@@ -4564,6 +4580,7 @@ async function advanceStage(repoRoot, flowName, sessionId) {
     } catch {
     }
   }
+  if (nextStageCfg.completion.gate) promptContent += "\n" + gateProtocolNote();
   return {
     additionalContext: `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
 
@@ -4735,6 +4752,9 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
     base_sha: snapshot.base_sha ?? "HEAD",
     started_at: snapshot.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
     last_session_id: null,
+    // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
+    // (last_session_id) is left null so the next SessionStart binds normally.
+    history_session_ids: [sessionId],
     context_size: 0,
     context_warning: { warned: false, warned_at_pct: null, warned_at: null },
     context_blocked: false,
@@ -4746,14 +4766,10 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
   const promptPath = join10(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
   let stageContent = "";
   if (existsSync9(promptPath)) {
-    stageContent = readFileSync7(promptPath, "utf-8");
+    stageContent = renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName);
   }
-  const flowRoot = join10(repoRoot, ".ai-flow", flowName);
-  const ctx = `[ai-flow:paths]
-project_root: ${repoRoot}
-flow_root: ${flowRoot}
-
-Flow '${flowName}' resumed from branch: ${trimmedBranch}
+  if (stageCfg.completion.gate) stageContent += "\n" + gateProtocolNote();
+  const ctx = buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
 current_stage: ${currentStage}
 requirement: ${restored.requirement}
 
