@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { createRequire } from 'node:module'
-import { existsSync, watch } from 'node:fs'
+import { existsSync, watch, watchFile, unwatchFile } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
 
 // ─── JSON-RPC framing ─────────────────────────────────────────────────────────
 
@@ -115,6 +116,43 @@ function sendToTsServer(msg) {
   } catch {
     markTsServerDead('typescript-language-server write failed')
   }
+}
+
+// ─── External-edit refresh (SubagentStop hook → reloadProjects) ────────────────
+// A subagent edits files on DISK in its own context; those writes never reach this proxy as a
+// didChange, so tls keeps a stale program and reports phantom "cannot find module / does not exist
+// / implicit-any" against code that is actually correct on disk. Verified against real tls: it does
+// NOT self-heal — a never-opened file's edits on disk are invisible to the loaded program until tls
+// is explicitly told to reload. The plugin's SubagentStop hook touches a signal file when any
+// subagent finishes; we watch it and issue `_typescript.reloadProjects`, the deterministic refresh
+// tls otherwise never receives. reloadProjects reloads only THIS instance's own projects, so several
+// windows watching the same signal file is harmless and idempotent (each reloads its own graph).
+const REFRESH_SIGNAL_FILE = join(homedir(), '.claude', 'ts-eslint-lsp.refresh')
+let refreshDebounce = null
+function triggerProjectReload() {
+  const fire = () => {
+    if (!tsServerAlive) return
+    // executeCommand is a request; we fire-and-forget. Its response carries this proxyId but is
+    // never registered in pendingRequests, so the stdout handler drops it harmlessly (see below).
+    sendToTsServer({
+      jsonrpc: '2.0', id: _nextProxyId++,
+      method: 'workspace/executeCommand',
+      params: { command: '_typescript.reloadProjects', arguments: [] },
+    })
+  }
+  // tls discards work that targets a project graph it has not built yet — gate on initialize.
+  if (initializePromise) initializePromise.then(fire).catch(fire)
+  else fire()
+}
+function armRefreshWatcher() {
+  // watchFile (stat polling) rather than watch(): the hook replaces/touches the file and an
+  // inode-based watch() can miss an atomic rename. Polling one file at 1s is negligible cost.
+  watchFile(REFRESH_SIGNAL_FILE, { interval: 1000 }, (curr, prev) => {
+    if (curr.mtimeMs === 0) return              // signal file absent
+    if (curr.mtimeMs === prev.mtimeMs) return   // stat fired without a real mtime change
+    clearTimeout(refreshDebounce)               // coalesce bursts (several subagents finishing)
+    refreshDebounce = setTimeout(triggerProjectReload, 300)
+  })
 }
 
 tsServer.stdout.on('data', makeFrameParser((msg) => {
@@ -280,6 +318,8 @@ function closeAllWatchers() {
     for (const w of ws) { try { w.close() } catch {} }
   }
   configWatchers.clear()
+  try { unwatchFile(REFRESH_SIGNAL_FILE) } catch {}
+  clearTimeout(refreshDebounce)
 }
 
 const lintDebounce = new Map()
@@ -571,6 +611,9 @@ function shutdownProxy() {
 }
 process.on('SIGTERM', shutdownProxy)
 process.on('SIGINT', shutdownProxy)
+
+// Start watching the SubagentStop refresh signal once the proxy is otherwise wired up.
+armRefreshWatcher()
 
 // Client teardown via stream, not signal: when the client closes our stdin (EOF) or the
 // stdout pipe breaks, the client is gone. Tear down rather than lingering — otherwise the

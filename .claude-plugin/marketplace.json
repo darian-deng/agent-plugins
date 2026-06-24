@@ -12,7 +12,7 @@
       "name": "ts-eslint-lsp",
       "source": "./plugins/ts-eslint-lsp",
       "description": "TypeScript LSP proxy with unified real-time ESLint diagnostics. Preserves all TypeScript intelligence while adding ESLint push diagnostics into Claude's context.",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "development",
       "tags": [
         "typescript",
