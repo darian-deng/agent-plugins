@@ -31,6 +31,7 @@
      - 若「已有」或「建立」之后的 task → 走 TDD
      - 若「不建立」→ 全部 task 标 `TDD: 否`
    - **逐单元按「粒度标准」自检**（最大内聚切片 + 优先级化拆分轴，命中即拆）。
+   - **pre-commit hook 冲突不是决策点**：拆 task 时若发现某个 build 顺序链条会在中间态产生不可编译代码（如先删列、consumer 要等后续某 task 才补），这是正常可预期的实施顺序——**不停下问开发者，也不为规避它而改变拆分方式**。这类冲突已有下游默认处理规则（`stages/stage-4.md`「异常处理」§pre-commit hook 冲突：能在 plan.md 的 build 顺序里找到依据即跳过继续，不问开发者），stage-3 只需照 architecture.md 的 build 顺序正常拆 task。
 
 2. **建决策↔task 矩阵 → 投影 `decisions`**：见「decisions 抽取」。逐 task 填 `decisions`（带 `⟵ 来源` 引用）。
 
@@ -176,6 +177,8 @@ output_size: small
 
 plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等待用户**。
 
+**传入**：plan.md 全量 + design.md 全量 + architecture.md 全量——语义维度对齐 AC/接口需要 design.md，`decisions` 溯源核验需要 architecture.md，缺一不可。
+
 **Review subagent 检查维度**（语义维度 + 三道结构门，并为一套不另起）：
 
 语义维度：
@@ -204,6 +207,23 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 - 开发者提异议 → `{{flow_root}}/references/revision-protocol.md`（入口 A）
 - AI 自查发现 design.md / architecture.md 漏写 / 错了 → `{{flow_root}}/references/revision-protocol.md`（入口 B）
 
+## 独立耦合边界重推导（三轮 review 之外，单独一次 agent 调用）
+
+三轮 review 的结构门 7 只核对 plan.md 自报的 `unit` / `touches_shared` 是否内部自洽（划了的单元符不符合粒度标准），**不核实"该不该合并"这个判断本身对不对**。这道检查专门盯这一件事,和三轮 review 的其它维度互不替代,**不并入三轮**（并进去做不到"没看过 draft 推理过程,从零判断"）。
+
+**执行**：dispatch 一个 fresh `general-purpose` 子代理，只传入：
+- architecture.md 全量 + design.md 全量
+- 每个 task 的 `files` / `read_first` 字段
+- **不传** plan.md 已经标好的 `unit` / `touches_shared`（传了就变成核对答案，不是独立判断）
+
+任务：让它自己从架构/设计里判断——哪些 task 之间存在硬耦合判据（① `files` 交集非空,或 ② 某 task 的 `done` 验证依赖另一 task 在同一上下文内的未提交状态,跨子代理传不过去)？产出它认为该合并的 task 组。
+
+**核对**：把它独立推导出的耦合关系,与 plan.md 实际的执行单元清单做 diff：
+- 一致 → 通过
+- 不一致（它认为该合但没合 / 它认为不该合却合了）→ 主 session 回头核实：找到具体依据维持原判（同 Round 2 纪律，必须引用 architecture.md / design.md 具体条目，不能凭感觉维持），或采纳调整 plan.md 的 unit 划分
+
+**结果路由**：不一致且未能给出依据解决 → 视为「有分歧」，走上面「结果」同一条路径（gate 等用户决策）；一致或已解决 → 视为「无分歧」的一部分,可与三轮 review 一并写 signal 进入 Stage 4（不新起一套分歧处理机制）。
+
 ## 输出规格
 
 文件 → `{{project_root}}/docs/feat-flows/<flow_id>/plan.md`
@@ -219,6 +239,7 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 - 每个 `decisions` 条目带可解析 `⟵ 来源`；无 orphan 决策
 - 「执行单元清单」存在，符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突），无超大单元
 - 三轮内部 review（语义维度 + 三道结构门 + 结构门 7）完成，无分歧（或有分歧但用户已决策）
+- **独立耦合边界重推导已跑**：独立子代理基于 architecture.md/design.md 重新判断的耦合关系与 plan.md 执行单元清单已核对一致（或不一致项已给出依据解决 / 已走 gate 由用户决策）
 
 ## Signal
 

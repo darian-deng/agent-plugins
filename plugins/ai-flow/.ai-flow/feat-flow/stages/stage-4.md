@@ -65,9 +65,9 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 每个单元通过 `Agent` 工具 dispatch（`subagent_type='general-purpose'`）。
 
-**模型与 effort 分层（降本提速、质量不降）**：
-- **实施子代理**：`model='sonnet'`（1M context）。`effort` 默认 `medium`；该单元 plan 标了 `output_size: large` **或** `effort_hint: high` → 升 `high`。这两个字段已涵盖 Stage 3 的全部升档信号（`output_size: large` = 截断防御 / 跨域多接驳；`effort_hint: high` = 高风险隔离 / 非枚举型复杂度），主 session 机械读字段即可、不自行判断复杂度。依据：plan 已把 `decisions` / `verify` / `files` 喂到位，实施退化为机械执行 + TDD 红绿棘轮兜底，故执行侧可降档；它又是 token 大头（读文件 + 写码 + 跑全量测试 + 多轮红绿），降这里省得最多、提速最明显。
-- **评审子代理**：保持强——`model='opus'`，或至少 `sonnet` + `effort='high'`，**绝不与实施侧对称下调**。依据：评审是让实施侧敢降档的质量门（抓越界 / 假绿 / 注释 / spec 偏离），它只读 `git show` 的 diff、本身很便宜，降它省不了多少却拆掉整道安全网。「便宜生产者 + 强检查者」是安全形态；「便宜生产者 + 便宜检查者」才会出事。
+**模型分层（降本提速、质量不降）**：
+- **实施子代理**：`model='sonnet'`（1M context）。依据：plan 已把 `decisions` / `verify` / `files` 喂到位，实施退化为机械执行 + TDD 红绿棘轮兜底，故执行侧可用更便宜的模型；它又是 token 大头（读文件 + 写码 + 跑全量测试 + 多轮红绿），降这里省得最多、提速最明显。该单元 plan 标了 `output_size: large` 或 `effort_hint: high`（截断防御 / 跨域多接驳 / 高风险隔离 / 非枚举型复杂度）时，在 dispatch prompt 里原文点出这个信号，提示实施子代理这个单元复杂度更高、需要更仔细——**这只是 prompt 里的自然语言提醒，不是技术层面的参数调节**（`Agent` 工具不支持按次覆盖 effort，effort 只能预置在 subagent 类型定义文件里，`general-purpose` 是内置类型改不了；本设计不为此引入自定义类型）。
+- **评审子代理**：保持强——`model='opus'`，**绝不与实施侧同档**。依据：评审是让实施侧敢用更便宜模型的质量门（抓越界 / 假绿 / 注释 / spec 偏离），它只读 `git show` 的 diff、本身很便宜，降它省不了多少却拆掉整道安全网。
 
 **钉死串行（修并行 race）**：**绝不并行 dispatch 实现子代理**。SDD 本就禁并行 implementer；耦合的 task 已被 Stage 3 合并进同一簇/同一子代理，不存在「并行两个子代理改同一文件」的场景。即使两个单元无文件交集，也串行派，不并行。
 
@@ -201,6 +201,12 @@ implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下�
 dispatch 第 N 个 task 前，主 session：读 `task-reports.md`（**从文件读，不依赖对话历史**）→ 合并每个已完成 task 段的 `### 新术语或模式` 字段 → 作为精选来源里的「待沉淀术语（未正式入 rules）」注入下一个 implementer。这样后续 task 看得到前面沉淀的术语，避免命名漂移。
 
 ## 异常处理
+
+**pre-commit hook 冲突**（因 build 顺序中间态导致的 hook 失败,不等同"受阻"）：某次 task/簇内单个 commit 因仓库的 pre-commit hook（如全量 typecheck）失败时：
+1. **先判因**：能否在 plan.md 的执行单元 / `depends_on` build 顺序链条里指出具体依据——即这是本 task 设计上必然产生的中间不可编译态（如本 task 先删列、consumer 要等后续某 Task 才补），而不是本 task 自己引入的新问题？**只能引用 plan.md 里的具体 task 依赖关系作依据，不许仅凭"报错看起来像已知那种失败"就下判断**。
+2. **依据成立** → 用 `git commit --no-verify` 完成本次提交，commit message 里注明跳过了哪个 hook 及原因（如 `[intermediate, pre-commit hook bypassed: typecheck — consumer fix lands in Task N]`）。继续主循环，不停下问开发者——这类中间态是 plan 设计本身预期的。
+3. **依据不成立**（报错原因在已知链条之外，疑似本 task 真引入的问题）→ 不许套用本条跳过 hook,按下方「受阻」正常处理。
+4. **为何可以安全默认跳过**：Stage 5 环节 A 强制跑全量 lint / typecheck / 测试,会补跑到这次被跳过的检查；环节 C 会把 base 之后全部 commit squash 成一个 `feat` commit,被跳过 hook 的中间 commit 不会永久留在最终历史里——跳过不等于永久漏检,只是把检查时点从"每个中间 commit"推迟到"这条 build 顺序链条闭合时 + Stage 5"。
 
 **需补充信息**（严于 SDD 默认）：
 1. 查答案是否在三份 docs / 该 task 相关 ADR 里
