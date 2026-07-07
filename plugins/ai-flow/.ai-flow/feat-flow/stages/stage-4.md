@@ -5,7 +5,7 @@
 
 ## 目标
 
-调用 `subagent-driven-development`（下称 SDD）的「fresh subagent + 两段评审」模型编排执行 plan.md：**按执行单元（1 个独立 task 或 1 个耦合簇）串行派发**，每个单元由 fresh 子代理实施 + 两段评审（规格、质量）。**主 session 只做调度**——读 plan.md（含执行单元清单）/ task-reports.md、**机械拼装** dispatch prompt（plan 已自带 decisions/verify/files，不即兴）、记录结果；代码的读写和测试全部发生在子代理里，禁止主 session 直接写代码。
+调用 `subagent-driven-development`（下称 SDD）的「fresh subagent + 单次评审」模型编排执行 plan.md：**按执行单元（1 个独立 task 或 1 个耦合簇）串行派发**，每个单元由 fresh 子代理实施 + 一次评审（同时产出规格、质量两个 verdict）。**主 session 只做调度**——读 plan.md（含执行单元清单）/ task-reports.md、**机械拼装** dispatch prompt（plan 已自带 decisions/verify/files，不即兴）、记录结果；代码的读写和测试全部发生在子代理里，禁止主 session 直接写代码。
 
 ## 前置读取
 
@@ -18,7 +18,7 @@ design.md / architecture.md **不在主 session 读取，也不再默认注入�
 **先判首次进入还是 /clear 重入**：看引擎注入的 `[ai-flow:paths]` 块里是否已有 `base_sha_code` 行（Step 1 触发引擎捕获后才会注入它），或 plan.md 是否已有 `[x]`。
 
 - **注入 context 已含 `base_sha_code`，或 plan.md 已有 `[x]`** → 这是 /clear 重入：**跳过下面 Step 1**（绝不重跑——重新捕获会污染 Stage 5 的 diff 基准；引擎也会在已存在时拒绝覆写）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。其中：
-  - 遇到**已 commit 但 task report 缺失 / 不全的 task**（无 `**审查**` 行，或缺 `context 候选` / `ADR 候选` 等只有子代理能产出的字段）→ 派一个子代理读 `git show <sha>` **重跑两段评审 + 重跑 assess-candidate**，据回报重建该 task report。主 session 不读代码、跑不了 assess-candidate，故这类字段必须由子代理重建；重跑安全（diff 已含该 task 最终改动）。
+  - 遇到**已 commit 但 task report 缺失 / 不全的 task**（无 `**审查**` 行，或缺 `context 候选` / `ADR 候选` 等只有子代理能产出的字段）→ 派一个子代理读 `git show <sha>` **重跑评审 + 重跑 assess-candidate**，据回报重建该 task report。主 session 不读代码、跑不了 assess-candidate，故这类字段必须由子代理重建；重跑安全（diff 已含该 task 最终改动）。
   - 遇到 task-reports.md 里有 **`[partial]` commit + 「剩余工作」清单**的 task（截断自保护留下的）→ 按清单续跑该 task，**不做 git 考古**（见「截断自保护」）。
   - Step 0 的分支复核仍要做。
 - **注入 context 无 `base_sha_code` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
@@ -58,7 +58,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 ## 主循环：用 SDD 逐执行单元串行执行
 
-调用 `subagent-driven-development`（SDD）的「fresh subagent + 两段评审」模型执行 `plan.md`，但**派发粒度是 plan 末尾的「执行单元」，不是单个 task**：
+调用 `subagent-driven-development`（SDD）的「fresh subagent + 单次评审」模型执行 `plan.md`，但**派发粒度是 plan 末尾的「执行单元」，不是单个 task**：
 
 - **单元 = 1 个独立 task** → 一个 fresh subagent 做这一个 task。
 - **单元 = 耦合簇（多个 task）** → 一个 fresh subagent 在同一上下文里连续做完整簇，但**簇内仍逐 task commit、逐 task 跑 verify**（见「耦合簇执行」）。
@@ -67,7 +67,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 **模型与 effort 分层（降本提速、质量不降）**：
 - **实施子代理**：`model='sonnet'`（1M context）。`effort` 默认 `medium`；该单元 plan 标了 `output_size: large` **或** `effort_hint: high` → 升 `high`。这两个字段已涵盖 Stage 3 的全部升档信号（`output_size: large` = 截断防御 / 跨域多接驳；`effort_hint: high` = 高风险隔离 / 非枚举型复杂度），主 session 机械读字段即可、不自行判断复杂度。依据：plan 已把 `decisions` / `verify` / `files` 喂到位，实施退化为机械执行 + TDD 红绿棘轮兜底，故执行侧可降档；它又是 token 大头（读文件 + 写码 + 跑全量测试 + 多轮红绿），降这里省得最多、提速最明显。
-- **两段评审子代理**：保持强——`model='opus'`，或至少 `sonnet` + `effort='high'`，**绝不与实施侧对称下调**。依据：评审是让实施侧敢降档的质量门（抓越界 / 假绿 / 注释 / spec 偏离），它只读 `git show` 的 diff、本身很便宜，降它省不了多少却拆掉整道安全网。「便宜生产者 + 强检查者」是安全形态；「便宜生产者 + 便宜检查者」才会出事。
+- **评审子代理**：保持强——`model='opus'`，或至少 `sonnet` + `effort='high'`，**绝不与实施侧对称下调**。依据：评审是让实施侧敢降档的质量门（抓越界 / 假绿 / 注释 / spec 偏离），它只读 `git show` 的 diff、本身很便宜，降它省不了多少却拆掉整道安全网。「便宜生产者 + 强检查者」是安全形态；「便宜生产者 + 便宜检查者」才会出事。
 
 **钉死串行（修并行 race）**：**绝不并行 dispatch 实现子代理**。SDD 本就禁并行 implementer；耦合的 task 已被 Stage 3 合并进同一簇/同一子代理，不存在「并行两个子代理改同一文件」的场景。即使两个单元无文件交集，也串行派，不并行。
 
@@ -93,7 +93,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 1. **`read_first` 动态校验**：读该单元各 task 的 `read_first` 列表，对每个路径 `ls <path>` 验证存在。文件不存在时：检查 plan.md 是否有前置 task 的 `files: Create` 包含该路径——**有则判为预期前置产物**（prompt 标注"此文件由前置 task 创建，若前置已完成应已存在"，不阻断）；**无则判为计划错误**（停下告知开发者，不继续 dispatch）。
 
-2. **`touches_shared` → 注入前序 diff**：读该单元各 task 的 `touches_shared` 列表（Stage 3 已标）。对其中每个前序 task，用 `git show <该 task 的 commit-sha>` 取其 diff（sha 从 task-reports.md 取），作为「此文件已被 Task M 改过，本 task 须在其基础上改、勿覆盖」注入 dispatch prompt。这是防「后续 task 覆盖前序成果」的机械步骤。
+2. **`touches_shared` → 注入前序指针**：读该单元各 task 的 `touches_shared` 列表（Stage 3 已标）。对其中每个前序 task，从 task-reports.md 取其 commit sha + 涉及的共享文件路径，作为「文件 `<path>` 已被 Task M（commit `<sha>`）改过，你须自己执行 `git show <sha> -- <path>` 查看该改动，在其基础上修改、勿覆盖」注入 dispatch prompt——**只给指针，不读取 diff 正文**（主 session 提前读全文会像 design.md / architecture.md 全文一样污染 context；这一步在 Stage 4 可能连续跑十几个 task 的长会话里尤其累积）。这是防「后续 task 覆盖前序成果」的机械步骤。
 
 3. **`verify` 直接取自 plan（不再推导）**：plan 的每 task 已含 `verify` 字段。直接把它作为「本 task 实施后必须运行、退出码 0 即验收」注入 prompt，**并加假绿检测要求（仅对测试选择器型 verify）**：若 `verify` 是带测试选择器的命令（含 `-t` / `--testNamePattern` / `-grep` / `-k` 等），子代理须确认它**实际匹配到 ≥ 1 个测试**（0 匹配 = 选择器写错的假绿，按 `需补充信息` escalate）。非测试型 verify（如 stub 的 `tsc --noEmit`、lint）只看退出码 0，不适用「匹配测试数」检查。
 
@@ -103,7 +103,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 - 该单元各 task 的标题/编号 + `done`（行为级验收）+ `verify`（来自预处理 3，含假绿检测要求）
 - **`decisions` 切片整段**（来自预处理 4——这是管本 task 的全部护栏，子代理必须遵守；含接口契约/命名/AC/为何不选 X）
 - 已校验的 `read_first` 文件列表（预处理 1）；`files` 的符号锚点（`@ 导出名`，子代理按锚点直读对应符号，不读整文件）
-- 如有 `touches_shared`：前序 diff（预处理 2，「在此基础上改、勿覆盖」）
+- 如有 `touches_shared`：前序指针（预处理 2——commit sha + 文件路径，「自己 `git show` 查看、在此基础上改、勿覆盖」，不含 diff 正文）
 - 如有 `contract`（stub）：前置契约约束
 - plan.md 路径（**仅供看前后 task 上下文，禁止跨 task 拿活**）
 - **该 task 相关的 ADR**：拿本 task 涉及的文件 / 模块，对照 Step 3 拿到的 ADR 索引（标题 + 状态）做相关性匹配，挑出相关 ADR 的**路径**（≤5 条）传给 implementer 按需读；主 session 自己不读 ADR 全文。每 task 各自选
@@ -141,14 +141,19 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 **立即落盘**：子代理精简回报到手后**立即**落盘到 task-reports.md（`## Task N: <标题>`），再读 diff 补全剩余字段。若 /clear 落在补全中途（commit 已在、report 不全）——由入场恢复规则重建（见「入场动作」）。
 
-**两段评审**（SDD 自带，feat-flow 额外要求落盘）：规格审查 → 质量审查，每 task 各自独立跑、不跨 task 合并；两段一结束**立即**把结论回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
+**单次评审**（SDD 自带，一次读 diff、同时产出规格 + 质量两个 verdict；feat-flow 额外要求落盘）：评审结束**立即**把两个 verdict 回填到 task-reports.md 该 task 的 `**审查**` 行，不得延后。主 session dispatch 下一个 task 前，先确认上一 task 已有 `**审查**` 行（没有则先补跑评审再回填）。补跑评审时，使用 task report 中记录的 commit SHA 执行 `git show <sha>` 获取该 task 的 diff，不依赖当前工作树状态。
 
-**质量审查额外维度（注释审查）**：双向核 `git show <sha>` 的注释增删，基准是「对无本次 flow 上下文、不翻 `docs/feat-flows/` 的未来读者是否自包含、必要」——非以审查者能否读懂为准（你能翻 design.md，未来读者翻不到）。新增注释（diff `+`）逐条核，命中即删 / 改写：复述 what、标榜设计、复读 linter / 团队规则 → 删；指向 flow 临时产物（`Task N` / `design.md D-xx` / ADR 编号 / 「见上文」）→ 对未来读者必要则展开自包含、否则删；背景小作文 → 砍到只剩会改错的那句 why。留：自包含的 why（四类）、非显然约束、外部稳定文档 / issue 链接。删除注释（diff `-`）核误删：删掉的属自包含 why / 非显然约束 → 要求恢复。commit message 含 flow 临时指代 → 要求改写后重 commit。
+**diff 截断时的处理**：`git show <sha>` 默认只带 3 行上下文，若某处改动被截断在函数/逻辑块中间、仅凭可见的上下文判断不了正确性，允许用 Read 工具定位到那个具体区域读一小段（不是整个文件），并在评审报告里注明读了哪里、为什么——不因为看不全就放弃判断或凭空猜测。
 
-**规格审查额外维度**：在 SDD 原有规格审查基础上，增加「越界检查」——
+**「无法从 diff 判断」的处理**：若某项 verdict 是「无法从 diff 判断」（该项要求落在本次未改动的代码里，reviewer 单看 diff 判不出），主 session 不得当 PASS 也不得当 FAIL 直接放过——须自行读相关代码核实后再落最终 PASS/FAIL，并在 `**审查**` 行该项后加注 `（主 session 核实）`。
+
+**质量 verdict 的额外检查维度（注释审查）**：双向核 `git show <sha>` 的注释增删，基准是「对无本次 flow 上下文、不翻 `docs/feat-flows/` 的未来读者是否自包含、必要」——非以审查者能否读懂为准（你能翻 design.md，未来读者翻不到）。新增注释（diff `+`）逐条核，命中即删 / 改写：复述 what、标榜设计、复读 linter / 团队规则 → 删；指向 flow 临时产物（`Task N` / `design.md D-xx` / ADR 编号 / 「见上文」）→ 对未来读者必要则展开自包含、否则删；背景小作文 → 砍到只剩会改错的那句 why。留：自包含的 why（四类）、非显然约束、外部稳定文档 / issue 链接。删除注释（diff `-`）核误删：删掉的属自包含 why / 非显然约束 → 要求恢复。commit message 含 flow 临时指代 → 要求改写后重 commit。
+
+**规格 verdict 的额外检查维度**：在 SDD 单次评审产出的规格 verdict 基础上，叠加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。
 - **行为越界**：diff 中是否存在与本 task `done` 语义无关的新增函数 / 方法（对比 diff 中新增的函数/方法名是否超出 `done` 断言所描述的行为范围）？
 - **枚举负空间检查**：若本 task 的 `done` / `decisions` 蕴含一个有限枚举集（N 个错误码 / N 个状态 / N 路分派），逐项核对 diff 是否每项都有实现 + 对应测试断言，缺项即 FAIL——diff-only 审查只看「写了什么」，此项补审「该写而没写的」负空间（实施侧降档后最易漏的失败模式）。
+- **全局性决策核查**：若本 task 的某条 `decisions` 是全局性质（约束全部 task 的规则——如版本下限、命名规范、安全红线，而非本 task 专属的功能点决策），额外核对 diff 里的实现有没有违反它——全局性决策不因为只列在这一个 task 的 `decisions` 里就降低核查强度（Stage 3 不再把全局决策特殊转移，它就和其他决策一样按需重复出现在多个 task 里，这里是唯一的机械兜底）。
 越界发现 → 规格 FAIL，要求 subagent revert 越界部分后重新 commit。
 
 **知识沉淀的归属**：知识沉淀本身由 implementer 子代理在 task 终态完成（见〔实施要求〕的「知识沉淀」条——它在代码里，满足 `assess-candidate` 的契约）。主 session **不自己跑 assess-candidate、不重判**（主 session 不读代码，litmus / comment-check / lint 毕业都无现场依据），只把子代理回报的**幸存候选 + 路由**记入 task report 的 `context 候选` / `ADR 候选` 字段。
@@ -157,7 +162,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 1. 收到子代理精简回报 → **立即**落盘到 task-reports.md（`## Task N: <标题>`，见上「立即落盘」）
 2. 据回报 + diff 补全 `前置修订` 字段；把回报里的幸存候选 + 路由记入 `context 候选` / `ADR 候选`（不重判）
-3. 跑两段评审 → 回填 `**审查**` 行（见上「两段评审」）
+3. 跑评审 → 回填 `**审查**` 行（见上「单次评审」）
 4. 确认本 task 段完整后，再 dispatch 下一执行单元
 
 ## task report 格式（每 task 完成后主 session 立即落盘）

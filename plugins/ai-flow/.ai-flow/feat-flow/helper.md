@@ -43,7 +43,7 @@ feat-flow help                      # 查看本文档
 |----|------|------|---------|
 | stage-1 | 需求确认（接地式问询 / load-bearing 结论走 AskUserQuestion / 术语表 / 需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成 tech-design.html 开发者对齐视图） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ mermaid/mmdc（配图） |
-| stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 四道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
+| stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 三道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
 | stage-5 | 质量门（回归 + 组装级双视角 + 人审闭环：集成闭环 + 强制安全 + 人工 review 在工作区 diff→修复→最终 CR→squash 成单 feat 提交） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
 | stage-6 | 知识沉淀（增 / 修 / 退役；代码已由 stage-5 squash） | ✅（汇总表即 gate 呈现，approve 后把知识沉淀 amend 进 feat 提交、结束流程） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
@@ -119,8 +119,8 @@ stage-3/4 重构详见 `docs/feat-flows/stage-3-4-redesign/design.md`（含对�
 
 - **plan 原生格式（feat-flow 自有，不依赖 writing-plans；self-review checklist 已内联进 stage-3）**：每 task = `unit`（执行单元 id）+ `done`（行为断言）+ `verify`（Stage 3 预推导，非运行时）+ `read_first` + `decisions`（决策切片，带 `⟵ 来源`）+ `files`（**符号锚点，禁行号**）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `contract`（stub）。plan 末尾含「执行单元清单」。
 - **粒度 = 执行单元（最大内聚切片）+ 优先级化拆分轴**：内聚为默认归并，被三轴否决——① 截断防御 > 内聚（单文件一批已枚举成员 / 跨域多接驳 → 无条件拆骨架+填充）② 风险等级独立拆分轴（高风险动作不与低风险清债同单元）③ 跨上下文写冲突拆。废 files 数量硬门（files 仍须可枚举列全）；体量靠「数 architecture 已列明成员」估，未列全则退回 Stage 2。
-- **decisions 切片取代 design.md 默认注入**：管每个 task 的决策内联进 plan（矩阵投影 + 四类过滤 + 四道结构门）；design.md/architecture.md 全文降级为 Stage 4 兜底路径。
-- **Stage 4 = 机械执行器**：按执行单元串行派（**绝不并行**）、dispatch 机械拼装、`touches_shared` 注入前序 diff、**截断自保护协议**（近上限先 commit + 写「剩余工作」清单，续跑读清单不做 git 考古）、耦合簇内逐 task commit/verify + 越界升簇并集层、verify 假绿检测。
+- **decisions 切片取代 design.md 默认注入**：管每个 task 的决策内联进 plan（矩阵投影 + 四类过滤 + 三道结构门）；design.md/architecture.md 全文降级为 Stage 4 兜底路径。全局性决策（适用全部 task）不特殊转移，按需重复出现在多个 task 的 decisions 里，由 Stage 4 评审侧核查兜底。
+- **Stage 4 = 机械执行器**：按执行单元串行派（**绝不并行**）、dispatch 机械拼装、`touches_shared` 注入前序指针（commit sha + 文件路径，implementer 自己 `git show` 查看，不由主 session 转述 diff 正文）、**截断自保护协议**（近上限先 commit + 写「剩余工作」清单，续跑读清单不做 git 考古）、耦合簇内逐 task commit/verify + 越界升簇并集层、verify 假绿检测。
 - NEEDS_CONTEXT 处理严于 SDD 默认（一次重 dispatch 失败即 escalate 开发者，不允许主 session 凭空补答；反复缺护栏 = decisions 漏 → 回补 plan）。
 - **flow 归属靠 session→锚点绑定**（引擎按 session_id 反查锚点，cwd 漂移/cd 到任意目录都不会认错 flow）；stage 提示词里的 flow 路径用引擎注入的绝对 `{{project_root}}` / `{{flow_root}}` 锚定，故 **cd 不再受限**。引擎只在控制面（signal / active.json / scripts）保留写保护。
 

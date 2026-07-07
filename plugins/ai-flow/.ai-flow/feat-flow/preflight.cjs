@@ -85,16 +85,41 @@ const SKILL_INSTALL = {
   'receiving-code-review': 'npx skills add obra/superpowers@receiving-code-review -g -y',
   'optimize-claude-context': 'npx skills add darian-deng/agent-skills@optimize-claude-context -g -y',
 };
+// Third-party skills carry no version field (checked against obra/superpowers
+// upstream: no per-skill version in SKILL.md frontmatter, repo package.json
+// version isn't surfaced to installed skill dirs). stage-4.md's SDD usage is
+// written against a specific behavior generation, not just "the skill exists" —
+// so gate on the file whose presence *is* that behavior: task-reviewer-prompt.md
+// only ships from the v6.0.0 rewrite onward (single reviewer, two verdicts per
+// task; replaces the old separate spec-reviewer-prompt.md/code-quality-reviewer-prompt.md
+// two-pass review that stage-4.md used to assume). If SDD's shape moves again,
+// this check breaks loudly instead of stage-4.md silently drifting from reality.
+const SKILL_STRUCTURE_MARKER = {
+  'subagent-driven-development': 'task-reviewer-prompt.md',
+};
 const missing = [];
+const outdated = [];
 for (const skill of Object.keys(SKILL_INSTALL)) {
-  if (checkSkill(skill)) ok('skill: ' + skill);
-  else missing.push(skill);
+  if (!checkSkill(skill)) {
+    missing.push(skill);
+    continue;
+  }
+  const marker = SKILL_STRUCTURE_MARKER[skill];
+  if (marker && !existsSync(join(SKILLS_DIR, skill, marker))) {
+    outdated.push(skill);
+    continue;
+  }
+  ok('skill: ' + skill);
 }
-if (missing.length) {
-  err('Missing required skills: ' + missing.join(' '));
+if (missing.length || outdated.length) {
+  if (missing.length) err('Missing required skills: ' + missing.join(' '));
+  if (outdated.length) {
+    err('Outdated skills (installed, but missing structure feat-flow depends on): ' + outdated.join(' '));
+  }
   err('');
   err('── 复制以下命令到终端执行 ──────');
   for (const skill of missing) cmd(SKILL_INSTALL[skill]);
+  for (const skill of outdated) cmd(`npx skills update ${skill} -g -y`);
   err('────────────────────');
   process.exit(FAIL);
 }

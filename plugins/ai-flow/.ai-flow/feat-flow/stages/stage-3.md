@@ -7,7 +7,7 @@
 
 ## 目标
 
-产出 `plan.md`——主粒度 = 执行单元（最大内聚切片），每个 task 自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含四道结构门），无分歧直接进 Stage 4，有分歧 gate 等用户决策。
+产出 `plan.md`——主粒度 = 执行单元（最大内聚切片），每个 task 自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含三道结构门），无分歧直接进 Stage 4，有分歧 gate 等用户决策。
 
 **plan.md 由本 stage 按下方「任务格式规范」直接生成**（feat-flow 原生格式，不依赖外部 plan 生成 skill）。
 
@@ -44,7 +44,7 @@
    - **type consistency**：跨 task 的类型名 / 方法名 / 接口签名一致（如 Task 3 用 `clearLayers()`、Task 7 不能写成 `clearFullLayers()`）
    - **file-structure mapping**：每个文件职责单一；改在一起的内容放在一起（按职责切，不按技术层切）
 
-5. 调用 review subagent 完成三轮内部审查（见「内部 Review 机制」，含四道结构门）。
+5. 调用 review subagent 完成三轮内部审查（见「内部 Review 机制」，含三道结构门）。
 
 ## 任务格式规范
 
@@ -151,7 +151,6 @@ output_size: small
 ### 禁止进 decisions
 - 实现步骤 / 代码 / 伪代码
 - 无法回溯到某 doc section 的条目（无 `⟵ 来源` = placeholder 或凭空发明 = plan failure）
-- 适用于所有 task 的全局条目（属 Stage 4 dispatch 前言，不逐 task 重复）
 - 复述 `done`（decisions 是护栏，done 是目标，二者正交）
 
 ## 执行单元划分
@@ -177,21 +176,20 @@ output_size: small
 
 plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等待用户**。
 
-**Review subagent 检查维度**（语义维度 + 四道结构门，并为一套不另起）：
+**Review subagent 检查维度**（语义维度 + 三道结构门，并为一套不另起）：
 
 语义维度：
 1. **`done` 准确性**：每个 `done` 是否是行为级断言？是否与 design.md AC 对齐？能否翻译成测试？
 2. **Stub contract 正确性**：stub task 的 `contract` 是否清晰，是否与 architecture.md 接口定义一致？
 3. **任务边界干净**：有无 task 的 `done` 实际涵盖了相邻 task 的职责？
 
-`decisions` 四道结构门（尽量机械，门 4 只覆盖符号锚定类）：
+`decisions` 三道结构门（尽量机械，门 4 只覆盖符号锚定类）：
 4. **来源可解析**：每条 `decisions` 必带 `⟵ 来源`，且该 section 在 design/architecture 里真实存在。无效引用 → FAIL。
 5. **无 orphan 决策（= 覆盖完整性）**：design.md 每条决策记录 + 每条 AC + architecture.md 每个接口/模块/build order，至少出现在一个 task 的 `decisions` 里。遗漏 → FAIL（补 task 或确认该决策不该存在）。
-6. **无全局条目伪装成局部**：同一条 `decisions` 逐字出现在 > 3 个 task → 是全局约束，移到 Stage 4 dispatch 前言、从各 task 删 → FAIL until moved。
-7. **错配检测（符号锚定类）**：若一条 `decisions` 引用了具体符号（接口名/类型名/文件路径/导出名），该符号必须出现在所属 task 的 `files ∪ read_first` 里；否则疑似错配 → FAIL。**边界**：行为/风格类约束（如「抛 X 而非返回 null」）可能任何 files 都无该符号 → 门 7 放行，错配残差交 Stage 4 per-task 规格审查兜底（规格审本就核「代码是否符合本 task 的 decisions/契约」）。
+6. **错配检测（符号锚定类）**：若一条 `decisions` 引用了具体符号（接口名/类型名/文件路径/导出名），该符号必须出现在所属 task 的 `files ∪ read_first` 里；否则疑似错配 → FAIL。**边界**：行为/风格类约束（如「抛 X 而非返回 null」）可能任何 files 都无该符号 → 门 6 放行，错配残差交 Stage 4 per-task 规格审查兜底（规格审本就核「代码是否符合本 task 的 decisions/契约」）。
 
-结构门(8)：
-8. **粒度/单元/锚点机检**：每单元符合「粒度标准」（最大内聚切片；截断防御命中即拆骨架+填充，含「architecture 未列全则应已退回 Stage 2」；高风险动作不与低风险清债同单元；`files` 可枚举列全）；**高风险隔离单元与非枚举型复杂度单元已标 `effort_hint: high`**（未被 `output_size: large` 覆盖者）；`files` 无行号；执行单元清单存在且符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突）；每个 TDD task 的 `verify` 依赖的基建 task 在其 `depends_on` 闭包内。
+结构门(7)：
+7. **粒度/单元/锚点机检**：每单元符合「粒度标准」（最大内聚切片；截断防御命中即拆骨架+填充，含「architecture 未列全则应已退回 Stage 2」；高风险动作不与低风险清债同单元；`files` 可枚举列全）；**高风险隔离单元与非枚举型复杂度单元已标 `effort_hint: high`**（未被 `output_size: large` 覆盖者）；`files` 无行号；执行单元清单存在且符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突）；每个 TDD task 的 `verify` 依赖的基建 task 在其 `depends_on` 闭包内。
 
 **三轮流程**：
 - Round 1：review subagent 独立检查，输出问题列表
@@ -218,9 +216,9 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 
 - `plan.md` 存在，所有 task 符合任务格式规范（含 `unit` / `verify` / `decisions` / 符号锚点 / `output_size` / 命中项的 `effort_hint`）
 - 每单元符合「粒度标准」（最大内聚切片 + 优先级化拆分轴）；无 `output_size: large` 未拆者；`files` 无行号
-- 每个 `decisions` 条目带可解析 `⟵ 来源`；无 orphan 决策；无全局条目伪装成局部
+- 每个 `decisions` 条目带可解析 `⟵ 来源`；无 orphan 决策
 - 「执行单元清单」存在，符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突），无超大单元
-- 三轮内部 review（语义维度 + 四道结构门 + 结构门 8）完成，无分歧（或有分歧但用户已决策）
+- 三轮内部 review（语义维度 + 三道结构门 + 结构门 7）完成，无分歧（或有分歧但用户已决策）
 
 ## Signal
 
