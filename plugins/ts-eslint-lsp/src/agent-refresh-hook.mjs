@@ -12,46 +12,46 @@
 //      trust typecheck over the IDE diagnostic.
 //
 // Gated on actually-changed .ts (mtime, commit-proof) so read-only subagents produce no reload/noise.
-import { readFileSync, openSync, closeSync, utimesSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import { homedir } from 'node:os'
+//
+// Cutoff is anchored to THIS dispatch's own wall-clock duration (tool_response.totalDurationMs),
+// not a fixed lookback window — a fixed window silently misses files edited early in a long subagent
+// run (measured in production: TDD implementation runs regularly exceed 10-15min, so a 5min window
+// dropped reload entirely for the earliest-touched files — schema/types, the ones most likely to
+// cause downstream phantom diagnostics — with zero warning that it had done so).
+//
+// Background dispatches (an omitted `run_in_background` defaults to background as of Claude Code
+// v2.1.198) fire this hook at LAUNCH, before the subagent has touched anything, with no duration
+// field — walking now would find nothing relevant. subagentstop-refresh-hook.mjs is the backstop
+// that catches those at their real completion; this hook exits immediately for that case.
+import { readFileSync } from 'node:fs'
+import { findChangedSince, triggerReload } from './refresh-core.mjs'
 
-const WINDOW_MS = 300_000 // a file counts as "the subagent's" if written within the last 5 min
-const SIGNAL = join(homedir(), '.claude', 'ts-eslint-lsp.refresh')
-const PRUNE = new Set(['node_modules', '.git', 'dist', 'dist-local', 'build', 'coverage', '.next', 'out', '.turbo'])
-const TS_RE = /\.(ts|tsx|mts|cts)$/
+const WINDOW_MS = 300_000 // fallback only — foreground dispatches always carry totalDurationMs
 
 let raw = ''
 try { raw = readFileSync(0, 'utf8') } catch {}
 let cwd = process.cwd()
-try { const j = JSON.parse(raw); if (j && typeof j.cwd === 'string') cwd = j.cwd } catch {}
+let durationMs = null
+let isBackground = false
+try {
+  const j = JSON.parse(raw)
+  if (j && typeof j.cwd === 'string') cwd = j.cwd
+  const tr = j && j.tool_response
+  if (tr && tr.status === 'async_launched') isBackground = true
+  if (tr && typeof tr.totalDurationMs === 'number') durationMs = tr.totalDurationMs
+} catch {}
 
-const cutoff = Date.now() - WINDOW_MS
-const changed = []
-let budget = 40000 // bound the walk so a giant monorepo can't hang the hook
-function walk(dir) {
-  if (budget <= 0 || changed.length >= 50) return
-  let entries
-  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
-  for (const e of entries) {
-    if (budget-- <= 0 || changed.length >= 50) return
-    if (e.isDirectory()) {
-      if (PRUNE.has(e.name) || e.name.startsWith('.')) continue
-      walk(join(dir, e.name))
-    } else if (e.isFile() && TS_RE.test(e.name)) {
-      const p = join(dir, e.name)
-      try { if (statSync(p).mtimeMs >= cutoff) changed.push(p) } catch {}
-    }
-  }
-}
-walk(cwd)
+if (isBackground) process.exit(0) // subagentstop-refresh-hook.mjs handles real completion
 
+const DISPATCH_OVERHEAD_MS = 30_000 // slack before the subagent's first edit
+const cutoff = Date.now() - (durationMs != null ? durationMs + DISPATCH_OVERHEAD_MS : WINDOW_MS)
+
+const changed = findChangedSince(cwd, cutoff)
 if (changed.length === 0) process.exit(0) // read-only subagent / no recent TS write → nothing to do
 
-// (1) Trigger the proxy's reloadProjects (atomic-ish: create-or-truncate then bump mtime).
-try { closeSync(openSync(SIGNAL, 'w')); const now = new Date(); utimesSync(SIGNAL, now, now) } catch {}
+triggerReload()
 
-// (2) Remind the MAIN agent about the open-buffer residual reloadProjects cannot fix.
+// Remind the MAIN agent about the open-buffer residual reloadProjects cannot fix.
 const rel = changed.slice(0, 5).map(f => (f.startsWith(cwd + '/') ? f.slice(cwd.length + 1) : f))
 const more = changed.length > 5 ? ` (+${changed.length - 5} more)` : ''
 const msg =
