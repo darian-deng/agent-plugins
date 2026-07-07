@@ -96,6 +96,12 @@ describe('feat-flow preflight.cjs — integration', () => {
       mkdirSync(join(fakeHome, '.claude', 'skills', skill), { recursive: true });
       writeFileSync(join(fakeHome, '.claude', 'skills', skill, 'SKILL.md'), '# mock');
     }
+    // subagent-driven-development v6.0.0+ ships task-reviewer-prompt.md alongside SKILL.md;
+    // preflight gates on its presence to detect a pre-v6 install (see preflight.cjs).
+    writeFileSync(
+      join(fakeHome, '.claude', 'skills', 'subagent-driven-development', 'task-reviewer-prompt.md'),
+      '# mock',
+    );
 
     // Mock claude CLI on PATH.
     const binDir = join(fakeHome, 'bin');
