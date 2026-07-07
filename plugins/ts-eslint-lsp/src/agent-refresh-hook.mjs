@@ -51,13 +51,18 @@ if (changed.length === 0) process.exit(0) // read-only subagent / no recent TS w
 
 triggerReload()
 
-// Remind the MAIN agent about the open-buffer residual reloadProjects cannot fix.
+// Warn the MAIN agent that diagnostics collected right after this external (non-LSP) write may be
+// mid-refresh: reloadProjects is async and NOT guaranteed to have settled before this turn's
+// diagnostics snapshot was taken, so a phantom (stale/intermediate) error can surface as if real.
 const rel = changed.slice(0, 5).map(f => (f.startsWith(cwd + '/') ? f.slice(cwd.length + 1) : f))
 const more = changed.length > 5 ? ` (+${changed.length - 5} more)` : ''
 const msg =
-  `ts-eslint-lsp: a subagent changed ${changed.length} TypeScript file(s) on disk (${rel.join(', ')}${more}). ` +
-  `The TypeScript project was auto-refreshed (reloadProjects), so diagnostics on files NOT open in this ` +
-  `session are now accurate. Residual: if one of these files was ALREADY open in this session, its IDE ` +
-  `diagnostics may be a stale editor buffer the refresh cannot override — when a diagnostic on these ` +
-  `files contradicts a clean tsc/typecheck, re-read the file or trust typecheck before acting.`
+  `ts-eslint-lsp: a subagent changed ${changed.length} TypeScript file(s) on disk (${rel.join(', ')}${more}), ` +
+  `bypassing the LSP. A project refresh (reloadProjects) was triggered, but it is asynchronous and NOT ` +
+  `guaranteed to have completed before the diagnostics attached to this turn were collected. Any TypeScript ` +
+  `diagnostic on these files — or on files that import/depend on them — may reflect a mid-refresh, ` +
+  `internally-inconsistent program state rather than the real one. Before acting on such a diagnostic ` +
+  `(especially before "fixing" what looks like a real error), confirm it against a clean tsc/typecheck or ` +
+  `re-read the file; do not trust it on its own. (Same if a file was already open in this session — its ` +
+  `buffer can stay stale even after the refresh.)`
 process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: msg } }))

@@ -9,8 +9,8 @@
 //
 // It can only trigger the reload signal, not inject context into the parent session — Claude Code
 // routes that only through PostToolUse:Agent (see docs: "To inject context into the parent session
-// after a subagent returns, use a PostToolUse hook on the Agent tool instead"). So the open-buffer
-// residual reminder stays a foreground-only feature; this hook silently keeps the TS program fresh.
+// after a subagent returns, use a PostToolUse hook on the Agent tool instead"). So the mid-refresh
+// reminder stays a foreground-only feature; this hook silently keeps the TS program fresh.
 //
 // Runs for every subagent (foreground included) — harmless overlap with agent-refresh-hook.mjs,
 // since triggerReload() is idempotent and the walk is cheap (measured: a few thousand directory

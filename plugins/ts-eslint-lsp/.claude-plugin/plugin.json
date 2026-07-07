@@ -1,6 +1,6 @@
 {
   "name": "ts-eslint-lsp",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "TypeScript LSP proxy with real-time ESLint diagnostics — unified TypeScript intelligence + ESLint in one LSP server",
   "author": {
     "name": "Darian Deng",
