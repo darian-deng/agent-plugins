@@ -161,10 +161,10 @@ echo "${ADDED_DEPS:-NONE}"
 
 ### /clear 后的恢复
 
-新 session 重启前按 **git 状态 + review.md** 判定停在哪个环节（环节 C 入场会 `git reset --soft` 到 base，故 `HEAD == base_sha_code` 是环节 C 的强标志——环节 A/B 期间 HEAD 一直领先 base）：
+新 session 重启前按 **git 状态 + review.md** 判定停在哪个环节（环节 C 入场会 `git reset` 到 base，故 `HEAD == base_sha_code` 是环节 C 的强标志——环节 A/B 期间 HEAD 一直领先 base）：
 
 - **HEAD 提交 body 含 `flow-squash: <flow_id>` 锚点、且 signal 未写** → 环节 C 已 squash、只差 signal：校验完成条件后补写 signal，不重做任何审查
-- **`HEAD == base_sha_code` 且（staged 或 working tree 有改动）** → 处于环节 C 人审中（A/B 期间 HEAD 恒领先 base，故 HEAD==base 唯一对应「已 reset 进环节 C」，**不再 AND review.md 节是否已写**——reset 与首次写 review.md 之间有窗口，那段时间 review.md 可能还没「人工 review」节）：不重派双视角，直接续——重呈 `git diff base_sha_code`（staged = 已确认基线，unstaged = 上轮待开发者确认的 AI 改动）+ review.md 结论，从「还有其他问题吗」继续人审-修复循环
+- **`HEAD == base_sha_code` 且工作区非空**（`git status --porcelain` 有输出——涵盖未暂存改动 / untracked 新文件；开发者若手动 stage 过也一并算数）→ 处于环节 C 人审中（A/B 期间 HEAD 恒领先 base，故 HEAD==base 唯一对应「已 reset 进环节 C」，**不再 AND review.md 节是否已写**——reset 与首次写 review.md 之间有窗口，那段时间 review.md 可能还没「人工 review」节）：不重派双视角，直接续——重呈相对 base 的全量改动（去 IDE Changes 组看，或 `git diff base_sha_code` 辅以 `git status` 覆盖 untracked 新文件）+ review.md 结论，从「还有其他问题吗」继续人审-修复循环
 - **否则** → 处于环节 A/B，按下面重派双视角
 
 审查中途 /clear（审查者子代理 agent ID session-scoped 会丢失）→ 新 session 重启环节 B：
@@ -222,7 +222,7 @@ BASE_SHA_CODE: <SHA>
 
 环节 A/B 是 AI 自查，这一环是**开发者**把关；开发者的修改同样要过回归与最终 CR（与 AI 代码同等把关）。**本环节走完前绝不写 signal。**
 
-本环节用 git index 当**滚动基线**、working tree 当 **AI 本轮草稿**，全程不 commit，直到最终 squash。开发者据此在 IDE 源码管理面板看「相对 base 的一整坨改动」，而非被一串 fix commit 切碎。
+本环节把 base 之后的全部改动摊成 **unstaged 全量**（工作区），全程不 stage、不 commit，直到最终 squash。开发者据此在 IDE 源码管理面板看「相对 base 的一整坨改动」，而非被一串 fix commit 切碎。**保持 unstaged 的收益**：diff 右侧是工作树真文件，IDE 语言服务（跳转定义 / 查引用）在 review 全程可用——staged 或 commit-vs-commit 的 diff 两侧都是 git 虚拟文档，语言服务不可用。
 
 ### 入场：把改动摊平到工作区
 
@@ -231,21 +231,24 @@ BASE_SHA_CODE: <SHA>
 ```bash
 BASE_SHA="<注入的 base_sha_code 值>"   # = 引擎 [ai-flow:paths] 块里的 base_sha_code
 [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 Stage 4 重写 mark-base 重新捕获"; exit 1; }
-git reset --soft "$BASE_SHA" && git add -A
+git reset "$BASE_SHA"
 ```
 
-`reset --soft` 把 base 之后所有提交折成暂存改动、HEAD 退回 base；`add -A` 把散落的未提交工件（review.md / context-delta.md / task-reports.md 等）一并纳入 index。此刻 working tree **相对 index** 干净（相对 base 仍是全部改动），`git diff --staged` = 相对 base 的全部改动。**告知开发者**：去 IDE 源码管理面板看 staged changes，这就是组装后的完整 diff。
+`git reset`（mixed）撤回 base 之后所有提交、HEAD 退回 base，改动内容原样留在工作区且**全部 unstaged**（base 之后新建的文件呈 untracked）；散落的未提交工件（review.md / context-delta.md / task-reports.md 等）本就在工作区，一并以 unstaged/untracked 出现。此刻工作区相对 base 就是全部改动。**告知开发者**：去 IDE 源码管理面板看 **Changes（未暂存）** 组，这就是组装后的完整 diff；**请勿手动 stage**——保持 unstaged 才有语言服务跳转。
 
 reset 完成后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕暂无内容）——作为 `/clear` 落在「reset 已跑、开发者还没提第一个问题」窗口时的恢复标记。
 
 ### 人审-修复循环（开发者每提一个问题）
 
-1. **改前先 `git add -A` 归一**：把上轮已确认改动吸进 index、working tree 清零。开发者手动 stage 不影响本机制；**请勿手动 unstage 已确认改动**——下一轮 `add -A` 会把它重新纳入 index，该意图会被吞掉（要回退某改动，口头说，让 AI 改回）
-2. **AI 改 working tree**（不 commit）→ `git diff`（working tree vs index）即本轮 AI 改动，开发者和 AI 都能精确看清这一轮动了什么
-3. **重跑环节 A 自动化回归，必须全绿**——在 working tree 当前状态直接跑；人改 / AI 改同等过回归，不放行未验证改动
-4. 把「开发者问题 + AI 改动的文件清单 + 回归结果」记入 review.md「人工 review」节——这份**文件清单是最终 CR 圈范围的依据**，替代 0-commit 下缺失的 git delta 锚点
-5. 回开发者：「本轮改动见工作区 unstaged diff + 回归通过，确认无误吗？还有其他问题吗？」
-6. **持续判断开发者是否审完**；开发者明确表示无更多问题前，不进下一步、不写 signal（即便讨论中说「可以了」，也要先跑完最终 CR）
+全程保持 unstaged，不 add、不 commit：
+
+1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量
+2. **重跑环节 A 自动化回归，必须全绿**——在 working tree 当前状态直接跑；人改 / AI 改同等过回归，不放行未验证改动
+3. 把「开发者问题 + AI 改动的文件清单 + 回归结果」记入 review.md「人工 review」节——这份**文件清单是最终 CR 圈范围的依据**（0-commit、不分层，靠这份清单圈定人审阶段动过哪些文件）
+4. 回开发者：「本轮改动见工作区 diff + 回归通过，确认无误吗？还有其他问题吗？」
+5. **持续判断开发者是否审完**；开发者明确表示无更多问题前，不进下一步、不写 signal（即便讨论中说「可以了」，也要先跑完最终 CR）
+
+> 不做「本轮 vs 上轮」的增量切分：工作区 diff 始终是相对 base 的全量。开发者若想单独核对某一轮 AI 改了什么，可自行 `git add -A` 把已确认部分暂存、只留本轮为未暂存——这是开发者的可选本地操作，不是流程强制，AI 不依赖也不维护 index 状态（要回退某改动，口头说，让 AI 改回）。
 
 ### 最终 CR（条件式）→ squash
 
@@ -253,8 +256,8 @@ reset 完成后**立即在 review.md 建「人工 review（环节 C）」节**�
 
 1. `git add -A` 收尾，index = 全部累积改动
 2. **依改动量选择性 CR**：
-   - 本环节**零代码改动**（只 review、没让改）→ **跳过 CR**（环节 B 双视角已覆盖当前内容，`reset --soft` 不改内容）
-   - **有改动** → 按 review.md 记录的「人审动过的文件清单」**取各轮并集**圈范围：
+   - 本环节**零代码改动**（只 review、没让改）→ **跳过 CR**（环节 B 双视角已覆盖当前内容，`git reset` 只撤提交不改工作区内容）
+   - **有改动** → 按 review.md 记录的「人审动过的文件清单」**取各轮并集**圈范围（此时已 `git add -A` 收尾、`HEAD==base`，派出的视角子代理须用 `git diff --staged <base>` 看改动，**勿用 `<base>..HEAD`**——那是空 diff）：
      - 实质改动 → 派**视角①**聚焦审这些文件的最终形态 + 与既有改动的集成（质量看 reuse / simplification / altitude，正确性看是否引入回归或与既有改动冲突）
      - 清单含安全敏感改动（鉴权 / 输入处理 / 密钥 / 序列化 等）→ 加派**视角②**（安全）
      - 纯拼写 / import 级小修 → 主 session 自核即可
@@ -288,7 +291,7 @@ commit message **自包含**：概述与 what/why 不引用 `Task N` / `U<k>` / 
 
 ## Context 变化捕获（最终 CR 干净后 / 零改动跳过 CR 后、squash commit 前执行——其产出满足上面完成条件的 `## Stage 5` 节项）
 
-派一个 `general-purpose` 子代理做知识沉淀——它 `git diff --staged <base_sha_code>` 看本次全部最终改动（此时 HEAD 已 reset 回 base、改动全在 index，故用 `--staged` 比 index 与 base，**不要用 `<base>..HEAD`**——那是空 diff），**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
+派一个 `general-purpose` 子代理做知识沉淀——它 `git diff --staged <base_sha_code>` 看本次全部最终改动（此时环节 C 已 `git add -A` 收尾、HEAD 仍在 base、改动全在 index，故用 `--staged` 比 index 与 base，**不要用 `<base>..HEAD`**——那是空 diff），**在代码里、满足 `assess-candidate` 契约**（主 session 不读代码、跑不了 litmus / comment-check / lint 毕业，故不在主 session 做）。子代理职责：
 
 - 从 review.md 已解决项 + diff 识别命中 helper「注释与 context 归置」4 类之一（缘由 / 否定 / 约定 / 边界）、且属代码行为模式（非一次性局部 bug）的候选
 - 对每条调用 `optimize-claude-context` 的 `assess-candidate`，只回它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**（其余由 skill 自理）
