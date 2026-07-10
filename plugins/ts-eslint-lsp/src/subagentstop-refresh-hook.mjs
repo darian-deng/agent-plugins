@@ -17,6 +17,7 @@
 // entries on real repos, well under budget).
 import { readFileSync } from 'node:fs'
 import { findChangedSince, triggerReload } from './refresh-core.mjs'
+import { removeOneMarker, claimStop } from './quarantine-core.mjs'
 
 const FALLBACK_WINDOW_MS = 1_800_000 // 30min — only if the subagent transcript is unreadable
 
@@ -40,6 +41,15 @@ try {
     if (rec && rec.timestamp) { cutoff = new Date(rec.timestamp).getTime(); break }
   }
 } catch {}
+
+// Clear this subagent's quarantine marker FIRST, unconditionally — its counterpart was added at
+// dispatch (PreToolUse:Agent) regardless of whether the subagent ended up writing, so it must be
+// removed regardless too, or the count never returns to zero and quarantine never lifts. This must
+// happen before the changed-file early-exit below (a read-only subagent has no changed files but
+// still holds a marker). Removing the last marker is what tells the proxy to reload + lift.
+// Deduped by transcript path: SubagentStop can fire more than once for one subagent, and a repeat
+// stop must NOT remove a second, still-live subagent's marker (see quarantine-core::claimStop).
+if (claimStop(transcriptPath)) removeOneMarker(cwd)
 
 const changed = findChangedSince(cwd, cutoff)
 if (changed.length === 0) process.exit(0)

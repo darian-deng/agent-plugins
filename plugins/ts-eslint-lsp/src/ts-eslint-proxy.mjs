@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
+import { QUARANTINE_SIGNAL, countActive } from './quarantine-core.mjs'
 
 // ─── JSON-RPC framing ─────────────────────────────────────────────────────────
 
@@ -146,13 +147,154 @@ function triggerProjectReload() {
 }
 function armRefreshWatcher() {
   // watchFile (stat polling) rather than watch(): the hook replaces/touches the file and an
-  // inode-based watch() can miss an atomic rename. Polling one file at 1s is negligible cost.
-  watchFile(REFRESH_SIGNAL_FILE, { interval: 1000 }, (curr, prev) => {
+  // inode-based watch() can miss an atomic rename. Polling one file at 100ms is negligible cost and
+  // shrinks the reload latency (was 1000ms + 300ms debounce ≈ 1.3s) so the residual phantom window is
+  // small even when quarantine (below) is not in play.
+  watchFile(REFRESH_SIGNAL_FILE, { interval: 100 }, (curr, prev) => {
     if (curr.mtimeMs === 0) return              // signal file absent
     if (curr.mtimeMs === prev.mtimeMs) return   // stat fired without a real mtime change
     clearTimeout(refreshDebounce)               // coalesce bursts (several subagents finishing)
-    refreshDebounce = setTimeout(triggerProjectReload, 300)
+    refreshDebounce = setTimeout(triggerProjectReload, 50)
   })
+}
+
+// ─── Quarantine: downgrade never-opened TS diagnostics while a subagent is writing ──────────────
+// See quarantine-core.mjs for the full rationale. In short: a subagent's on-disk edits reach tsserver
+// only via its own polling watcher, which can read a mid-write, self-inconsistent state and publish
+// phantom "cannot find name / does not exist / type mismatch" diagnostics that are wrong on disk. We
+// cannot win the race to REPAIR those after the subagent returns (Claude Code snapshots diagnostics
+// synchronously, before any async reload settles), so instead we DOWNGRADE them for the whole window
+// the subagent is active — a window opened at dispatch (PreToolUse), before any write, so there is no
+// race. Downgrade == severity→Hint + a "verify with tsc" prefix; we never DROP a diagnostic (that
+// would be a silent false negative). Scope: only files the session never opened — an open file's
+// buffer is editor-owned truth and is left alone (its residual staleness is covered by the
+// agent-refresh-hook text + tsc, unchanged). Raw diagnostics are kept intact in diagMap; the
+// downgrade is applied at SEND time, so lifting simply re-sends the originals.
+let projectRoot = process.cwd()
+const openUris = new Set()          // uris the client has didOpen'd and not yet didClose'd
+let quarantined = false
+let lifting = false
+let liftTimer = null
+let quarantineHeartbeat = null      // periodic re-eval while quarantined, so a leaked marker still gets swept
+let lastTsPublishAt = 0              // wall-clock of the most recent TS publishDiagnostics (settle proxy)
+
+const DOWNGRADE_PREFIX = '[ts-eslint-lsp: 可能是子代理写盘的刷新中途态，动手前先 tsc/typecheck 复核，勿单凭此诊断修改] '
+const QUIET_MS = 1000               // require this long with no never-opened TS publish before settled
+const HARD_FLOOR_MS = 1500          // ...and at least this long since the reload response (guards the
+                                    // case where tsserver has nothing to publish and stays silent)
+const MAX_SETTLE_MS = 10000         // absolute ceiling since the reload response — lift regardless, so
+                                    // a never-closing quiet window can't pin real errors to Information
+const HEARTBEAT_MS = 30000          // while quarantined, re-evaluate this often so a leaked marker
+                                    // (denied Agent → no SubagentStop → no signal) still gets swept
+
+function isDowngradeTarget(uri) {
+  return quarantined && !openUris.has(uri)
+}
+
+// Apply the downgrade to a merged diagnostics array (Error/Warning → Information + prefix). Applied
+// only at send time and always from the untouched diagMap entry, so it never stacks prefixes.
+// Severity 3 (Information) — not 4 (Hint): a phantom must no longer wear a real-error shape, but the
+// "verify with tsc" message must stay VISIBLE (some clients render Hints subtly or hide them). Already
+// non-error diagnostics (sev 3/4) are left untouched.
+function applyDowngrade(diags) {
+  return diags.map((d) => {
+    if (d.severity > 2) return d
+    return { ...d, severity: 3, message: DOWNGRADE_PREFIX + d.message }
+  })
+}
+
+// Enter quarantine: flip the flag and re-publish (downgraded) every never-opened uri we already hold,
+// so diagnostics that landed in Claude Code's cache BEFORE the subagent started are covered too.
+function enterQuarantineMode() {
+  if (quarantined) return
+  quarantined = true
+  lifting = false
+  clearInterval(liftTimer)
+  // Heartbeat: re-evaluate on a timer while quarantined. A LEAKED marker (denied Agent ⇒ PreToolUse
+  // fires but no SubagentStop ⇒ no signal bump) would otherwise keep countActive≥1 forever with no
+  // event to re-run the stale sweep — the QUARANTINE_SIGNAL watcher only fires on mtime change and the
+  // lift interval only runs once count hits 0. Without this tick, a solo session after a leak stays
+  // quarantined until the next dispatch, and the STALE_MS bound never actually fires. The tick makes
+  // evaluateQuarantine() (→ countActive → readMarkers → sweepStale) run, so a stale marker gets reaped
+  // and quarantine lifts on its own. Cleared in liftQuarantine.
+  clearInterval(quarantineHeartbeat)
+  quarantineHeartbeat = setInterval(evaluateQuarantine, HEARTBEAT_MS)
+  quarantineHeartbeat.unref?.() // don't let the heartbeat itself keep the process alive
+  for (const uri of diagMap.keys()) if (!openUris.has(uri)) mergeDiagnostics(uri)
+}
+
+// Fire reloadProjects and AWAIT its response (unlike triggerProjectReload's fire-and-forget). The
+// response only means "project graph reloaded", not "new diagnostics published" — so we use it purely
+// as the START of the quiet-period timer, never as the settle condition itself.
+function reloadProjectsAwaited() {
+  if (!tsServerAlive) return Promise.resolve()
+  const fire = () => requestTsServer({
+    jsonrpc: '2.0',
+    method: 'workspace/executeCommand',
+    params: { command: '_typescript.reloadProjects', arguments: [] },
+  }).catch(() => {})
+  return initializePromise ? initializePromise.then(fire).catch(fire) : fire()
+}
+
+// Begin lifting: reload from the (now final) disk, then wait for the program to settle before
+// restoring full-severity diagnostics. Conservative on purpose — over-holding costs a few seconds of
+// hint-instead-of-error (imperceptible, tsc still backstops); lifting too early re-admits a batch of
+// stale full-severity diagnostics, i.e. the very bug we are fixing.
+function beginLiftSequence() {
+  if (lifting) return
+  lifting = true
+  reloadProjectsAwaited().then(() => {
+    // A subagent may have started (or the whole lift been superseded) while the reload was in flight.
+    // Bail instead of arming a stray interval that would otherwise only self-cancel on its first tick.
+    if (!quarantined || countActive(projectRoot) > 0) { lifting = false; return }
+    const reloadAt = Date.now()
+    clearInterval(liftTimer)
+    liftTimer = setInterval(() => {
+      if (countActive(projectRoot) > 0) { clearInterval(liftTimer); lifting = false; return } // a new subagent started
+      // (unref'd below so it can't keep the process alive on its own)
+      const now = Date.now()
+      const settled = now - reloadAt >= HARD_FLOOR_MS && now - lastTsPublishAt >= QUIET_MS
+      // Hard ceiling: never hold quarantine open indefinitely. `lastTsPublishAt` tracks never-opened
+      // publishes only (see the publishDiagnostics handler), but a monorepo can still trickle
+      // background re-checks for never-opened deps and keep the quiet window from ever closing. After
+      // MAX_SETTLE_MS past the reload we lift regardless, so real errors can't be pinned to
+      // Information forever. tsc remains the terminal judge either way.
+      if (settled || now - reloadAt >= MAX_SETTLE_MS) {
+        clearInterval(liftTimer)
+        liftQuarantine()
+      }
+    }, 200)
+    liftTimer.unref?.() // don't let the lift poll itself keep the process alive
+  }).catch(() => { lifting = false })
+}
+
+// Lift quarantine: clear the flag and re-send the ORIGINAL (full-severity) diagnostics for every
+// never-opened uri, restoring anything the reload's own re-publishes didn't already overwrite.
+function liftQuarantine() {
+  quarantined = false
+  lifting = false
+  clearInterval(quarantineHeartbeat)
+  quarantineHeartbeat = null
+  for (const uri of diagMap.keys()) if (!openUris.has(uri)) mergeDiagnostics(uri)
+}
+
+function evaluateQuarantine() {
+  const active = countActive(projectRoot) > 0
+  if (active) {
+    if (!quarantined) enterQuarantineMode()
+    else { clearInterval(liftTimer); lifting = false } // a lift was pending but a subagent is live again
+  } else if (quarantined) {
+    beginLiftSequence()
+  }
+}
+
+function armQuarantineWatcher() {
+  // Same watchFile rationale as the refresh watcher; 100ms poll keeps enter/lift near-instant.
+  watchFile(QUARANTINE_SIGNAL, { interval: 100 }, (curr, prev) => {
+    if (curr.mtimeMs === prev.mtimeMs) return
+    evaluateQuarantine()
+  })
+  evaluateQuarantine() // a proxy starting mid-quarantine (markers already present) picks it up now
 }
 
 tsServer.stdout.on('data', makeFrameParser((msg) => {
@@ -160,6 +302,10 @@ tsServer.stdout.on('data', makeFrameParser((msg) => {
   if (msg.id == null) {
     if (msg.method === 'textDocument/publishDiagnostics') {
       const uri = msg.params?.uri
+      // Feed the lift's quiet-period heuristic ONLY with never-opened publishes — those are what
+      // quarantine acts on. Counting open-file publishes (e.g. the main agent typing in a buffer)
+      // would keep resetting the quiet timer and stall the lift indefinitely (CR: S1/A).
+      if (uri && !openUris.has(uri)) lastTsPublishAt = Date.now()
       if (uri) {
         const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
         // Drop UNUSED-code SUGGESTION diagnostics (severity Hint=4). tsserver always computes these
@@ -241,9 +387,10 @@ const TS_UNUSED_SUGGESTION_CODES = new Set([6133, 6192, 6196, 6198, 6199, 6205])
 
 function mergeDiagnostics(uri) {
   const entry = diagMap.get(uri) ?? { ts: [], eslint: [] }
+  const merged = [...entry.ts, ...entry.eslint]
   sendToClient('textDocument/publishDiagnostics', {
     uri,
-    diagnostics: [...entry.ts, ...entry.eslint],
+    diagnostics: isDowngradeTarget(uri) ? applyDowngrade(merged) : merged,
   })
 }
 
@@ -320,6 +467,9 @@ function closeAllWatchers() {
   configWatchers.clear()
   try { unwatchFile(REFRESH_SIGNAL_FILE) } catch {}
   clearTimeout(refreshDebounce)
+  try { unwatchFile(QUARANTINE_SIGNAL) } catch {}
+  clearInterval(liftTimer)
+  clearInterval(quarantineHeartbeat)
 }
 
 const lintDebounce = new Map()
@@ -468,6 +618,9 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'initialize') {
     const projectDir = msg.params?.rootUri?.replace(/^file:\/\//, '') ?? process.cwd()
+    // scope quarantine markers to this project (see quarantine-core). Decode so a rootUri with
+    // percent-encoded chars (e.g. spaces) matches the hook's raw filesystem cwd.
+    try { projectRoot = decodeURIComponent(projectDir) } catch { projectRoot = projectDir }
     if (tsServerAlive) {
       initializePromise = requestTsServer(msg).then(tsResponse => {
         // Force full-document sync (textDocumentSync: 1) in the capabilities we advertise
@@ -521,6 +674,10 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
   if (method === 'textDocument/didOpen') {
     sendToTsServer(msg)
     const { uri, text } = msg.params.textDocument
+    openUris.add(uri) // now editor-owned; excluded from quarantine downgrade (buffer is truth)
+    // If it was being downgraded mid-quarantine, restore its original severity now rather than
+    // waiting for the next tsserver publish for this uri (CR: D).
+    if (quarantined && diagMap.has(uri)) mergeDiagnostics(uri)
     const filePath = uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri
     warmUpEslint(filePath).catch(() => {})
     scheduleLint(uri, text)
@@ -539,6 +696,7 @@ process.stdin.on('data', makeFrameParser(async (msg) => {
 
   if (method === 'textDocument/didClose') {
     const uri = msg.params.textDocument.uri
+    openUris.delete(uri) // no longer an editor buffer; disk is truth again
     sendToTsServer(msg)
     clearTimeout(lintDebounce.get(uri))
     lintDebounce.delete(uri)
@@ -614,6 +772,8 @@ process.on('SIGINT', shutdownProxy)
 
 // Start watching the SubagentStop refresh signal once the proxy is otherwise wired up.
 armRefreshWatcher()
+// Start watching the quarantine signal (subagent-active window → downgrade never-opened diagnostics).
+armQuarantineWatcher()
 
 // Client teardown via stream, not signal: when the client closes our stdin (EOF) or the
 // stdout pipe breaks, the client is gone. Tear down rather than lingering — otherwise the

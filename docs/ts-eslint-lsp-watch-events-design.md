@@ -1,10 +1,10 @@
 # ts-eslint-lsp：子代理写盘导致的“幻影诊断”——根因定论与修复
 
-> 状态：调查完成 → 三轮对抗性评审收敛 → 首个修复（G）已随 **v0.1.9** 发布。
+> 状态：调查完成 → 三轮对抗性评审收敛 → v0.1.9 发布纯文案兜底（G）→ **v0.1.10 落地 quarantine 主动方案**（见 §7，本文最新结论）。
 > 涉及插件：`plugins/ts-eslint-lsp/`
-> 本文面向没有本次上下文的新读者（含未来的 AI agent），用一手证据（真实 session jsonl + 真实 git 提交 + LSP 协议/源码）重建问题、机制与结论，供独立复核。
+> 本文面向没有本次上下文的新读者（含未来的 AI agent），用一手证据（真实 session jsonl + 真实 git 提交 + LSP 协议/源码 + 真实 hook 探针实测）重建问题、机制与结论，供独立复核。
 >
-> **重要**：本文修订自一份早期版本。早期版本对机制的归因（“我们的 reloadProjects 抓到重建中途”）和主推方案（`--canUseWatchEvents`）经真实数据核对后被**推翻**，见 §2、§4。若你手上是旧版结论，以本文为准。
+> **重要**：本文经多次修订。①早期版本对机制的归因（“我们的 reloadProjects 抓到重建中途”）和主推方案（`--canUseWatchEvents`）被真实数据推翻（见 §2、§4）。②§3 早期结论“对即时快照不存在诚实的根治方案”**已被 §7 的 quarantine 方案超越**——关键洞察是：幻影在子代理**运行期间**就已产生，战场不必选在“返回后 380ms”那场必输的赛跑里，而应在子代理**派发时（写盘之前）**就进入隔离。若你手上是旧版结论，以 **§7** 为准。
 
 ## 1. 背景
 
@@ -114,4 +114,52 @@ feat-flow Stage 4，实施子代理 **Task 12**（`run_in_background:false` 同�
 本文由 AI（Claude）在对话中调查、经三轮独立对抗评审收敛，但仍建议未来复核：
 - (a) 源码行号可能随版本漂移，实施时以当时最新 `src/` 为准。
 - (b) 外部 issue/PR 请打开原文核对摘要。
-- (c) **两项“待实测/待核实”**（不影响 §4.1 已做的 G，但若要再往前走需先解决）：① 若将来重启“门控”类思路，其漏喊/空喊率**只能埋点实测**（记录 hook 时刻 diagMap 快照 vs attachment 时刻诊断）；② “LSP server 发不出 agent 可见文字、agent-facing 文字只有 hook additionalContext 一条路”是从 Claude Code 文档沉默推断的强判断，非官方明文，动更大改动前建议再核实。
+- (c) **两项“待实测/待核实”**（其中 ① 已在 §7 由 quarantine 方案绕过；② 仍是强判断）：① 若将来重启“门控”类思路，其漏喊/空喊率**只能埋点实测**；② “LSP server 发不出 agent 可见文字、agent-facing 文字只有 hook additionalContext 一条路”是从 Claude Code 文档沉默推断的强判断，非官方明文，动更大改动前建议再核实。
+
+---
+
+## 7. v0.1.10：quarantine 主动隔离方案（本文最新结论，取代 §4.1 的纯文案思路）
+
+§3 早期结论认为“对子代理刚返回的即时快照不存在诚实的 100% 根治”。这个结论在“事后抢救”的框架内成立，但框架本身选错了战场。
+
+### 7.1 关键洞察：战场不在“返回后”，在“派发时”
+
+幻影诊断是 tsserver 自带 watcher 在子代理**运行期间**（那 10-15 分钟里）陆续捕到中间磁盘态、`publishDiagnostics` 出来、被 Claude Code 缓存的。等子代理返回、Claude Code 同步抓快照（+37~379ms）时，幻影**早就躺在缓存里**了。所以：
+
+> 与其在“返回后 380ms”那场结构上必输的赛跑里抢救缓存（§2.4），不如在子代理**派发的那一刻（写盘还没开始）就进入隔离**——此时没有任何快照、没有赛跑，隔离是确定性生效的，不是概率游戏。
+
+### 7.2 机制
+
+- **`PreToolUse:Agent` hook**（`quarantine-enter-hook.mjs`）：子代理派发时（写盘前）写一个 marker 文件（内容=cwd），进入“隔离”。
+- **proxy 隔离期**（`ts-eslint-proxy.mjs`）：对**主 session 从未 didOpen 过的文件**（never-opened ⇒ 磁盘是唯一真相，而磁盘正被子代理分步写 ⇒ 不可信）的 TS 诊断，在发送时**降级**（severity Error/Warning → Information(3)，message 前缀“可能刷新中途态，先 tsc 复核”）。**不删除**——回应 §3 对“撤下=假阴”的否决：诊断仍在、只是不再是“真错形状”，真错终审归 tsc。open 文件是编辑器 buffer、由 didChange 保证，不动（其残留仍由 §4.1 的文案兜底）。
+- **`SubagentStop` hook**（`subagentstop-refresh-hook.mjs`）：子代理结束时移除一个 marker（按 transcript path 去重，见 7.4）；marker 归零 → proxy `reloadProjects` 从最终磁盘拉取 → 静默期后解除隔离、重推原始严重级。
+
+为什么严格优于事后抢救：隔离在写盘之前就已生效，与返回快照**无竞态**——快照 +37ms 还是 +379ms 都无所谓。它精确命中不可信通道，而非碰运气压窗口。
+
+### 7.3 lift（解除）判据
+
+tls 不填诊断 `version`，无“post-reload 干净诊断已到齐”的确定信号，故用保守启发式（`ts-eslint-proxy.mjs`）：
+`await reloadProjects 响应`（作起点，仅表示项目图已重载、非诊断已推）→ 连续 `QUIET_MS=1000ms` 无 **never-opened** publish（quiet 只统计 never-opened，避免主 agent 编辑 open 文件的 publish 污染）→ 且距响应 ≥ `HARD_FLOOR_MS=1500ms`（防 tsserver 无诊断可推而秒静默）→ 且不超过 `MAX_SETTLE_MS=10000ms` 硬上限（防 monorepo 后台 trickle 导致永不 settle，把真错永久钉在 Information）。偏保守：多隔离几秒无感，过早解除=病复发，代价不对称。
+
+### 7.4 计数模型与实测背书（2026-07-10 真实 hook 探针）
+
+一个 marker/子代理，`PreToolUse:Agent` 加、`SubagentStop` 减。实测三点：
+1. **正常完成**：`PreToolUse → SubagentStop(带唯一 agent_transcript_path) → PostToolUse` 1:1。
+2. **Agent 被拒**：**只有 PreToolUse 触发，SubagentStop 和 PostToolUse 都不触发** → marker 泄漏，PostToolUse 也不能当对账点。泄漏是**过度隔离/安全方向**（真错仍以 Information 可见 + tsc 兜底），由 `STALE_MS=20min` sweep + proxy 心跳回收（见下）。20min 是诚实的界：enter 时无法区分“被拒死 marker”和“15min 长子代理活 marker”，而 marker 必须活过整个子代理运行期，故不能更低。
+3. **SubagentStop 可能对同一子代理触发多次**（官方声明）：故 `claimStop(transcriptPath)` 用 O_EXCL 原子去重，重复 stop 不再误删第二个活跃子代理的 marker（这是**不安全方向**：under-count → 提前 lift → 幻影漏出）。空 transcript fallback 到“跳过删除”（安全方向）。
+
+### 7.5 一处曾漏判、经互审补上的真 bug（§5 心跳）
+
+`sweepStale()` 只在 `readMarkers()` 内运行，而后者只被“信号 mtime 变化”和“lift interval”调用。被拒泄漏后 `countActive≥1` 恒 active、永不进入 lift → **sweepStale 永不运行 → 20min 界形同虚设**（用户此后单干时隔离卡死到下次派发/会话结束）。修复：隔离期挂 `HEARTBEAT_MS=30s` 心跳周期跑 `evaluateQuarantine`，让 sweep 有机会执行、泄漏 marker 到期自愈。此 bug 由两个 reviewer 中的一个抓到、另一个上轮漏判后认领，经第 2 轮互审收敛。
+
+### 7.6 已知非阻塞局限
+
+marker 是全局的（`~/.claude`），按 cwd 项目作用域匹配。跨窗口同 repo 共享 marker 池：经推导不破坏计数守恒、不会 premature-lift（marker 是可替换计数器，只关心归零），但隔离/泄漏可能落在“错误的 marker”上；多窗口**精确**隔离需给 marker 带 session id，属未来增强。
+
+### 7.7 纵深与永久兜底
+
+`即时降级(主) → §4.1 的 additionalContext 文案(兜底) → tsc/typecheck(终审)`。协议层确认信号缺口不消失，tsc 终审永久保留。
+
+### 7.8 关键文件
+
+`plugins/ts-eslint-lsp/src/`：`quarantine-core.mjs`（marker 增删计数 + claimStop 去重 + stale/seen sweep）、`quarantine-enter-hook.mjs`（PreToolUse:Agent）、`subagentstop-refresh-hook.mjs`（SubagentStop + claimStop）、`ts-eslint-proxy.mjs`（openUris 跟踪 / 降级 / 心跳 / lift 状态机）；`hooks/hooks.json`（PreToolUse:Agent 接线）。
