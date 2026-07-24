@@ -1,0 +1,73 @@
+# grill-flow
+
+## 这是什么
+
+**mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现**，结合 feat-flow 里有价值的质量把控。与 feat-flow **并存对比**（不取代）：feat-flow 是 SDD/superpower 式（接口枚举蓝图 + 细 plan + 子代理派发），grill-flow 是 mattpocock 式（散文 spec + tracer-bullet 切片 + 人在主 session 逐 ticket 亲做）。
+
+**实现规模不限**；**设计迷雾大**（一次 grilling 聊不出 spec）走 stage-1 的 wayfinder 子模式；高风险要重型蓝图保障仍走 feat-flow。
+
+## 核心内核（"轻"在哪、质量在哪）
+
+- **轻 = mattpocock 内核**：散文 spec 不搞接口枚举、tracer-bullet 不搞字段矩阵、人亲做不搞 SDD 派发、提示词薄（细节在 references/）。
+- **质量把控齐**：per-ticket simplify + Standards/Spec 双轴 CR + 客观地板（假绿检测/枚举负空间/回归）；stage-2 对抗性方案审查；收尾组装双轴 + 安全专项；集中沉淀。
+
+## 命令速查
+
+```sh
+grill-flow start <自然语言需求描述>   # 启动，引擎生成 flow_id
+grill-flow approve                    # 通过当前 gate
+grill-flow abort                      # 中止（创建快照）
+grill-flow resume                     # 新 session 恢复
+grill-flow status                     # 查看当前 stage
+grill-flow help                       # 本文档
+```
+
+## 5 Stage 流水线
+
+| ID | 名称 | 完成方式 | 关键机制 |
+|----|------|---------|---------|
+| stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
+| stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) |
+| stage-3 | implement | script（无 gate） | 逐 ticket 亲做：tdd→commit→simplify→双轴 CR→修(amend)→客观地板→qc marker→勾[x] |
+| stage-4 | code-review | **gate** | 全量测试 + 组装双轴 + 安全专项；不 squash |
+| stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
+
+gate：1 / 2 / 4 / 5。script（秒级 fail-closed 结构门）：2 / 3。
+
+## 产出文件
+
+```
+docs/grill-flows/<flow_id>/
+├── alignment.md         # 需求/范围/决策/术语/暂缓/沉淀候选（stage-1）
+├── wayfinder-map.md     # 迷雾大时的决策地图（stage-1 wayfinder 子模式，可选）
+├── spec.md              # 散文规格：Problem/Solution/User Stories/Decisions/Testing Decisions/Out of scope/方案审查（stage-2）
+├── tech-design.html     # 方案视图：gate 主审面（stage-2，从 spec 生成的单向视图）
+├── diagram/*.svg        # 配图（mermaid→mmdc）
+├── tickets.md           # tracer-bullet 切片 + 进度（stage-2 建，stage-3 维护 qc:done + [x]）
+├── candidates.md        # 沉淀候选（stage-3 累积）
+└── review.md            # 收尾审 findings + 原始测试输出（stage-4）
+
+.ai-flow/grill-flow/state/   # 引擎维护：active.json / signal / mark-base / transitions.log
+```
+
+signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` 会被拒）。有 gate 的 stage 写 done 后暂停等 approve；无 gate 的自动推进。
+
+## 环境要求
+
+- **系统**：Node.js ≥ 18、git、claude CLI、mermaid-cli（`mmdc`，stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
+- **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
+- **内置命令**：`/simplify`、`/code-review`（stage-3 per-ticket correctness）——用 Claude Code 内置版（`/code-review` 默认审当前未提交 diff，无需 PR）。
+- preflight 按上述检测；缺失给安装命令并阻止启动。
+
+## 与 feat-flow 的关键差异
+
+| 维度 | feat-flow | grill-flow |
+|---|---|---|
+| 方法论 | 接口枚举蓝图 + 细 plan + 子代理派发 | 散文 spec + tracer-bullet + 人亲做 |
+| stage 数 | 6 | 5 |
+| 迷雾大 | — | stage-1 wayfinder 子模式 |
+| 执行 | 串行 subagent 派发 | 主 session 逐 ticket 亲做（/clear 隔离） |
+| commit | 收尾 squash 成一笔 | 每 ticket 独立 commit、不 squash |
+| 沉淀 | stage-6 optimize-claude-context | stage-5 复用同机制 |
+
+> 设计真相源与所有对齐 rationale：仓库根 `docs/grill-flow-design.md`。

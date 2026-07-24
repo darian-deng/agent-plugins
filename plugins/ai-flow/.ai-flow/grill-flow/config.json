@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "name": "grill-flow",
+  "description": "mattpocock v1.1 方法论工作流（散文 spec + tracer-bullet 切片 + 人在主 session 逐 ticket 亲做）：5 stage 覆盖需求对齐（含 wayfinder 迷雾子模式）→ 散文规格+方案审查+切片 → 逐 ticket 实施（simplify+双轴 CR）→ 收尾组装审 → 知识沉淀。与 feat-flow 并存对比，实现规模不限；设计迷雾大走 stage-1 的 wayfinder 子模式。",
+  "context": {
+    "warn_at_pct": 50,
+    "rewarn_delta_pct": 10
+  },
+  "stages": [
+    {
+      "id": "stage-1",
+      "prompt": "stages/stage-1.md",
+      "write_scope": "docs_only",
+      "docs_paths": ["docs/grill-flows/"],
+      "completion": { "gate": true }
+    },
+    {
+      "id": "stage-2",
+      "prompt": "stages/stage-2.md",
+      "write_scope": "docs_only",
+      "docs_paths": ["docs/grill-flows/"],
+      "completion": {
+        "script": { "command": "node scripts/gate-stage-2.cjs" },
+        "gate": true
+      }
+    },
+    {
+      "id": "stage-3",
+      "prompt": "stages/stage-3.md",
+      "write_scope": "unrestricted",
+      "completion": {
+        "script": { "command": "node scripts/gate-stage-3.cjs" }
+      }
+    },
+    {
+      "id": "stage-4",
+      "prompt": "stages/stage-4.md",
+      "write_scope": "unrestricted",
+      "completion": { "gate": true }
+    },
+    {
+      "id": "stage-5",
+      "prompt": "stages/stage-5.md",
+      "write_scope": "unrestricted",
+      "completion": { "gate": true }
+    }
+  ]
+}
