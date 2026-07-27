@@ -177,8 +177,9 @@ function install(flow, dir, force) {
   process.stdout.write(lines.join("\n") + "\n");
 }
 function ensureGitignore(target) {
-  const giPath = join(target, ".gitignore");
-  const rule = ".ai-flow/*/state/";
+  const root = gitRoot(target) ?? target;
+  const giPath = join(root, ".gitignore");
+  const rule = "**/.ai-flow/**/state/";
   let existing = "";
   try {
     existing = existsSync(giPath) ? readFileSync(giPath, "utf-8") : "";
