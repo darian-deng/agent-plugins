@@ -208,7 +208,8 @@ function install(flow: string, dir: string, force: boolean) {
     try { chmodSync(preflightSh, 0o755); } catch { /* non-fatal */ }
   }
 
-  // Ensure .gitignore ignores the runtime state dir
+  // Ensure .gitignore ignores the runtime state dir (at the git root, so one
+  // rule covers .ai-flow installed anywhere in the repo — including subprojects)
   ensureGitignore(target);
 
   lines.push(`✅ 已安装 '${flow}' → ${dest}`);
@@ -236,8 +237,13 @@ function install(flow: string, dir: string, force: boolean) {
 }
 
 function ensureGitignore(target: string): void {
-  const giPath = join(target, '.gitignore');
-  const rule = '.ai-flow/*/state/';
+  // Write the rule at the git root — not the flow anchor. The anchor may be a
+  // monorepo subproject nested under the repo root; a rule sitting there only
+  // covers that one directory. One rule at the git root, with a `**/` prefix,
+  // ignores every `.ai-flow/**/state/` anywhere in the repo.
+  const root = gitRoot(target) ?? target;
+  const giPath = join(root, '.gitignore');
+  const rule = '**/.ai-flow/**/state/';
   let existing = '';
   try { existing = existsSync(giPath) ? readFileSync(giPath, 'utf-8') : ''; } catch { /* treat as empty */ }
   const hasRule = existing.split(/\r?\n/).some((l) => l.trim() === rule);
