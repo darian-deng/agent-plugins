@@ -3,7 +3,7 @@
 > grill-flow 第 3/5 步 · [流程总览](../helper.md)
 > 当前 stage 目的：主 session 逐 ticket 亲做，每 ticket 收尾跑 simplify + Standards/Spec 双轴 CR，per-ticket 客观地板兜底。
 >
-> **元规则**：本 stage 允许 commit。每 ticket 一个独立 commit（message 引用 ticket 号），**钉死不 squash**。
+> **元规则**：本 stage 允许 commit。每 ticket 一个独立 commit（引用 ticket 号）作**执行期锚点**（/clear 重入靠它判质量完成）；收尾由 stage-4 环节 C `git reset` 摊平后 squash 成一笔 feat commit。
 
 ## 目标
 
@@ -26,14 +26,14 @@
 
 ## 主循环（每 ticket）
 
-读 frontier = 第一个未勾 `- [ ] T<n>` 且所有 `Blocked by` 已勾的 ticket，然后**严格照 `per-ticket-review.md` 的 11 步顺序**（**commit 在质量链之后**，让审查审到真实未提交改动）：实现（tdd 只在 seam，**先不 commit**）→ `/simplify`(apply) → Standards 轴子代理(report-only) → Spec 轴子代理(携 spec.md) → correctness(Claude Code 内置 /code-review，审未提交 diff) → 修复 findings → 客观地板(typecheck+测试绿+假绿检测+枚举负空间+回归) → **commit(一个独立 commit、不 squash)** → 落候选(candidates.md,去重) → 写 `qc:done` → 勾 `[x]`。
+读 frontier = 第一个未勾 `- [ ] T<n>` 且所有 `Blocked by` 已勾的 ticket，然后**严格照 `per-ticket-review.md` 的 11 步顺序**（**commit 在质量链之后**，让审查审到真实未提交改动）：实现（tdd 只在 seam，**先不 commit**）→ `/simplify`(apply) → Standards 轴子代理(report-only) → Spec 轴子代理(携 spec.md) → correctness(Claude Code 内置 /code-review，审未提交 diff) → 修复 findings → 客观地板(typecheck+测试绿+假绿检测+枚举负空间+回归) → **commit(一个独立 commit，执行期锚点)** → 落候选(candidates.md,去重) → 写 `qc:done` → 勾 `[x]`。
 
 - **切片撑爆窗口**（上游切片错）→ **就地在 tickets.md 重切该 ticket 并知会开发者**（引擎无反向 stage 转移）。
 - 前置产物要改 → 走 `revision-protocol.md`。
 
 ## 输出规格
 
-git commits（每 ticket 一个，含质量修复 amend）+ `tickets.md` 进度（`qc:done` + `[x]`）+ `candidates.md`（沉淀候选，带 ticket ID 前缀）。
+git commits（每 ticket 一个，质量链后置、一次到位无 amend）+ `tickets.md` 进度（`qc:done` + `[x]`）+ `candidates.md`（沉淀候选，带 ticket ID 前缀）。
 验证：机器门 `scripts/gate-stage-3.cjs` 断言 tickets.md ≥1 已勾且无未勾。
 
 ## 完成条件

@@ -48,7 +48,7 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
 - **per-ticket 双轴 code-review**：每 ticket 收尾跑 Standards+Spec 双轴（mattpocock 原生就是双轴，不是只 correctness）。
 - **context-cleared frontier work**：逐 ticket 在干净 context 里做。
 - **research/prototype 按需 detour**：代码库外事实用 research、状态机/UI 用 prototype（throwaway）。
-- **每 ticket 独立 commit、不 squash**。
+- **执行期每 ticket 独立 commit**（tracer-bullet 可独立验证/回退）——但**收尾 squash**（偏离 mattpocock，见偏离表末行与 §8）。
 
 ### 刻意偏离（每条带理由）
 | 偏离 | mattpocock 原样 | grill-flow 选择 | 理由 |
@@ -60,6 +60,7 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
 | 收尾组装审 | mattpocock 只有 per-ticket review | **per-ticket 双轴 + 收尾组装双轴都保留** | per-ticket review 在各自 clear 窗口做、看不到整体 diff，跨 ticket 的 Duplicated Code/Shotgun Surgery 会逃逸；收尾组装审**补上 mattpocock 这个洞**（不替代 per-ticket 双轴，是叠加） |
 | spec/tickets 合一 | 两个 skill | **合并成 stage-2 一个 stage** | mattpocock 明令 grill→spec→tickets 一个 context window、连续思考；本地 flow 合并更省（一次 gate 拍 seam+粒度） |
 | ticket 完成标记 | 模板只有 AC 级 `[ ]` | **增设 ticket 级 `- [ ] T<n>`** | 引擎 frontier/门需要 ticket 级完成信号，AC 级不够（见 §6.4） |
+| commit/收尾 | 每 ticket 独立 commit、不 squash | **执行期 per-ticket commit，收尾 stage-4 环节 C squash 成一笔 feat commit** | 开发者要 feat-flow 式「reset 摊平未暂存 → IDE 亲审（语言服务可用）→ squash」的收尾 CR 体验；代价：per-ticket 历史被 squash 掉（landability 只存在于执行期）。这让 grill-flow 收尾≈feat-flow（见 §8、§12） |
 
 ---
 
@@ -94,7 +95,7 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
 | 1 grill | 需求对齐（domain-aware）；research/prototype detour + **wayfinder 子模式**（迷雾大） | **gate** | docs_only |
 | 2 spec+tickets | 散文 spec + seam + User Stories + **方案审查** + HTML 方案视图 + tracer-bullet 切片 + **prefactor** | **gate** + script | docs_only |
 | 3 implement | 逐 ticket 亲做：实现→**/simplify→Standards+Spec 双轴+correctness**→修→地板→**commit**→qc marker→勾[x]（commit 在质量链后，审查才审得到真实改动）| script | unrestricted |
-| 4 code-review | 收尾组装：双轴（Standards/Spec）+ 安全专项 + 全量测试；不 squash | **gate** | unrestricted |
+| 4 code-review | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环 → squash 一笔 feat commit | **gate** | unrestricted |
 | 5 沉淀 | optimize-claude-context（CLAUDE.md/rules/ADR） | **gate** | unrestricted |
 
 - **gate（人工 approve）：1 / 2 / 4 / 5（4 个）**。
@@ -213,7 +214,7 @@ mode: charting | working | clear
      - **子代理都不开 worktree**（看未提交 diff）——引擎只算主 session context，子代理不计入；~30 ticket 约 4-6 次 /clear。
      - 按 findings 修复（仍未提交）；关键修复独立复核兜底。
   4. **per-ticket 客观地板**（AI 自觉纪律，非引擎强制）：typecheck + 该 ticket 相关测试绿；**假绿检测**=测试选择器实际匹配 ≥1 个测试；**枚举负空间检查**=ticket 蕴含 N 个错误码/状态/分支时逐项核 diff 都实现+断言；**回归纪律**=既有测试挂了当回归、改代码不改测试。
-  5. **commit**：实现+simplify+修复**一次性提交为一个独立 commit**（引用 ticket 号）、**钉死不 squash**、**无需 --amend**（一次到位）。commit = 本 ticket 质量完成锚。
+  5. **commit**：实现+simplify+修复**一次性提交为一个独立 commit**（引用 ticket 号）作**执行期锚点**、**无需 --amend**（一次到位）。commit = 本 ticket 质量完成锚；这些 per-ticket commit 收尾在 stage-4 环节 C 被 `git reset` 摊平、squash 成一笔。
   6. 落沉淀候选（**带 ticket ID 前缀，append 前 grep 去重**）到 candidates.md。
   7. **写 qc marker**（tickets.md 该条 `qc:done`）**再标 ticket 级 `[x]`**。顺序铁律：实现→simplify→双轴→correctness→修复→地板→commit→候选→qc marker→勾[x]。
   8. **重入判据（防质量步骤被静默跳过 / 防丢进度）**，以"有无该 ticket commit"为质量完成锚：
@@ -229,17 +230,17 @@ mode: charting | working | clear
 
 ---
 
-## 8. Stage 4 — code-review（completion: gate）
+## 8. Stage 4 — code-review（收尾组装审 + 开发者 IDE 人审 + squash，completion: gate）
 
-- **职责**：全部 ticket 完成后跑一次组装级审查（补 per-ticket 看不到整体 diff 的洞——跨 ticket 的 Duplicated Code/Shotgun Surgery）。
-- **AI 跑全量测试**（异步可见、不冻 UI，假绿检测：执行测试数 > 0），原始输出（通过/失败计数 + commit SHA）落报告文件。
-- **双轴并行子代理**组装审：① **Standards**（Fowler smell baseline **全文粘进子代理 prompt**）② **Spec**（对 spec.md 查 User Stories 逐条闭环/缺失/偏离）。
-- **安全专项**（feat-flow 抢救；"mattpocock code-review 忽略安全"**标为假设**、未从源文件证实）：**一行有界清单**——只看本 diff 的注入/鉴权/密钥处理，钉死不外扩。
-- **diff 基准**：`git diff <base_sha_code>..HEAD -- . ':(exclude)docs/grill-flows/*'`（pathspec 排除 doc churn，§13 必修 4）。
-- **不 squash**：保留每 ticket 独立 commit（tracer-bullet landability）。
-- **gate**：呈现 findings + **AI 贴出的原始测试输出** → 开发者交付签收 approve。
+三环节（照 `references/assembly-review.md` 逐步做）。目的：整轮改动过 AI 组装审 + **开发者在 IDE 未暂存 diff 上亲审**（语言服务可用）、提改进、确认无误后 **squash 成一笔 feat commit**。
 
-> v4 审查砍掉了 feat-flow 的"3 轮独立复核 + 修复复核者"套娃（纯搬运、过度）。stage-4 收敛为：全量测试 + 一次组装双轴 + 安全专项 + gate。
+- **环节 A 全量测试**：AI 跑（异步、不冻 UI，假绿检测：测试数>0），失败修代码，原始输出（通过/失败计数 + commit SHA）落 review.md。
+- **环节 B AI 双轴组装审**（一次，**不套娃**）：两个 general-purpose 子代理并行审 `git diff <base>..HEAD -- . ':(exclude)docs/grill-flows/*'`——① **Standards**（Fowler baseline 全文粘进，抓跨 ticket Duplicated Code/Shotgun Surgery）② **Spec**（对 spec.md 查 User Stories 逐条闭环）；**安全专项**（有界清单：注入/鉴权/密钥，"mattpocock 忽略安全"标为假设）。阻塞项修复 → `fix:` commit。
+- **环节 C 开发者 IDE 人审 + squash**（照搬 feat-flow stage-5 环节 C）：`git reset <base>` 把整轮改动摊成**未暂存全量** → 告知开发者去 IDE Changes 组亲审（勿手动 stage，保语言服务跳转）→ **人审-修复循环**（开发者提问题 → AI 改工作树 → 重跑全量测试 → 记 review.md）→ 确认无更多问题 → 最终 CR（条件式，子代理用 `git diff --staged <base>`，勿用 `<base>..HEAD` 那是空 diff）→ **squash 成单个 feat commit**（body 末行 `flow-squash: <flow_id>`）。
+- **gate**：squash 后写 signal → 开发者 approve 推进沉淀。不批 = 就地改再重呈。
+- **/clear 重入判据**（照 git 状态）：HEAD 含 `flow-squash` → 补 signal；`HEAD==base_sha_code` 且工作区非空 → 续环节 C 人审；否则（HEAD 领先 base）→ 环节 A/B。
+
+> **环节 B 保持轻**：不加回 feat-flow 的"3 轮独立复核套娃"（grill-flow 刻意保持轻，一次审+修；判断型缺陷的最终兜底在环节 C 开发者亲审）。**环节 C 是照 feat-flow 加的**——开发者明确要"在 IDE 更好地 CR + squash 一笔"（见 §12 决策记录），这也让 grill-flow 收尾≈feat-flow。
 
 ---
 
@@ -282,7 +283,8 @@ mode: charting | working | clear
 - **wayfinder：划边界赶去别的工具 → stage-1 内隐式子模式（同批做、出口 stage-2）**：开发者要体验连续、不新增 stage。澄清：① wayfinder 跨会话是它的定义（单会话搞得定就不叫 wayfinder）；② 决策图子系统不是为对付 /clear，而是处理决策依赖图本身就需要它。**审查修正**：补齐 mattpocock 的 charting 半场 + Destination/fog/out-of-scope 结构；用**显式 mode marker** 消除"map 不存在→普通 grill"的 bootstrap 死循环；触发改为"grill 中迷雾浮现→向开发者提议"（不 AI 自评）；完成判据相对 Destination（不是"所有决策 resolved"）。**确定性 fallback**（若隐式太脆）：显式化成独立 wayfinder stage（gate、docs_only、chart+work 两态各自被 SessionStart 精确重注），当前不采用。
 - **per-ticket review 形态**：mattpocock per-ticket 原生就是 **Standards+Spec 双轴**；早期误把双轴移到收尾（净损失、放大 spec-drift）→ 审查修正：per-ticket 恢复双轴（Spec 轴当场抓 drift）+ 收尾组装审叠加（抓跨 ticket）。
 - **domain-awareness 读侧找回**：早期把 grill-with-docs 写成了无状态 grill-me；审查指出 to-spec/to-tickets 都要求读既有 domain 文档 → stage 1/2 读 ADR/glossary（读侧），写侧维持集中沉淀（开发者定，像 feat-flow）。
-- **stage-5→4 砍套娃**：v4 审查砍"3 轮复核+修复复核者"（feat-flow 防幻觉套娃、过度）。
+- **stage-5→4 砍套娃**：v4 审查砍"3 轮复核+修复复核者"（feat-flow 防幻觉套娃、过度）。stage-4 环节 B 保持轻（一次双轴+安全，不套娃）。
+- **commit 模型：per-ticket 不 squash → 收尾 squash（翻案）**：初版为 tracer-bullet landability 钉死每 ticket 独立 commit、不 squash。但开发者实际最看重"在 IDE 舒服地亲审整轮改动"——feat-flow 环节 C 的 `git reset` 摊平未暂存 + IDE 语言服务可用 + squash 一笔正是为此；而该体验**与 squash 内在绑定**（reset 撤 commit → 未暂存 → squash）、与"保留 per-ticket commit"互斥。故 stage-4 照搬 feat-flow 环节 C：执行期仍 per-ticket commit（/clear 锚点），收尾 reset 摊平 → 开发者 IDE 人审-修复循环 → 最终 CR → squash 一笔 feat commit。**代价**：per-ticket landability 只存在于执行期、收尾被 squash 掉；grill-flow 收尾≈feat-flow（区别只剩前段：散文 spec / tracer-bullet / 人亲做）。环节 B 仍保持轻（不加 feat-flow 3 轮套娃）。
 
 ---
 
@@ -294,12 +296,13 @@ mode: charting | working | clear
 3. **wayfinder 四态重入 + mode marker 写进 stage-1 提示词开头**：map 不存在→grill / charting→建图 / working→读 frontier / clear→综合 alignment 去 gate；marker 缺失/非法→停下问开发者；clear 后又提迷雾→翻回 working。**用 marker 判模式，不用"map 是否存在"**（否则 bootstrap 死循环）。写 signal 前置=`mode:clear`+已确认。**Y2 兜底诚实写**：误写 signal 后走 gate-pending 分支、不重注 stage-1 提示词，"探测"跑不到——靠用户拒批 + AI 主动重读 map/当前 stage 提示词续，前置条件才是主防线。
 4. **charting 禁 resolve 设成硬约束祈使句**（charting 与 working 是互斥指令挤一份提示词、最尖锐的 mode-confusion 点）：charting 只建图、唯一出口写 `mode:working`。
 5. **per-ticket 双轴的实现机制写死**：**Spec 轴 = 子代理携 spec.md + 该 ticket 自定义 prompt**（内置 `/code-review` 审 current diff、不吃 spec.md，给不了 Spec 轴——照字面接会把双轴又丢回上一版净损失）；**Standards 轴 = 子代理携 Fowler baseline、report-only 判断型 smell**（不 apply，与 simplify 的 apply 分工，别把 smell 砍掉退化成 correctness）；correctness 子项用 **Claude Code 内置 `/code-review`**（默认审当前未提交 diff，无需 PR）。注：双轴与收尾组装审是自定义子代理 prompt、不调 `/code-review` 命令，故不涉及此项。
-6. **per-ticket commit 时序 + 防跳过**：**commit 在质量链之后**（实现→simplify→双轴→correctness→修复→地板→commit），让审查/simplify 审到真实未提交改动——commit-first 会让它们审空树、核心审查失效（全新独立审查抓到的 🔴）。每 ticket 一个独立 commit、不 squash、**无需 --amend**；qc marker 用 tickets.md `qc:done`；重入以"有无该 ticket commit"为质量完成锚（无 commit+有工作树改动→重跑质量链；有 commit 无 qc→补收尾；有 qc 无 [x]→补勾）。
+6. **per-ticket commit 时序 + 防跳过**：**commit 在质量链之后**（实现→simplify→双轴→correctness→修复→地板→commit），让审查/simplify 审到真实未提交改动——commit-first 会让它们审空树、核心审查失效（全新独立审查抓到的 🔴）。每 ticket 一个独立 commit 作**执行期锚点**、**无需 --amend**（收尾在 stage-4 环节 C squash 成一笔）；qc marker 用 tickets.md `qc:done`；重入以"有无该 ticket commit"为质量完成锚（无 commit+有工作树改动→重跑质量链；有 commit 无 qc→补收尾；有 qc 无 [x]→补勾）。
 7. **ticket 级完成标记与 AC checkbox 区分**：frontier/门只认 ticket 级 `- [ ] T<n>`，ticket 内 AC 子项不参与判定。
 8. **stage-1 prototype 每次增改走 Bash（禁 Edit/Write）**（docs_only 会 deny 非 docs 的 Edit/Write，Bash 不受管）、**写 repo 之外 `$(mktemp -d)`**（否则 stage-3 脏树恒脏）、标 throwaway、不 commit。
 9. **wayfinder-map.md 落 docs_paths 内**（否则 write_scope 拒）；preflight cwd=repoRoot（写 mmdc 检查时别假设 flowDir）。
 10. **HTML 派生轻契约**：去 typed 签名/pseudo-code，**保留接口契约决策（散文）**；preflight 加 mmdc 检查；`.mmd` 落 docs 内。
 11. **stage-2 子产物级重入阶梯**（stage-2 密度高，比照 stage-3 qc marker 详度）：逐个探测 spec/方案审查段/HTML/tickets 是否已在，精确续跑，防 /clear 落中途重跑或覆盖。
+12. **stage-4 环节 C（reset+人审+squash）照 feat-flow**：reset 用引擎注入的 `base_sha_code`（`git reset <base>` mixed，摊未暂存，告知开发者去 IDE Changes 组、勿手动 stage）；人审-修复循环全程不 stage/不 commit、每轮重跑全量测试；最终 CR 子代理用 `git diff --staged <base>`（**勿 `<base>..HEAD`**，reset 后那是空 diff）；squash commit body 末行 `flow-squash: <flow_id>` 作重入锚点；**/clear 重入判据写进 stage-4 提示词**（HEAD 含 flow-squash → 补 signal / `HEAD==base` 且工作区非空 → 续环节 C 人审 / 否则 → 环节 A/B）；环节 C 走完+squash 前**绝不写 signal**。
 
 ### 诚实定位（把话说对）
 11. **测试验证**：script 验报告不是反伪造门；真防线是假绿检测（测试数>0）+ stage-4 gate 时 AI 贴原始 stdout 尾部/通过失败计数/commit SHA。
@@ -330,9 +333,9 @@ mode: charting | working | clear
 | 迷雾大 | — | stage-1 wayfinder 隐式子模式（chart+work） |
 | domain | 读+inline 写 | 读（ADR/glossary）+ 集中写（stage-5） |
 | 执行 | 串行 subagent 派发、每 task opus 评审 + 全量测试 | 主 session 逐 ticket 亲做、per-ticket 双轴CR+simplify+客观地板 |
-| review | stage-4 每 task + stage-5 质量门（环节 A/B/C） | per-ticket 双轴 + 收尾组装双轴 + 安全专项 |
+| review | stage-4 每 task + stage-5 质量门（环节 A/B/C） | per-ticket 双轴 + 收尾环节 A/B/C（组装双轴+安全 + 开发者 IDE 人审 squash） |
 | 质量兜底 | 重机器门（越界/枚举/假绿/注释审查） | 秒级 fail-closed script + 假绿检测 + 枚举负空间 + 人在场 + gate |
-| commit | 收尾 squash 成一笔 | 每 ticket 独立 commit、不 squash |
+| commit | 收尾 squash 成一笔 | 执行期 per-ticket commit（锚点），收尾 stage-4 环节 C squash 成一笔 |
 | gate 数 | 4-5 | 4（1/2/4/5） |
 | 沉淀 | stage-6 optimize-claude-context | stage-5 复用同机制 |
 | 适用 | 高风险、要重型蓝图保障 | mattpocock 方法论、规模不限、迷雾大有 wayfinder |

@@ -13,7 +13,7 @@
 5. **correctness**：用 **Claude Code 内置 `/code-review`** 抓 bug（默认审当前未提交 diff——此刻 ticket 改动全在工作树未提交，正好被它看到；不需要 PR、勿加 `--comment`）。
 6. **修复 findings**：按 3/4/5 的结论直接改工作树（仍未提交）；修复也会幻觉 → 关键修复独立复核兜底。
 7. **客观地板**（AI 自觉纪律）：typecheck + 该 ticket 相关测试绿；**假绿检测**=测试选择器实际匹配 ≥1 个测试；**枚举负空间检查**=ticket 蕴含 N 个错误码/状态/分支时，逐项核 diff 都实现且有断言；**回归纪律**=既有测试挂了当回归、改代码不改测试糊弄。
-8. **commit**：把该 ticket 的实现 + simplify + 修复**一次性提交为一个独立 commit**（message 引用 ticket 号），**钉死不 squash**。无需 --amend（改动一次到位）。
+8. **commit**：把该 ticket 的实现 + simplify + 修复**一次性提交为一个独立 commit**（message 引用 ticket 号）作**执行期锚点**（无需 --amend，改动一次到位）。这些 per-ticket commit 会在 stage-4 环节 C 被 `git reset` 摊平、最终 squash 成一笔 feat commit——所以执行期尽管每 ticket 留痕，不必担心历史零碎。
 9. **落沉淀候选**：带 ticket ID 前缀、append 前 grep 去重，写 candidates.md。
 10. **写 qc marker**：在 tickets.md 该条加 `qc:done` 子标记。
 11. **勾 [x]**：最后一步才把 ticket 级 `- [ ] T<n>` 改成 `- [x] T<n>`。

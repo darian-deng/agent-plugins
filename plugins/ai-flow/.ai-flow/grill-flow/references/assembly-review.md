@@ -1,30 +1,93 @@
-# 收尾组装审（stage-4）
+# 收尾：组装审 + 开发者 IDE 人审 + squash（stage-4）
 
-> 全部 ticket 完成后跑一次组装级审查——补 per-ticket 各自 /clear 窗口**看不到整体 diff** 的洞（跨 ticket 的 Duplicated Code / Shotgun Surgery / 集成断裂）。不替代 per-ticket 双轴，是**叠加**。
+> 全部 ticket 完成后，把整轮改动过 AI 组装审 + 开发者 IDE 亲审，最终 squash 成一笔 feat commit。三环节：**A 全量测试 → B AI 双轴组装审 → C 开发者 IDE 人审闭环 + squash**。环节 C 走完前**绝不写 signal**。
 
-## 1. 全量测试（AI 跑，不进 script 门）
+`<base>` = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code`（stage-3 的 mark-base 捕获）。不读 active.json（控制面）。若注入块无该行（极罕见跨版本续跑）→ 回 stage-3 重写 `{{flow_root}}/state/mark-base` 重新捕获。
 
-- AI 亲自跑全量测试（异步可见、不冻 UI）。**不能塞进 script 门**——script 是同步 hook，30s 超时/1MB 上限/冻 UI，全量测试必崩。
-- **假绿检测**：确认执行测试数 > 0（选择器空跑不算绿）。
-- 原始输出（通过/失败计数 + 关键 stdout 尾部 + 当前 commit SHA）落 `review.md` 报告段——**gate 时贴给开发者亲验**。
-- **诚实边界**：测试真绿无法机器证明（报告是 AI 写的）。真防线 = 假绿检测 + 开发者在 gate 看原始输出。
+## 环节 A：全量测试（AI 跑）
 
-## 2. 双轴并行子代理（判断型 review）
+- AI 亲自跑全量测试（异步、不冻 UI）；**假绿检测**=执行测试数 > 0。
+- 失败 → 修代码（既有测试挂了默认当回归、**禁改断言糊弄**）→ commit `fix: resolve test failures` → 重跑直到全绿。
+- 原始输出（通过/失败计数 + 当前 commit SHA）落 `review.md`——gate 时贴给开发者亲验。测试真绿无法机器证明，真防线=假绿检测+开发者看原始输出。
 
-diff 基准：`git diff <base_sha_code>..HEAD -- . ':(exclude)docs/grill-flows/*'`（pathspec 排除 doc churn，否则 checkbox/候选变更混进代码 diff）。两个子代理并行、都不开 worktree：
+## 环节 B：AI 双轴组装审（一次，不套娃）
 
-- **① Standards 轴**：携 `references/fowler-smells.md` 全文，审整体 diff 的跨 ticket smell——重点 Duplicated Code（多个 ticket 各写一份类似逻辑）、Shotgun Surgery、错 altitude、过度工程。
-- **② Spec 轴**：携 `spec.md`，对 **User Stories 逐条**查需求闭环——每条 US 是否被某 ticket 兑现、有无缺失/偏离。
+补 per-ticket 各自 /clear 窗口看不到整体 diff 的洞。diff 基准 `git diff <base>..HEAD -- . ':(exclude)docs/grill-flows/*'`（pathspec 排除 doc churn）。两个 `general-purpose` 子代理并行（能跑 git、自己 diff、都不开 worktree）：
 
-## 3. 安全专项（有界清单，钉死不外扩）
+- **① Standards 轴**：携 `references/fowler-smells.md` 全文，审整体 diff 的跨 ticket smell——Duplicated Code（多 ticket 各写一份类似逻辑）、Shotgun Surgery、错 altitude、过度工程。
+- **② Spec 轴**：携 `spec.md`，对 **User Stories 逐条**查需求闭环——每条 US 是否被兑现、有无缺失/偏离。
+- **安全专项**（有界清单，强制、不外扩）：只看本 diff 的注入 / 鉴权越权 / 密钥处理。
 
-feat-flow 抢救回来的（"mattpocock code-review 忽略安全"是**假设**、未从源证实）。只看本 diff 的三类，不做全仓安全审计：
-- 注入（SQL/命令/路径）
-- 鉴权/越权
-- 密钥/敏感数据处理
+findings 分**阻塞 / 建议**落 review.md。阻塞项修复 → commit `fix: address review finding`。**不做 feat-flow 的 3 轮验证套娃**（grill-flow 刻意保持轻，一次审+修即可；判断型缺陷的最终兜底在环节 C 开发者亲审）。
 
-## 4. 呈现 + gate
+## 环节 C：开发者 IDE 人审闭环 + squash（写 signal 前最后一关）
 
-- findings（双轴 + 安全）+ AI 贴的原始测试输出 → 汇总进 `review.md`。
-- **不 squash**：保留每 ticket 独立 commit（tracer-bullet 的 landability——每片可独立 demo/回退是内核）。
-- gate：开发者交付签收 approve。**不批 = 就地改代码/产物再重呈**（引擎无 reject 语义）。
+环节 A/B 是 AI 自查，这一环是**开发者**把关；开发者的修改同样过回归。**本环节走完前绝不写 signal。**
+
+把 base 之后的全部改动摊成 **unstaged 全量**（工作区），全程不 stage、不 commit，直到最终 squash。开发者据此在 IDE 源码管理面板看「相对 base 一整坨改动」，而非被一串 commit 切碎。**保持 unstaged 的收益**：diff 右侧是工作树真文件，IDE 语言服务（跳转定义 / 查引用）全程可用——staged 或 commit-vs-commit 两侧都是 git 虚拟文档、语言服务不可用。
+
+### 入场：reset 摊平到工作区
+环节 B 全部改动已 commit 后：
+```bash
+BASE_SHA="<注入的 base_sha_code 值>"   # 只替换本行占位为真 SHA；下一行比较里的占位串保持原样（否则守卫恒 exit 1）
+[ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "<注入的 base_sha_code 值>" ] && { echo "ERROR: base_sha_code 缺失，回 stage-3 重写 mark-base 重新捕获"; exit 1; }
+git reset "$BASE_SHA"
+```
+`git reset`（mixed）撤回 base 之后所有 commit、HEAD 退回 base，改动原样留工作区且**全部 unstaged**（新文件呈 untracked）。**告知开发者**：去 IDE 源码管理面板看 **Changes（未暂存）** 组 = 整轮完整 diff；**请勿手动 stage**——保持 unstaged 才有语言服务跳转。
+reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕空）——作为 /clear 落在「reset 已跑、开发者还没提问」窗口的恢复标记。
+
+### 人审-修复循环（全程 unstaged，不 add/不 commit）
+开发者每提一个问题：
+1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量。
+2. **重跑全量测试，必须全绿**（人改 / AI 改同等过回归，不放行未验证改动）。
+3. 「开发者问题 + AI 改动文件清单 + 回归结果」记入 review.md 人工 review 节（**文件清单是最终 CR 圈范围依据**）。
+4. 回开发者：「本轮改动见工作区 diff + 回归通过，还有其他问题吗？」
+5. **开发者明确表示无更多问题前，不进下一步、不写 signal**（即便讨论中说「可以了」，也要先跑完最终 CR + squash）。
+
+### 最终 CR（条件式）→ squash
+开发者确认无更多问题后：
+1. `git add -A` 收尾（index = 全部累积改动）。
+2. **依改动量选择性 CR**（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
+   - 环节 C 零代码改动（只 review 没让改）→ **跳过 CR**（环节 B 已覆盖）。
+   - 有实质改动 → 派 **Spec/Standards 子代理**聚焦审人审动过的文件；清单含安全敏感改动（鉴权 / 输入 / 密钥 / 序列化）→ 加派**安全**。
+   - 纯拼写 / import 级小修 → 主 session 自核。
+   - CR 发现问题 → 回人审-修复循环。
+3. CR 干净（或零改动跳过）→ **squash 成单个 feat commit**：
+```bash
+git add -A && git commit -m "feat: <一句话功能概述>
+
+<2-4 行 what / why>
+
+详细规格见 docs/grill-flows/<flow_id>/spec.md
+
+flow-squash: <flow_id>"
+```
+commit message **自包含**（不引用 `T<n>` / flow 内部临时指代）。body 末行 `flow-squash: <flow_id>` 是校验锚点。**commit 成功后方可写 signal。**
+
+## /clear 重入判据（照 git 状态判在哪个环节）
+
+reset 到 base 是环节 C 的强标志——环节 A/B 期间 HEAD 恒领先 base：
+- **HEAD 提交 body 含 `flow-squash: <flow_id>` 且 signal 未写** → 已 squash 只差 signal：校验完成条件后补写 signal，不重做审查。
+- **`HEAD == base_sha_code` 且工作区非空**（`git status --porcelain` 有输出）→ 环节 C 人审中：不重派双轴，重呈相对 base 全量改动（IDE Changes 组 / `git diff <base>` + `git status` 覆盖 untracked）+ review.md，从「还有其他问题吗」续人审循环。
+- **否则**（HEAD 领先 base）→ 环节 A/B，重跑。
+
+## review.md 结构
+```markdown
+# 代码审查
+## 审查范围
+BASE_SHA_CODE: <SHA>
+## Standards（跨 ticket smell）
+### 已解决 / ### 已反驳
+## Spec（User Stories 闭环）
+### 已解决 / ### 已反驳
+## 安全
+### 已解决 / ### 已反驳
+## 建议（非阻塞）
+## 人工 review（环节 C）
+- <开发者问题>：AI 改动 <file…> — 回归：通过
+- 最终 CR：<跳过（零改动）| 聚焦 CR 结论>
+- squash：<feat commit 概要>
+## 结论
+## 原始测试输出
+<通过/失败计数 + commit SHA>
+```

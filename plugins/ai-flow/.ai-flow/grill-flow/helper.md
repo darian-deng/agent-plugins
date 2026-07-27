@@ -2,9 +2,9 @@
 
 ## 这是什么
 
-**mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现**，结合 feat-flow 里有价值的质量把控。与 feat-flow **并存对比**（不取代）：feat-flow 是 SDD/superpower 式（接口枚举蓝图 + 细 plan + 子代理派发），grill-flow 是 mattpocock 式（散文 spec + tracer-bullet 切片 + 人在主 session 逐 ticket 亲做）。
+**mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现**——散文 spec（不锁实现）+ tracer-bullet 垂直切片 + 人在主 session 逐 ticket 亲做，配结构化质量把控。
 
-**实现规模不限**；**设计迷雾大**（一次 grilling 聊不出 spec）走 stage-1 的 wayfinder 子模式；高风险要重型蓝图保障仍走 feat-flow。
+**实现规模不限**；**设计迷雾大**（一次 grilling 聊不出 spec）走 stage-1 的 wayfinder 子模式。
 
 ## 核心内核（"轻"在哪、质量在哪）
 
@@ -28,8 +28,8 @@ grill-flow help                       # 本文档
 |----|------|---------|---------|
 | stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
 | stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) |
-| stage-3 | implement | script（无 gate） | 逐 ticket 亲做：tdd→commit→simplify→双轴 CR→修(amend)→客观地板→qc marker→勾[x] |
-| stage-4 | code-review | **gate** | 全量测试 + 组装双轴 + 安全专项；不 squash |
+| stage-3 | implement | script（无 gate） | 逐 ticket 亲做：tdd→simplify→双轴 CR→correctness→修→客观地板→**commit**→qc marker→勾[x]（commit 后置，审查才审得到真实改动） |
+| stage-4 | code-review | **gate** | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环 → squash 一笔 feat commit |
 | stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
 
 gate：1 / 2 / 4 / 5。script（秒级 fail-closed 结构门）：2 / 3。
@@ -58,16 +58,5 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 - **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
 - **内置命令**：`/simplify`、`/code-review`（stage-3 per-ticket correctness）——用 Claude Code 内置版（`/code-review` 默认审当前未提交 diff，无需 PR）。
 - preflight 按上述检测；缺失给安装命令并阻止启动。
-
-## 与 feat-flow 的关键差异
-
-| 维度 | feat-flow | grill-flow |
-|---|---|---|
-| 方法论 | 接口枚举蓝图 + 细 plan + 子代理派发 | 散文 spec + tracer-bullet + 人亲做 |
-| stage 数 | 6 | 5 |
-| 迷雾大 | — | stage-1 wayfinder 子模式 |
-| 执行 | 串行 subagent 派发 | 主 session 逐 ticket 亲做（/clear 隔离） |
-| commit | 收尾 squash 成一笔 | 每 ticket 独立 commit、不 squash |
-| 沉淀 | stage-6 optimize-claude-context | stage-5 复用同机制 |
 
 > 设计真相源与所有对齐 rationale：仓库根 `docs/grill-flow-design.md`。
