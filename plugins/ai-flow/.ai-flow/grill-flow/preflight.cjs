@@ -82,7 +82,7 @@ if (cmdExists('mmdc')) {
   process.exit(FAIL);
 }
 
-// 注：stage-3 的 /simplify、/code-review 是 Claude Code 内置命令，非 user-installed
-// skill、无独立文件可探测，故不在此检查（/code-review 默认审本地未提交 diff、无需 PR）。
+// 注：stage-3 的 /simplify 是 Claude Code 内置命令，无独立文件可探测，故不在此检查。
+// correctness 轴改由子代理携未提交 diff 审 bug（不依赖内置 slash 命令，无需 preflight 检测）。
 
 process.exit(PASS);

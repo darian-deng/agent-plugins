@@ -98,8 +98,8 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     ];
     if (cpFragments.some((f) => command.includes(f))) {
       return deny(
-        'Direct Bash modification of ai-flow control-plane files (signal / active.json / scripts) is blocked. ' +
-        'Use the Write tool to write the signal; ask the user to change active.json or scripts manually.'
+        'Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked — matching is by path fragment, so this covers reads too. ' +
+        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually.'
       );
     }
 

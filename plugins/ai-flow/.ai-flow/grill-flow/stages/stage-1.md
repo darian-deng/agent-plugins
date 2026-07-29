@@ -23,17 +23,21 @@
 - **迷雾浮现 → 提议 wayfinder**：grill 中冒出 ≥3 个互相 blocked、答不出、要调研/原型才能定的架构决策 → 停下向开发者提议升级 wayfinder，同意后按 `wayfinder.md` 建图。**wayfinder 进行中（marker `charting`/`working`）绝不写 signal**——只有 `mode: clear` 且开发者确认对齐后才允许写（误写会冲进 gate-pending、丢 wayfinder 逻辑，见 wayfinder.md 诚实边界）。
 - **research/prototype detour**（非必经）：外部事实起后台 research 子代理；状态机/UI 建 throwaway prototype（走 Bash 写 repo 外）。拿到答案回 grill。
 - **范围外想法** → 记入 alignment.md「暂缓」，拉回当前需求。
+- **替换/迁移型需求**（把旧系统/旧实现搬到新的）：额外产出《相对基线的功能覆盖缺口清单》——做完本次后相对被替换对象还差哪些**用户可见**功能，每条标归本期还是后续。先派接地子代理对照被替换对象的真实行为/代码核实（别凭印象攒清单），再逐条与开发者对齐，写进 alignment.md 的 `## 功能覆盖缺口` 段。
+- **结账（写 signal 前必做）**：用 `AskUserQuestion` 逐条与开发者敲定高杠杆范围，别把范围决策拖到 stage-2/3 才暴露——①功能对等边界（做到什么程度算完）②本次要删除/废弃的东西 ③明确推迟到未来 flow 的项。逐条结论落 alignment.md（对等边界入「需求」、删除/废弃入「关键决策」、推迟项入「暂缓」）。
 
 ## 输出规格
 
 文件 → `{{project_root}}/docs/grill-flows/<flow_id>/alignment.md`
 （`flow_id` 用 context 顶部注入的实际值，不自己拼日期。）
 
-骨架：`# <需求简名>` / `## 需求` / `## 不在范围内` / `## 约束` / `## 术语表` / `## 关键决策`（当前态：选择+为何+否决什么，禁演化叙事）/ `## 暂缓` / `## 沉淀候选`（带来源，供 stage-5）。迷雾大时另有 `wayfinder-map.md`（见 wayfinder.md）。
+骨架：`# <需求简名>` / `## 需求` / `## 不在范围内` / `## 约束` / `## 术语表` / `## 关键决策`（当前态：选择+为何+否决什么，禁演化叙事）/ `## 功能覆盖缺口`（仅替换/迁移型需求：相对基线还差哪些用户可见功能 + 各归本期/后续）/ `## 暂缓` / `## 沉淀候选`（带来源，供 stage-5）。迷雾大时另有 `wayfinder-map.md`（见 wayfinder.md）。
 
 ## 完成条件
 
 - `alignment.md` 存在且含全部 section；load-bearing 决策已逐个经开发者拍定并记录。
+- 结账已完成：功能对等边界 / 本次删除·废弃项 / 推迟到未来 flow 的项，三类均已用 `AskUserQuestion` 逐条与开发者确认并落 alignment.md。
+- 替换/迁移型需求：`## 功能覆盖缺口` 清单经接地子代理核实、逐条与开发者确认。
 - 走了 wayfinder 的：`wayfinder-map.md` marker=`clear` 且已综合进 alignment.md。
 - 开发者确认达成共识。
 

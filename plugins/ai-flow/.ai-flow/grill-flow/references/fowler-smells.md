@@ -2,7 +2,7 @@
 
 > per-ticket Standards 轴（stage-3）与收尾组装 Standards 轴（stage-4）的判断依据。子代理**携本文件全文** + diff，只报告 `/simplify` 自动修不动的**判断型** smell，report-only 不 apply。Fowler《Refactoring》经典清单，按本 flow 关注度排序。
 
-## 高优先（tracer-bullet 逐 ticket 亲做最易滋生）
+## 高优先（tracer-bullet 逐 ticket 实施最易滋生）
 
 - **Duplicated Code**：多个 ticket 各写一份相似逻辑（逐 ticket /clear 看不到彼此，最易漏）。→ 提炼共用。
 - **Shotgun Surgery**：一个改动要动很多处；一个概念散落多文件。→ 内聚到一处。

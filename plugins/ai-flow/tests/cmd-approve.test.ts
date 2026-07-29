@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, writeFileSync, chmodSync } from 'fs';
 import { handleApprove } from '../src/lib/commands/approve.js';
 import { readActiveState } from '../src/lib/state.js';
 import { createFlowTestRepo, writeActiveState as fixtureWriteState, writeSignal, MINIMAL_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
+import type { FlowConfig } from '../src/lib/flow-schema.js';
 
 let cleanups: Array<() => void> = [];
 
@@ -175,5 +176,58 @@ describe('handleApprove', () => {
     const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
     expect(result.action).toBe('deny');
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/does not require/i);
+  });
+
+  // ── P1-6: release-time re-run of the completion.script gate ──────────────────
+  // A stage with BOTH gate:true and a completion.script re-runs that script when
+  // approve is called, so changes made during gate-pending can't slip past the
+  // fail-closed structural gate.
+
+  const SCRIPT_GATE_CONFIG: FlowConfig = {
+    schema_version: '1.0',
+    name: 'test-flow',
+    stages: [
+      {
+        id: 'work',
+        prompt: 'stages/work.md',
+        write_scope: 'unrestricted',
+        completion: { gate: true, script: { command: 'bash scripts/check.sh', timeout_ms: 5000 } },
+      },
+      { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: {} },
+    ],
+  };
+
+  function makeScriptGateRepo(scriptBody: string) {
+    const repo = createFlowTestRepo('test-flow', SCRIPT_GATE_CONFIG);
+    cleanups.push(repo.cleanup);
+    const scriptPath = join(repo.flowDir, 'scripts', 'check.sh');
+    writeFileSync(scriptPath, scriptBody);
+    chmodSync(scriptPath, 0o755);
+    fixtureWriteState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'work', base_sha: 'abc',
+    });
+    writeSignal(repo.repoRoot, 'test-flow', 'done');
+    return repo;
+  }
+
+  it('gate+script, re-check passes → approve advances stage', async () => {
+    const repo = makeScriptGateRepo('#!/bin/sh\nexit 0\n');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
+    expect(result.action).toBe('allow');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('review');
+  });
+
+  it('gate+script, re-check fails → approve denied, stderr returned, stage unchanged', async () => {
+    const repo = makeScriptGateRepo('#!/bin/sh\necho "STRUCTURE VIOLATION: ticket-3 missing" >&2\nexit 1\n');
+    const result = await handleApprove(repo.repoRoot, 'test-flow', 'test-sess');
+    expect(result.action).toBe('deny');
+    const reason = (result as { action: 'deny'; reason: string }).reason;
+    expect(reason).toContain('STRUCTURE VIOLATION: ticket-3 missing');
+    expect(reason).toContain('bash scripts/check.sh');
+    // stage must NOT advance on failed re-check
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.current_stage).toBe('work');
   });
 });

@@ -8,6 +8,27 @@
 
 ---
 
+## ⚠ 设计修订（2026-07-29，以本节为准）
+
+**stage-3 执行模型改：从「人在主 session 逐 ticket 亲做」→「轻量编排器串行派发 fresh 子代理实施 + 编排器逐 ticket 把门 + fail-closed 边界门」。** 下文 §2 / §7 / §10 / §11 中凡「人在主 session 亲做（非 SDD 派发）」「人在场替代 feat-flow 的 AFK 补偿重门」的论证，**已被本修订取代**。
+
+触发与依据（首次实践复盘，flow_id 2026-07-27-cy8t，32-subagent 对抗性复盘）：
+- **前提证伪**：开发者是「继续流」——8 段 stage-3 里 5 段只敲「继续」、stage-4 环节 C 人审因手机 RC 被开发者主动委托 /simplify 绕过。精确命中本文 §11 自己命名的「AFK 跑就裸奔」失效模式：拆了 per-ticket 机器门、又没有真在场的人，两头落空。
+- **质量不在敲代码的位置**：质量来自散文 spec + tracer-bullet 切片 + diff 级三轴评审（Standards/Spec/correctness）+ 门，全部与「谁敲的代码」无关；唯一绑定「人在主 session」的价值是「人当 per-ticket 门」，而人不在场时它是空的、只剩 context 爆炸的代价。
+- **context 实测**：8 段 stage-3 主 session 峰值 ≤ 647k（1M 窗口），实施子代理承担的是其真子集（correctness/地板/回灌/重读都不在它身上），单窗口装得下最大迁移/删表 ticket，富余 350k+。故**不预切、不特判迁移大 ticket**，只留 feat-flow 式**截断自保护**兜底罕见超窗。
+
+改后形态：主 session 只编排（context 干净、「继续流」也安全）；实施子代理 `sonnet`/1M、精瘦派发（指针不灌全文）；三评审子代理 `opus`；决策/安全型 finding → `AskUserQuestion` 停下问人（人在环的新落点）；per-ticket 质量门 = 编排器逐 ticket 核验 + `gate-stage-3.cjs` fail-closed（每 `[x]` 有含 `T<n>` 的 commit + `qc:done`）。**代价（已认）**：执行层因此 ≈ feat-flow stage-4，grill-flow 差异化收敛到上游（散文 spec + tracer-bullet + wayfinder）。细节以 `stages/stage-3.md` + `references/per-ticket-review.md` 现版为准。
+
+**另（P0-3）**：stage-5 沉淀 approve 后须 `git commit --amend` 折进 stage-4 那笔 `flow-squash` 提交（照搬 feat-flow stage-6），否则沉淀游离未提交、破坏「单 flow 单 commit」不变量。已并入 `stages/stage-5.md`。
+
+**同批修的复盘 P1**（均已并入现版文件）：
+- **P1-5**（per-ticket "一个 commit" 与记账后置矛盾）：每 ticket 只产一笔**代码** commit（含 `T<n>`）；记账（candidates.md、tickets.md 的 `qc:done`/`[x]`）留工作树、由 stage-4 环节 C `git reset` + `git add -A` squash 一并吸收（既有机制，非新增）。见 `references/per-ticket-review.md`。
+- **P1-6**（gate-pending 门无复检）：引擎 `approve` 放行前，对配了 `completion.script` 的 stage **重跑一次结构门**（复用 signal 时同一 `runScript`），不过则 deny + 回 stderr。**影响所有 flow（含 feat-flow）**——合规时幂等必过。见 `src/lib/commands/approve.ts`。
+- **P1-7**（上游 scope 未结清）：stage-1 写 signal 前 `AskUserQuestion` 逐条结账（功能对等边界/删除项/推迟未来 flow 项）＋替换迁移型强制《功能覆盖缺口清单》；stage-2 稳定跨端/跨仓契约沉淀为 spec 附录、gate-pending 范围级变更回写 alignment。见 `stages/stage-1.md`、`stages/stage-2.md`。
+- **P1-8**（monorepo commit 撞 pre-commit 被迫 `--no-verify`）：镜像 feat-flow 的「pre-commit hook 冲突」文档化四步协议（依据须引 `Blocked by`/切片顺序、注明跳过原因、安全网=客观地板+stage-4 环节 A+squash 摊平）；stage-4 环节 C `git add -A` 前做 scope 核对（本 flow 代码 ∪ `docs/grill-flows/**`，挡跨子项目 stray）。见 `references/per-ticket-review.md`、`stages/stage-4.md`、`references/assembly-review.md`。
+
+---
+
 ## 1. 定位
 
 **grill-flow = mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现 + feat-flow 里真正有价值的质量把控。**

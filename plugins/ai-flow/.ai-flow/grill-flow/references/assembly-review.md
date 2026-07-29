@@ -46,13 +46,13 @@ reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪�
 
 ### 最终 CR（条件式）→ squash
 开发者确认无更多问题后：
-1. `git add -A` 收尾（index = 全部累积改动）。
+1. **先做 stage-4.md 的「squash 前工作树 scope 核对」**（`git add -A` 前逐条核 `git status --porcelain`：只有本 flow 代码范围 ∪ `docs/grill-flows/**` 记账 tracking 才纳入；跨子项目 stray 改动别吞、停下问开发者）→ 再 `git add -A` 收尾（index = 本 flow 范围内的全部累积改动）。
 2. **依改动量选择性 CR**（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
    - 环节 C 零代码改动（只 review 没让改）→ **跳过 CR**（环节 B 已覆盖）。
    - 有实质改动 → 派 **Spec/Standards 子代理**聚焦审人审动过的文件；清单含安全敏感改动（鉴权 / 输入 / 密钥 / 序列化）→ 加派**安全**。
    - 纯拼写 / import 级小修 → 主 session 自核。
    - CR 发现问题 → 回人审-修复循环。
-3. CR 干净（或零改动跳过）→ **squash 成单个 feat commit**：
+3. CR 干净（或零改动跳过）→ **squash 成单个 feat commit**（下面 `git add -A` 仍限步骤 1 核过的 scope，跨子项目 stray 不纳入；若 commit 撞 pre-commit hook，按 `per-ticket-review.md` 的「pre-commit hook 冲突」文档化协议处理，别默认 `--no-verify`）：
 ```bash
 git add -A && git commit -m "feat: <一句话功能概述>
 
