@@ -9,7 +9,7 @@ var __export = (target, all) => {
 import { readFileSync as readFileSync9 } from "fs";
 
 // src/lib/userprompt-handler.ts
-import { join as join12 } from "path";
+import { join as join13 } from "path";
 
 // src/lib/flow-config-loader.ts
 import { existsSync, readdirSync, readFileSync } from "fs";
@@ -4542,6 +4542,9 @@ current_stage: ${firstStage.id}
   return { action: "allow", additionalContext: ctx };
 }
 
+// src/lib/commands/approve.ts
+import { join as join9 } from "path";
+
 // src/lib/advance-stage.ts
 import { existsSync as existsSync7, readFileSync as readFileSync6, unlinkSync as unlinkSync2 } from "fs";
 import { join as join8 } from "path";
@@ -4610,6 +4613,24 @@ async function handleApprove(repoRoot, flowName, sessionId, _args) {
   if (!isGatePending(signal, config, state.current_stage)) {
     return { action: "deny", reason: `Signal present but does not match the expected checkpoint for stage '${state.current_stage}'.` };
   }
+  if (stageCfg.completion.script) {
+    const flowDir = join9(repoRoot, ".ai-flow", flowName);
+    const scriptOpts = stageCfg.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg.completion.script.timeout_ms } : void 0;
+    const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
+    if (!scriptResult.ok) {
+      await appendLog(repoRoot, flowName, sessionId, `APPROVE_SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, " ").slice(0, 80)}`);
+      return {
+        action: "deny",
+        reason: `\u653E\u884C\u524D\u7ED3\u6784\u95E8\u590D\u68C0\u5931\u8D25:\u9636\u6BB5 '${state.current_stage}' \u7684\u5B8C\u6210\u811A\u672C\u672A\u901A\u8FC7\u3002
+\u811A\u672C:${stageCfg.completion.script.command}
+
+${scriptResult.reason}
+
+gate-pending \u671F\u95F4\u4EA7\u7269\u88AB\u6539\u52A8\u5230\u4E0D\u5408\u89C4\u72B6\u6001\u3002\u8BF7\u4FEE\u590D\u4E0A\u8FF0\u95EE\u9898\u540E\u91CD\u65B0 approve\u3002`
+      };
+    }
+    await appendLog(repoRoot, flowName, sessionId, `APPROVE_SCRIPT_OK stage=${state.current_stage}`);
+  }
   await appendLog(repoRoot, flowName, sessionId, `APPROVED stage=${state.current_stage}`);
   const enteredStage = nextStage(config, state.current_stage);
   const result = await advanceStage(repoRoot, flowName, sessionId);
@@ -4621,7 +4642,7 @@ async function handleApprove(repoRoot, flowName, sessionId, _args) {
 // src/lib/commands/abort.ts
 import { execFileSync } from "child_process";
 import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3 } from "fs";
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
 }
@@ -4653,10 +4674,10 @@ async function handleAbort(repoRoot, flowName, sessionId, args = "") {
   let snapshotCommitted = false;
   try {
     git(["checkout", "-b", branchName], repoRoot);
-    const snapshotDir = join9(repoRoot, "docs", flowName, state.flow_id);
+    const snapshotDir = join10(repoRoot, "docs", flowName, state.flow_id);
     mkdirSync3(snapshotDir, { recursive: true });
     writeFileSync3(
-      join9(snapshotDir, "state-snapshot.json"),
+      join10(snapshotDir, "state-snapshot.json"),
       JSON.stringify(state, null, 2)
     );
     git(["add", "-A"], repoRoot);
@@ -4681,7 +4702,7 @@ Error: ${String(err)}
 Flow remains active \u2014 active.json was NOT deleted.`;
     return { action: "deny", reason };
   }
-  const activeJsonPath2 = join9(repoRoot, ".ai-flow", flowName, "state", "active.json");
+  const activeJsonPath2 = join10(repoRoot, ".ai-flow", flowName, "state", "active.json");
   if (existsSync8(activeJsonPath2)) unlinkSync3(activeJsonPath2);
   await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
   const headNote = !originalBranch || originalBranch === "HEAD" ? `
@@ -4696,7 +4717,7 @@ To resume: ${flowName} resume ${branchName}`
 // src/lib/commands/resume.ts
 import { execFileSync as execFileSync2 } from "child_process";
 import { existsSync as existsSync9, readFileSync as readFileSync7 } from "fs";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 async function handleResume(repoRoot, flowName, sessionId, branch) {
   const trimmedBranch = branch.trim();
   if (!trimmedBranch) {
@@ -4763,7 +4784,7 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
   await writeActiveState(repoRoot, flowName, restored);
   await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
   const stageCfg = getStageConfig(config, currentStage);
-  const promptPath = join10(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+  const promptPath = join11(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
   let stageContent = "";
   if (existsSync9(promptPath)) {
     stageContent = renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName);
@@ -4809,10 +4830,10 @@ async function handleStatus(repoRoot, flowName) {
 
 // src/lib/commands/help.ts
 import { existsSync as existsSync10, readFileSync as readFileSync8 } from "fs";
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 async function handleHelp(repoRoot, flowName) {
   if (flowName) {
-    const helperPath = join11(repoRoot, ".ai-flow", flowName, "helper.md");
+    const helperPath = join12(repoRoot, ".ai-flow", flowName, "helper.md");
     if (existsSync10(helperPath)) {
       const content = readFileSync8(helperPath, "utf-8");
       return { action: "allow", additionalContext: content };
@@ -4914,7 +4935,7 @@ async function handleUserPrompt(input2) {
       }
       const updatedState = { ...active.state, first_prompt_handled: true };
       await writeActiveState(active.repoRoot, active.flowName, updatedState);
-      const flowRoot = join12(active.repoRoot, ".ai-flow", active.flowName);
+      const flowRoot = join13(active.repoRoot, ".ai-flow", active.flowName);
       const statusLine = flowStatusLine({
         flowName: active.flowName,
         stageId: active.state.current_stage,
