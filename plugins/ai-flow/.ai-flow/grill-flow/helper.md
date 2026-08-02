@@ -28,8 +28,8 @@ grill-flow help                       # 本文档
 |----|------|---------|---------|
 | stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
 | stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) |
-| stage-3 | implement | script（无 gate，fail-closed） | 编排器串行派 fresh 子代理逐 ticket 实施：tdd→simplify→双轴+correctness 评审子代理→编排器裁/修→客观地板→**commit(含 T号)**→qc marker→勾[x]（实现在子代理、不涨主 session；commit 后置） |
-| stage-4 | code-review | **gate** | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环 → squash 一笔 feat commit |
+| stage-3 | implement | script（无 gate，fail-closed） | 编排器串行派 fresh 子代理逐 ticket 实施：tdd→simplify→**三评审子代理并行**(双轴+correctness)→编排器裁/修→客观地板→**commit(含 T号)**→qc marker→**真机票打 rm:pending**→勾[x]（实现在子代理、不涨主 session；commit 后置；frontier 分岔不问顺序、真机票不停） |
+| stage-4 | code-review | **gate** | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环**（含真机验证清单收口 rm:pending，全流程唯一真机验证落点）** → squash 一笔 feat commit |
 | stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
 
 gate：1 / 2 / 4 / 5。script（秒级 fail-closed 结构门）：2 / 3。
@@ -43,7 +43,7 @@ docs/grill-flows/<flow_id>/
 ├── spec.md              # 散文规格：Problem/Solution/User Stories/Decisions/Testing Decisions/Out of scope/方案审查/跨端跨仓行为契约(涉及时,stage-2)
 ├── tech-design.html     # 方案视图：gate 主审面（stage-2，从 spec 生成的单向视图）
 ├── diagram/*.svg        # 配图（mermaid→mmdc）
-├── tickets.md           # tracer-bullet 切片 + 进度（stage-2 建，stage-3 维护 qc:done + [x]）
+├── tickets.md           # tracer-bullet 切片 + 进度（stage-2 建，stage-3 维护 qc:done + [x] + 真机票 rm:pending/rm:done + ## 待真机验证段）
 ├── candidates.md        # 沉淀候选（stage-3 累积）
 └── review.md            # 收尾审 findings + 原始测试输出（stage-4）
 

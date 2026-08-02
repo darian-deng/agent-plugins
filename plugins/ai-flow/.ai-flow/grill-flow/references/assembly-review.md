@@ -36,6 +36,14 @@ git reset "$BASE_SHA"
 `git reset`（mixed）撤回 base 之后所有 commit、HEAD 退回 base，改动原样留工作区且**全部 unstaged**（新文件呈 untracked）。**告知开发者**：去 IDE 源码管理面板看 **Changes（未暂存）** 组 = 整轮完整 diff；**请勿手动 stage**——保持 unstaged 才有语言服务跳转。
 reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕空）——作为 /clear 落在「reset 已跑、开发者还没提问」窗口的恢复标记。
 
+### 真机验证清单（tickets.md 有 `## 待真机验证` 段时）
+grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——stage-3 机器地板验不了的票都攒在这。逐条走：
+1. 读 tickets.md `## 待真机验证` 段（每条 `- T<n> — 验什么`）+ 该 ticket 在 tickets.md 的 AC。
+2. 请**开发者**真机验该票（跑起来验鉴权流转 / 设备 I/O / 跨端行为等，AI 代不了）。
+3. 验过 → 把该票行的 `rm:pending` 改 `rm:done`，在 review.md 人工 review 节记「T<n> 真机验证：通过」。
+4. 验出问题 → 并入下面「人审-修复循环」（AI 改工作树 → 重跑全量测试 → 复验），修好再 `rm:done`。
+5. **全部 `rm:pending` → `rm:done`（或开发者对某票明确豁免、并在 review.md 注明原因）才进最终 CR + squash。** 这是真机验证的 gate 兜底（stage-4 是 gate stage，靠人审 approve 强制）。
+
 ### 人审-修复循环（全程 unstaged，不 add/不 commit）
 开发者每提一个问题：
 1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量。
@@ -45,7 +53,7 @@ reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪�
 5. **开发者明确表示无更多问题前，不进下一步、不写 signal**（即便讨论中说「可以了」，也要先跑完最终 CR + squash）。
 
 ### 最终 CR（条件式）→ squash
-开发者确认无更多问题后：
+开发者确认无更多问题、且 `## 待真机验证` 无 `rm:pending` 残留（或已明确豁免）后：
 1. **先做 stage-4.md 的「squash 前工作树 scope 核对」**（`git add -A` 前逐条核 `git status --porcelain`：只有本 flow 代码范围 ∪ `docs/grill-flows/**` 记账 tracking 才纳入；跨子项目 stray 改动别吞、停下问开发者）→ 再 `git add -A` 收尾（index = 本 flow 范围内的全部累积改动）。
 2. **依改动量选择性 CR**（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
    - 环节 C 零代码改动（只 review 没让改）→ **跳过 CR**（环节 B 已覆盖）。
@@ -68,7 +76,7 @@ commit message **自包含**（不引用 `T<n>` / flow 内部临时指代）。b
 
 reset 到 base 是环节 C 的强标志——环节 A/B 期间 HEAD 恒领先 base：
 - **HEAD 提交 body 含 `flow-squash: <flow_id>` 且 signal 未写** → 已 squash 只差 signal：校验完成条件后补写 signal，不重做审查。
-- **`HEAD == base_sha_code` 且工作区非空**（`git status --porcelain` 有输出）→ 环节 C 人审中：不重派双轴，重呈相对 base 全量改动（IDE Changes 组 / `git diff <base>` + `git status` 覆盖 untracked）+ review.md，从「还有其他问题吗」续人审循环。
+- **`HEAD == base_sha_code` 且工作区非空**（`git status --porcelain` 有输出）→ 环节 C 人审中：不重派双轴，重呈相对 base 全量改动（IDE Changes 组 / `git diff <base>` + `git status` 覆盖 untracked）+ review.md，从「还有其他问题吗」续人审循环；**并重读 tickets.md `## 待真机验证`：仍有 `rm:pending` 的票续做真机验证再收口**。
 - **否则**（HEAD 领先 base）→ 环节 A/B，重跑。
 
 ## review.md 结构
@@ -84,6 +92,7 @@ BASE_SHA_CODE: <SHA>
 ### 已解决 / ### 已反驳
 ## 建议（非阻塞）
 ## 人工 review（环节 C）
+- 真机验证：T<n> 通过 / T<n> 豁免（原因）
 - <开发者问题>：AI 改动 <file…> — 回归：通过
 - 最终 CR：<跳过（零改动）| 聚焦 CR 结论>
 - squash：<feat commit 概要>

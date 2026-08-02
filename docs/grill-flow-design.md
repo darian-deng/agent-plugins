@@ -29,6 +29,19 @@
 
 ---
 
+## ⚠ 设计修订（2026-08-02，以本节为准）
+
+**stage-3 中断边界收紧 + 新增真机验证协议（方案 B）+ 三评审并行。** 触发（flow_id 2026-08-01-4u4z 复盘）：stage-3 在 frontier 分岔处用 `AskUserQuestion` 问「先做哪条」而中断——实为本设计明文禁止的「要不要继续」式 check-in。根因不是纯模型乱来，而是**全流程缺「需真机/鉴权/运行时验证」的落点**（stage-3 机器地板 + stage-4 IDE 读 diff 都验不了运行时行为），编排器撞到这个未定义情形、手里只有 `AskUserQuestion` 一把锤子，就把调度问题问了出来。
+
+- **停点边界收紧**：frontier 分岔出多张同时够格的 ticket → 按 tickets.md 文件序确定性取第一张、**绝不问「先做哪条」**（顺序不是决策）；「某票需真机验证」也不是停点（打标继续）。stage-3 唯一的 `AskUserQuestion` 停点仍只有一个——每票评审冒出的、与 stage-1/2 spec 有出入的决策/安全型 finding（上文 §… 与 2026-07-29 修订的该落点不变，本节只补「顺序/真机不停」）。
+- **真机验证协议（方案 B，开发者选定）**：原流程 align→spec→implement(机器地板)→code-review(IDE 读 diff)→沉淀，**无运行时验证落点**。改为——stage-3 对需真机/鉴权/运行时验证的票照常实现+地板+提交，打 `rm:pending` 标 + 往 tickets.md `## 待真机验证` 段登记 `- T<n> — 验什么`，**不停、连续跑**；stage-4 环节 C 开发者在场时按清单逐票真机验、收口 `rm:done`，全部收口（或对某票明确豁免）才 squash。真机验证由此**有家、有 gate 兜底**（stage-4 是 gate stage）。契合复盘暴露的「AFK 跑就裸奔」——真机验证集中到人真在场的 stage-4。
+- **三评审并行**：per-ticket 三评审子代理（Standards/Spec/correctness）改**一次并行派**（只读同一份未提交 diff、不写文件、无 race，裁 findings 处天然汇合），与 stage-4 环节 B 双轴并行审一致。2026-07-29 修订的「串行」纪律只约束**实施子代理**，不约束评审——本节澄清、别误伤。
+- **gate 安全性（已核）**：`rm:pending` / `rm:done` / `## 待真机验证` 段不影响 `gate-stage-3.cjs`（只认 `[x]`/`[ ]`/`qc:done`/含 `T<n>` 的 commit）；**清单条目须用 `- T<n> —` 非复选框格式**——写成 `- [ ] T<n>` 会被 gate 的未勾正则误判为未完成 ticket 而 fail-closed。无需改 gate 脚本。
+
+细节以 `stages/stage-3.md` + `stages/stage-4.md` + `references/per-ticket-review.md` + `references/assembly-review.md` 现版为准。
+
+---
+
 ## 1. 定位
 
 **grill-flow = mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现 + feat-flow 里真正有价值的质量把控。**
