@@ -120,7 +120,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 - 极少数确信测试在测实现细节（而非行为）→ 报 完成但有顾虑 附理由（必须复核）
 - **不跑** lint / typecheck / 集成测试（Stage 5 职责）
 - **复用优先 + 最简实现**：写新代码前先 grep 相邻 / 共享模块，已有 helper 直接调用、不重复造；只写完成本 task `done` 所需的最简实现——不加可推导的冗余状态、不留死代码、不复制粘贴改两行。**仅限本 task 范围**——需泛化底层机制属架构级，留给 Stage 5，不在此越界重构
-- **注释规则**：注释只服务一种读者——未来维护此代码、无本次 flow 上下文（不在本会话、不翻 `docs/feat-flows/`）的人/AI；一切以此读者判断是否有必要。默认不写，坚持“注释是对代码表达能力失败的补救”。最好的注释是没有注释”，只写代码解决不了的问题；命名 / 类型 / 结构 能表达的不注释。Lint/路径规则已强制的约定(如跨域动态 import)不写注释。仅写代码表达不了、且该读者不知道就会改错的「为什么」——缘由 / 否定 / 约定 / 边界四类。不写（即便"有点用"）：复述代码在做什么、标榜设计（「高内聚自管」）、复读 linter / 团队已强制规则（「禁 try/catch」）、把背景时序写成小作文（属 design.md / PR）。**自包含**：注释只用未来读者手上有的信息，禁指向 flow 临时产物——`Task N` / `U<k>` / `Phase X` / 「见上文」/ `design.md D-xx` / ADR 编号裸引用；要留该信息就把背后实质展开进注释，不写指针。commit message 同此；task-reports.md 等 flow 内归档不受限。改代码时同步修 / 删失准的相邻注释。
+- **注释规则**：照 **`comment` skill（ai-flow 内置 `skills/comment/`，判据的单一权威源）**——注释只服务无本次 flow 上下文（不翻 `docs/feat-flows/`）的未来维护者；默认不写、只留代码表达不了的「缘由 / 否定 / 约定 / 边界」四类、命名/类型/结构能表达的不写、lint/路径规则已强制的不写；**自包含**禁指向 flow 临时产物（`Task N` / `U<k>` / `Phase X` / `见上文` / `design.md D-xx` / ADR 编号），要留就展开实质、不写指针；commit message 同此（`task-reports.md` 等 flow 内归档不受限）；改代码同步修 / 删失准的相邻注释。
 - **单元是耦合簇时**：见「耦合簇执行」——簇内**逐 task commit、逐 task 跑 verify**，不是一坨做完只 commit/verify 一次
 - **知识沉淀（测试通过后、返回前——你在代码里，故由你做）**：识别本 task 引入、命中『缘由 / 否定 / 约定 / 边界』4 类的知识（非显然选择含为何不选 X · 验证某方案不可行 · 不确定是否已记录的命名/架构/接口约定 · 依赖外部条件会静默失效），对每条调用 `optimize-claude-context` 的 `assess-candidate`，只把它保留的**幸存候选 + 路由（目标层 + 理由 + file:line）**纳入精简回报（其余由 skill 自理，不必回报）。跳过：调试试验 / 临时绕过 / 个人偏好。
 
@@ -147,7 +147,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 **「无法从 diff 判断」的处理**：若某项 verdict 是「无法从 diff 判断」（该项要求落在本次未改动的代码里，reviewer 单看 diff 判不出），主 session 不得当 PASS 也不得当 FAIL 直接放过——须自行读相关代码核实后再落最终 PASS/FAIL，并在 `**审查**` 行该项后加注 `（主 session 核实）`。
 
-**质量 verdict 的额外检查维度（注释审查）**：双向核 `git show <sha>` 的注释增删，基准是「对无本次 flow 上下文、不翻 `docs/feat-flows/` 的未来读者是否自包含、必要」——非以审查者能否读懂为准（你能翻 design.md，未来读者翻不到）。新增注释（diff `+`）逐条核，命中即删 / 改写：复述 what、标榜设计、复读 linter / 团队规则 → 删；指向 flow 临时产物（`Task N` / `design.md D-xx` / ADR 编号 / 「见上文」）→ 对未来读者必要则展开自包含、否则删；背景小作文 → 砍到只剩会改错的那句 why。留：自包含的 why（四类）、非显然约束、外部稳定文档 / issue 链接。删除注释（diff `-`）核误删：删掉的属自包含 why / 非显然约束 → 要求恢复。commit message 含 flow 临时指代 → 要求改写后重 commit。
+**注释治理不在每 task 评审里顺带做**：历史证明"多轴评审里稀释的一条"会漏（某次 feat-flow 源码留了 54 处进程指代）。每 task 只做**写时预防**（实施子代理守「注释规则」，见上），真正的**清理统一由 stage-5 环节 C 显式调用 `comment` skill 做**（专职、grep 候选 + sonnet 语义兜底 + 删完重测）；per-task commit message 会在 stage-5 squash 时被自包含的最终 message 取代，不必在此逐条核。
 
 **规格 verdict 的额外检查维度**：在 SDD 单次评审产出的规格 verdict 基础上，叠加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。

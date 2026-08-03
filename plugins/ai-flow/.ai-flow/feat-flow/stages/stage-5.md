@@ -238,11 +238,14 @@ git reset "$BASE_SHA"
 
 reset 完成后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕暂无内容）——作为 `/clear` 落在「reset 已跑、开发者还没提第一个问题」窗口时的恢复标记。
 
+### 注释清理（显式调用 comment skill，reset 后 + squash 前各一次）
+stage-4 每 task 评审只顺带标记注释、不专职清理（历史上因此漏网——某次 feat-flow 源码留了 54 处 `Task N`/`plan.md`/`design.md` 进程指代）；本步是**专职、会真删的兜底**。**显式调用 `comment` skill**（`/ai-flow:comment`，范围=`git diff <base>` 全量）：**reset 后跑一次**（开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声）。skill 自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代 / 冗余 / 失效）+ 删完重跑环节 A 回归，只清新增注释、不动老注释。清理结果记 review.md。**判据在 skill 里、每次调用取最新，不在本 stage 复述。**
+
 ### 人审-修复循环（开发者每提一个问题）
 
 全程保持 unstaged，不 add、不 commit：
 
-1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量
+1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量（本轮新灌的注释噪声由 squash 前的复清兜底——见上「注释清理」）
 2. **重跑环节 A 自动化回归，必须全绿**——在 working tree 当前状态直接跑；人改 / AI 改同等过回归，不放行未验证改动
 3. 把「开发者问题 + AI 改动的文件清单 + 回归结果」记入 review.md「人工 review」节——这份**文件清单是最终 CR 圈范围的依据**（0-commit、不分层，靠这份清单圈定人审阶段动过哪些文件）
 4. 回开发者：「本轮改动见工作区 diff + 回归通过，确认无误吗？还有其他问题吗？」

@@ -16,16 +16,18 @@
 - **前置 ticket 的改动只给 commit SHA 指针**（"自己 `git show <sha>` 看、在此基础上改、勿覆盖"），不灌 diff 正文
 - **tracer-bullet 竖切 + 该 ticket 的 decisions/AC 整段**必带（护栏，必须全）
 - 相关 ADR 只给**路径**（≤5 条）让子代理按需读
+- **注释纪律带 `comment` skill**（ai-flow 内置 `skills/comment/`）：让实施子代理照它写注释——默认不写、只留代码表达不了的「缘由/否定/约定/边界」四类、自包含禁 flow 临时指代（`T<n>` / spec 章节号 / `见上文` 等），能搬进类型/断言的先搬
 
 ## 固定顺序（一个 ticket 走完这套编排器再勾 [x]）
 
 1. **实施子代理**（`model='sonnet'`，1M 窗口——实施是机械执行 + TDD 兜底、又是 token 大头，降这里省最多）：按上面传入纪律派发。子代理职责——tdd 只在 stage-2 约定的 seam 上测；实现；跑 `/simplify`(apply) 机械质量修（复用/简化/效率）；**改动留工作树、先不 commit**；回**精简形状**（状态 完成/完成但有顾虑/受阻/需补充信息 + 改了哪些文件做了什么 + 本 ticket 引入的新术语/模式 + 沉淀候选）。
    - **截断自保护**：子代理近上限 / 发现 ticket 比预期大 → 别硬撑到被截断：`git commit` 已完成部分（message 标 `[partial]`）+ 写「剩余工作」清单（差哪些、做到哪、从哪继续）+ 报 完成但有顾虑 / 受阻。编排器续派下一轮做剩余，末轮用 `git add -A && git commit --amend` 折回那个 `[partial]`、去掉标记——保住"一 ticket 一 commit"。（1M 窗口下单 ticket 极少触发；这是运行时兜底，不为它预切 ticket。）
-2. **三评审子代理并行派发**（步骤 2–4 一次并行派、都 report-only，第 5 步裁 findings 处汇合；只读同一份未提交 diff、不写文件、无 race——**「串行」纪律只约束实施子代理，见下方「子代理纪律」**）——**① Standards 轴子代理**（`model='opus'`）：携 `references/fowler-smells.md` 全文 + 该 ticket 未提交 diff（`git diff`），**只报告 simplify 修不动的判断型 smell**（架构级重复、错 altitude、过度工程）。report-only 不 apply。这是 mattpocock 的质量轴，别退化成 correctness。
+2. **三评审子代理并行派发**（步骤 2–4 一次并行派、都 report-only，第 5 步裁 findings 处汇合；只读同一份未提交 diff、不写文件、无 race——**「串行」纪律只约束实施子代理，见下方「子代理纪律」**）——**① Standards 轴子代理**（`model='opus'`）：携 `references/fowler-smells.md` 全文 + 该 ticket 未提交 diff（`git diff`），**只报告 simplify 修不动的判断型 smell**（架构级重复、错 altitude、过度工程）。report-only 不 apply。这是 mattpocock 的质量轴，别退化成 correctness。（注释治理不在评审里顺带做——见第 5 步 commit 前**显式调用 `comment` skill**。）
 3. **② Spec 轴子代理**（`model='opus'`）：携 `spec.md` 相关段 + 该 ticket 未提交 diff，自定义 prompt 查该 ticket 对 spec 的一致性（有没有偏离 / 漏实现 User Story / 越出 spec）。report-only。早期抓 spec-drift，不拖到收尾。
 4. **③ correctness 轴子代理**（`model='opus'`）：携该 ticket 未提交 diff，自定义 prompt 专审 correctness bug——逻辑错误、边界/空值、错误处理与失败路径、并发/竞态、以及注入/鉴权/密钥类安全隐患。report-only。**不依赖任何内置 slash 命令或子项目配置**，任何仓库/子项目都通用。
 5. **编排器裁 findings**：
    - 质量 / smell / spec-drift / bug → **派子代理改工作树**（携 findings + diff，仍不 commit）；修复也会幻觉 → 关键修复独立复核兜底。
+   - **注释清理（每票 CR，commit 前必做）→ 编排器显式调用 `comment` skill**（`/ai-flow:comment`，范围=该票未提交 diff）：它自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代/冗余/失效）+ 删完重测，清理本票新增注释；改动与其它 fix 一并留工作树、仍不 commit。**判据在 skill 里，不在此复述。**
    - **决策型 / 安全型**（推翻方案、安全红线、需开发者拍板的取舍）→ **停下 `AskUserQuestion` 问开发者**，别自作主张 ship、也别塞进 candidates 蒙混过去——这是编排器模型里人在环的落点。
    - **需真机 / 鉴权 / 运行时验证**（原生 / 主进程运行时、鉴权登录态流转、设备 I/O、跨端真机行为等，机器地板验不了的）→ **不是停点**：正常实现 + 地板 + 提交，在步骤 9 打 `rm:pending` 登记，连续跑；真机验证由 stage-4 环节 C 集中做。别为它停下问「先做哪条」或「要不要现在验」。
 6. **编排器跑客观地板**：typecheck + 该 ticket 相关测试绿；**假绿检测**=测试选择器实际匹配 ≥1 个测试；**枚举负空间检查**=ticket 蕴含 N 个错误码/状态/分支时，逐项核 diff 都实现且有断言；**回归纪律**=既有测试挂了当回归、改代码不改测试糊弄。

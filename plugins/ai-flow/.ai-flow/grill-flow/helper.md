@@ -57,6 +57,7 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 - **系统**：Node.js ≥ 18、git、claude CLI、mermaid-cli（`mmdc`，stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
 - **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
 - **内置命令**：`/simplify`（stage-3 per-ticket 机械型质量修，Claude Code 内置）。correctness 轴不用内置命令，改由子代理携未提交 diff 审 bug（通用、见 `references/per-ticket-review.md`）。
+- **内置 skill**：`comment`（注释纪律与清理——实施子代理写时守 + per-ticket 评审标记 + stage-4 收尾专职清理 pass「grep 机械兜底进程指代 + sonnet 判冗余」；随 ai-flow 一起装、无需额外安装）。
 - preflight 按上述检测；缺失给安装命令并阻止启动。
 
 > 设计真相源与所有对齐 rationale：仓库根 `docs/grill-flow-design.md`。

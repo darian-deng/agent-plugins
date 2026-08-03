@@ -36,6 +36,9 @@ git reset "$BASE_SHA"
 `git reset`（mixed）撤回 base 之后所有 commit、HEAD 退回 base，改动原样留工作区且**全部 unstaged**（新文件呈 untracked）。**告知开发者**：去 IDE 源码管理面板看 **Changes（未暂存）** 组 = 整轮完整 diff；**请勿手动 stage**——保持 unstaged 才有语言服务跳转。
 reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕空）——作为 /clear 落在「reset 已跑、开发者还没提问」窗口的恢复标记。
 
+### 注释清理（显式调用 comment skill，reset 后 + squash 前各一次）
+**编排器显式调用 `comment` skill**（`/ai-flow:comment`，范围=`git diff <base>` 全量）：**reset 后跑一次**（让开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声——即"CR 时改动又乱加注释"）。skill 自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代 / 冗余 / 失效）+ 删完重跑环节 A 测试，只清新增注释、不动老注释。清理结果记 review.md。**判据在 skill 里、每次调用取最新，不在本 stage 复述。**
+
 ### 真机验证清单（tickets.md 有 `## 待真机验证` 段时）
 grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——stage-3 机器地板验不了的票都攒在这。逐条走：
 1. 读 tickets.md `## 待真机验证` 段（每条 `- T<n> — 验什么`）+ 该 ticket 在 tickets.md 的 AC。
@@ -46,7 +49,7 @@ grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——
 
 ### 人审-修复循环（全程 unstaged，不 add/不 commit）
 开发者每提一个问题：
-1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量。
+1. **AI 直接改 working tree**（不 stage、不 commit）——改动并入 unstaged 全量。（本轮新灌的注释噪声由 squash 前的复清兜底——见上「注释清理」。）
 2. **重跑全量测试，必须全绿**（人改 / AI 改同等过回归，不放行未验证改动）。
 3. 「开发者问题 + AI 改动文件清单 + 回归结果」记入 review.md 人工 review 节（**文件清单是最终 CR 圈范围依据**）。
 4. 回开发者：「本轮改动见工作区 diff + 回归通过，还有其他问题吗？」
