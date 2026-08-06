@@ -1,0 +1,9 @@
+/* ai-flow 全屏图片查看器样式 — 同源副本在 plugins/ai-flow/.ai-flow/feat-flow/references/assets/viewer.css，改动两边必须同步。由 references 契约的注入步骤替换进 HTML 占位锚点，勿手工格式化。 */
+.diagram-stage svg{width:100%;height:auto;display:block}
+.fs-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.88);display:flex;flex-direction:column}
+.fs-top{display:flex;justify-content:flex-end;gap:8px;padding:12px}
+.fs-canvas{flex:1;overflow:hidden;cursor:grab}.fs-canvas.grabbing{cursor:grabbing}
+/* `.fs-inner` 背景不可省：配图用 `mmdc -b transparent` 渲染（SVG 背景透明，图内文字/线条按浅色底配色）。
+   全屏遮罩 `.fs-overlay` 是近黑色，若 `.fs-inner` 不给不透明浅色背景，透明 SVG 直接叠在近黑遮罩上会导致深色文字/线条不可见（已在真实生成产物上复现）。
+   `.fs-inner` 的盒子尺寸由内部 SVG 的显式 `width`/`height` 撑开、与自身无关，加背景色不影响 `fit()` 的缩放/居中计算。 */
+.fs-inner{transform-origin:0 0;position:absolute;top:0;left:0;background:#fff;border-radius:8px}.fs-inner svg{display:block}

@@ -152,6 +152,8 @@ Schema 约束：
 
 每个 stage prompt 必须符合 `optimize-stage-prompt` 规范（本插件同名 skill）。使用以下固定结构：
 
+**路径一律用 `{{project_root}}` / `{{flow_root}}` 占位符锚定，禁写相对路径**（展开值与缘由见 `optimize-stage-prompt` 标准 6）；stage 文件长度、以及「细节放 stage 还是放 references」的取舍见其标准 5。
+
 ```markdown
 # Stage N：{阶段名}
 
@@ -165,15 +167,14 @@ Schema 约束：
 
 ## 前置读取
 {仅当此 stage 依赖前序阶段产物时添加}
-- `路径` — 用途说明
+- `{{project_root}}/路径` — 用途说明
 
 ## 步骤
 {bullet list，不用散文段落}
 
 ## 输出规格
 {三选一：}
-{文件 → `路径` — 格式说明}
-{      验证：`cat 路径` 应返回非空内容}
+{文件 → `{{project_root}}/路径` — 格式说明}
 {git commits → Git commits，格式: `feat: <task>`}
 {无输出 → 无文件产出}
 
@@ -182,12 +183,10 @@ Schema 约束：
 
 ## Signal
 **触发条件**：本阶段「完成条件」全部满足，**或**用户明确表达本阶段已完成。
-**动作**：用 Write 工具向 `.ai-flow/{flow-name}/state/signal` 写入 `done`（Bash 写入会被引擎拒绝，必须用 Write）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（Bash 写入会被引擎拒绝，必须用 Write）。
 - 所有 stage 统一写 `done`，无论是否最后一个 stage
 - 引擎自动计算下一步，写入其他内容会被拒绝
 ```
-
-单个 stage 文件 token 目标 ≤ 800（约 600 字）。
 
 #### 多 Task Stage 的拆解指南
 
@@ -299,9 +298,11 @@ preflight 运行时 cwd = 项目根（repoRoot）：检查项目文件可用相�
 
 为每个用到 Script Validator 的 stage 生成对应脚本。exit 0 = 验证通过，exit 非零并打印失败原因 = 失败。
 
+**注意 validator 的 cwd 与 preflight 不同**：validator 由引擎在 signal 写入时执行，cwd = `.ai-flow/{flow-name}`（flow 目录），不是项目根。脚本里访问项目文件请从这里往上定位，不要假设 cwd 是 repoRoot。
+
 ### `.gitignore`
 
-确保项目根目录包含 `.ai-flow/*/state/`。
+确保 git 根目录的 `.gitignore` 含 `**/.ai-flow/**/state/`（引擎 `ai-flow add` 写的就是这条；`.ai-flow/*/state/` 这种写法在 monorepo 子项目下会漏掉）。
 
 ---
 

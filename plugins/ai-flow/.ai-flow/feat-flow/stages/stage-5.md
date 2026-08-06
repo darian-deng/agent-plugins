@@ -239,7 +239,7 @@ git reset "$BASE_SHA"
 reset 完成后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕暂无内容）——作为 `/clear` 落在「reset 已跑、开发者还没提第一个问题」窗口时的恢复标记。
 
 ### 注释清理（显式调用 comment skill，reset 后 + squash 前各一次）
-stage-4 每 task 评审只顺带标记注释、不专职清理（历史上因此漏网——某次 feat-flow 源码留了 54 处 `Task N`/`plan.md`/`design.md` 进程指代）；本步是**专职、会真删的兜底**。**显式调用 `comment` skill**（`/ai-flow:comment`，范围=`git diff <base>` 全量）：**reset 后跑一次**（开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声）。skill 自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代 / 冗余 / 失效）+ 删完重跑环节 A 回归，只清新增注释、不动老注释。清理结果记 review.md。**判据在 skill 里、每次调用取最新，不在本 stage 复述。**
+stage-4 每 task 评审只顺带标记注释、不专职清理（历史上因此漏网——某次 feat-flow 源码留了 54 处 `Task N`/`plan.md`/`design.md` 进程指代）；本步是**专职、会真删的兜底**。**显式调用 `comment` skill**（`/ai-flow:comment`，范围 = 相对 `<base>` 的**已追踪改动 ∪ 未追踪新文件**，两半边的取法与理由见 skill，此处不复述）：**reset 后跑一次**（开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声）。skill 自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代 / 冗余 / 失效）+ 删完重跑环节 A 回归，只清新增注释、不动老注释。清理结果记 review.md。**判据在 skill 里、每次调用取最新，不在本 stage 复述。**
 
 ### 人审-修复循环（开发者每提一个问题）
 

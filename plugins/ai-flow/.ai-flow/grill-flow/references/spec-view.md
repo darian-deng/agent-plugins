@@ -70,9 +70,18 @@
 
 主 session 亲拼，**不 dispatch 子代理写 HTML**；**禁止整份 HTML 单次 Write**，按序增量：
 
-1. **写骨架**：一次 Write 落外壳——HTML 头、CSS 变量与 dark mode 脚本、sticky 导航 + scrollspy、统一内容宽度（~100ch）、下面 `openFS` JS **逐字照搬**；各章节/图位留唯一占位锚点（如 `<!--SEC:现状落位-->`、`<!--FIG:落位-->`）。
+1. **写骨架**：一次 Write 落外壳——HTML 头、CSS 变量与 dark mode 脚本、sticky 导航 + scrollspy、统一内容宽度（~100ch）。**查看器的 CSS/JS 一个字都不要自己写**：只在 `<style>` 末尾放一行 `<!--VIEWER_CSS-->`、在 `</body>` 前的空 `<script>` 里放一行 `<!--VIEWER_JS-->`，两个锚点全文各出现一次。各章节/图位照旧留唯一占位锚点（如 `<!--SEC:现状落位-->`、`<!--FIG:落位-->`）。
 2. **逐节填充**：每章节单独 Edit 替换占位锚点。
 3. **内联图**：按图清单从 `diagram/` 读 SVG，逐张 Edit 替换图位，每张套 `<figure class="diagram">…</figure>` 全屏查看器外壳。
+4. **注入查看器资产**（Bash，最后一步，见下「查看器资产注入」）：把 `{{flow_root}}/references/assets/viewer.css` 与 `viewer.js` 的内容替换进上面两个 VIEWER 锚点。
+
+### 查看器资产注入（Bash，不经模型转写）
+
+全屏查看器的样式与脚本已外置为资产文件，**不要读出来再写进 Write/Edit 的参数里**——那等于让模型逐字转写一段压缩 JS，一个字符错查看器就静默失效。跑现成脚本注入（`<flow_id>` 换成本次 flow 的实际 id）：
+
+```bash
+node "{{flow_root}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/grill-flows/<flow_id>/tech-design.html"
+```
 
 ### 外壳技术要求
 
@@ -81,23 +90,18 @@
 - **dark/light 切换**：`:root`/`html.dark` CSS 变量 + 按钮 + localStorage + paint 前应用脚本（防闪烁）。mermaid 浅色主题、图文同主题。
 - **sticky 导航 + scrollspy**（锚点配 `scroll-margin-top`）。
 - **默认折叠区**用 `<details>` 收起态；实质内容默认展开。
-- 每张图配全屏查看器：内联静态 fit 宽度（不绑滚轮缩放），点「全屏」后才 zoom/pan，ESC 关闭。**逐字照搬下面 `openFS`。**
+- 每张图配全屏查看器：内联静态 fit 宽度（不绑滚轮缩放），点「全屏」后才 zoom/pan，ESC 关闭。**查看器的样式与脚本是现成资产，走上面的注入步骤，不要手写、不要转写。**
 
-每张图包成 `<figure class="diagram"><div class="diagram-bar"><button data-fs>全屏</button></div><div class="diagram-stage"><svg viewBox="...">…</svg></div></figure>`，配套：
+每张图包成 `<figure class="diagram"><div class="diagram-bar"><button data-fs>全屏</button></div><div class="diagram-stage"><svg viewBox="...">…</svg></div></figure>`。
 
-```css
-.diagram-stage svg{width:100%;height:auto;display:block}
-.fs-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.88);display:flex;flex-direction:column}
-.fs-top{display:flex;justify-content:flex-end;gap:8px;padding:12px}
-.fs-canvas{flex:1;overflow:hidden;cursor:grab}.fs-canvas.grabbing{cursor:grabbing}
-.fs-inner{transform-origin:0 0;position:absolute;top:0;left:0;background:#fff;border-radius:8px}.fs-inner svg{display:block}
-```
+配套的样式（`.diagram-stage` / `.fs-overlay` / `.fs-top` / `.fs-canvas` / `.fs-inner`）和 `openFS` 脚本存放在：
 
-> **`.fs-inner` 背景不可省**：配图用 `-b transparent` 渲染（SVG 透明），全屏遮罩近黑，不给浅色背景则深色文字/线条不可见。`.fs-inner` 尺寸由内部 SVG 显式 width/height 撑开，加背景色不影响 fit() 计算。
+- `{{flow_root}}/references/assets/viewer.css`
+- `{{flow_root}}/references/assets/viewer.js`
 
-```js
-(function(){function openFS(svg){var ov=document.createElement('div');ov.className='fs-overlay';ov.innerHTML='<div class="fs-top"><button data-z="out">－</button><button data-z="in">＋</button><button data-z="reset">重置</button><button data-z="close">关闭 ✕</button></div><div class="fs-canvas"><div class="fs-inner"></div></div>';var canvas=ov.querySelector('.fs-canvas'),inner=ov.querySelector('.fs-inner'),clone=svg.cloneNode(true);clone.removeAttribute('width');clone.removeAttribute('height');inner.appendChild(clone);document.body.appendChild(ov);document.body.style.overflow='hidden';var s=1,tx=0,ty=0,vb=clone.viewBox.baseVal,W=vb.width,H=vb.height;clone.setAttribute('width',W);clone.setAttribute('height',H);function ap(){inner.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')';}function fit(){var cw=canvas.clientWidth,ch=canvas.clientHeight;s=Math.min(cw/W,ch/H)*0.92;tx=(cw-W*s)/2;ty=(ch-H*s)/2;ap();}requestAnimationFrame(fit);canvas.addEventListener('wheel',function(e){e.preventDefault();var f=e.deltaY<0?1.1:0.9,r=canvas.getBoundingClientRect();tx=(e.clientX-r.left)-((e.clientX-r.left)-tx)*f;ty=(e.clientY-r.top)-((e.clientY-r.top)-ty)*f;s*=f;ap();},{passive:false});var drag=false,sx=0,sy=0;canvas.addEventListener('mousedown',function(e){drag=true;sx=e.clientX-tx;sy=e.clientY-ty;canvas.classList.add('grabbing');});window.addEventListener('mousemove',function(e){if(drag){tx=e.clientX-sx;ty=e.clientY-sy;ap();}});window.addEventListener('mouseup',function(){drag=false;canvas.classList.remove('grabbing');});ov.querySelector('.fs-top').addEventListener('click',function(e){var z=e.target.dataset.z;if(!z)return;if(z==='in')s*=1.2;else if(z==='out')s/=1.2;else if(z==='reset')return fit();else if(z==='close')return cl();ap();});function cl(){document.body.removeChild(ov);document.body.style.overflow='';document.removeEventListener('keydown',ok);}function ok(e){if(e.key==='Escape')cl();}document.addEventListener('keydown',ok);}document.querySelectorAll('.diagram').forEach(function(d){var b=d.querySelector('[data-fs]'),sv=d.querySelector('svg');if(b&&sv)b.addEventListener('click',function(){openFS(sv);});});})();
-```
+两份资产**只由上面的 Bash 注入步骤写进 HTML**。要理解查看器行为可以读它们，但**不要把内容复制进 Write/Edit 的参数**。`.fs-inner` 为什么必须有背景色，rationale（缘由）写在 `viewer.css` 的注释里。
+
+> 这两份资产在 feat-flow 下有同源副本（`.ai-flow/feat-flow/references/assets/`），是有意各存一份（`add` 命令按 flow 目录整份复制分发）。**改一边必须同步另一边。**
 
 ### 决策台账 schema（附录速查，固定列）
 
@@ -114,4 +118,8 @@
 - 章节齐全按序（术语表靠前；TL;DR / 背景 / 目标·非目标+US / 现状落位 / 提议方案 / 接口契约决策 / 备选 / 风险 / 方案审查 / 附录台账）。
 - **无 typed 签名 / pseudo-code**；接口契约以散文承载。
 - 实质默认展开、只折附录/枚举；图优先且质量门自检通过；统一宽度、无横向滚动条。
+- **查看器资产已注入**：HTML 里不得残留 `<!--VIEWER_CSS-->` / `<!--VIEWER_JS-->` 占位锚点（残留 = 注入步骤漏跑，全屏查看器会静默失效）。机检：
+  ```bash
+  grep -c 'VIEWER_CSS\|VIEWER_JS' "{{project_root}}/docs/grill-flows/<flow_id>/tech-design.html"   # 必须为 0
+  ```
 - Gate 呈现以本文件为开发者主审面。

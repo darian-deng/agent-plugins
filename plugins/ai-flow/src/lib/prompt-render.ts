@@ -15,13 +15,16 @@ import { join } from 'path';
  *   {{project_root}} → the anchor dir (repoRoot)
  *   {{flow_root}}    → <repoRoot>/.ai-flow/<flowName>
  *
- * No-op for prompts that contain no placeholders (backward compatible).
+ * Placeholder substitution is a no-op for prompts that contain none, but the
+ * render itself is NOT a pure pass-through: every rendered prompt also gets
+ * `writtenDocLengthNote()` appended (see that function for why it lives here).
  */
 export function renderPrompt(content: string, repoRoot: string, flowName: string): string {
   const flowRoot = join(repoRoot, '.ai-flow', flowName);
-  return content
+  const substituted = content
     .replace(/\{\{\s*project_root\s*\}\}/g, repoRoot)
     .replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  return substituted + '\n' + writtenDocLengthNote();
 }
 
 /**
@@ -41,6 +44,33 @@ export function buildAiFlowPreamble(repoRoot: string, flowName: string, baseSha?
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join('\n') + '\n\n';
+}
+
+/**
+ * Universal length discipline for artifacts the stage WRITES TO DISK.
+ *
+ * Appended by `renderPrompt()` to every stage prompt of every flow — gated or
+ * not — so there is one source of truth and flow authors can't forget it.
+ *
+ * Why: ai-flow's deliverables are almost entirely on-disk Markdown (spec /
+ * design / plan / review / long-term memory), and current models write those
+ * markedly longer than asked unless length is stated explicitly.
+ *
+ * Two things the wording must keep doing, both load-bearing:
+ *  - scope itself to written DOCUMENTS, never "artifacts" — an implementation
+ *    stage's artifact is code, and "be shorter" must not reach it;
+ *  - carve out the exhaustiveness rules it would otherwise contradict
+ *    (enumerate-every-member lists, decision ledgers, machine-gate sections
+ *    that must be present even when empty).
+ */
+export function writtenDocLengthNote(): string {
+  return [
+    ``,
+    `─── 写盘文档长度（引擎注入 · 只约束写入磁盘的 Markdown 文档，不约束代码）───`,
+    `写盘文档以最短可用为准：压缩叙述、删样板与重复，能用条目就不写长段落。`,
+    `豁免：要求穷举的清单（批量成员、决策台账等）逐条列全，机器门要求的段落即使无内容也照写——`,
+    `简洁只针对叙述与冗余，绝不用它省掉必需条目。`,
+  ].join('\n');
 }
 
 /**

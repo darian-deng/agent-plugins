@@ -7,7 +7,7 @@
 
 ## 目标
 
-产出 `plan.md`——主粒度 = 执行单元（最大内聚切片），每个 task 自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含三道结构门），无分歧直接进 Stage 4，有分歧 gate 等用户决策。
+产出 `plan.md`——主粒度 = 执行单元（最大内聚切片），每个 task 自带执行所需的全部信息（决策切片 / verify / 文件清单 / 体量标记），让 Stage 4 的 dispatch 退化为机械拼装、不再运行时即兴补信息。生成后由 review subagent 完成三轮内部审查（含三道结构门），无分歧直接写 signal 进 Stage 4；有分歧则**落盘到 plan.md 的「待开发者决策（Stage 3）」节、停下不写 signal**，等开发者决策后再写。
 
 **plan.md 由本 stage 按下方「任务格式规范」直接生成**（feat-flow 原生格式，不依赖外部 plan 生成 skill）。
 
@@ -23,7 +23,11 @@
 
 ## 步骤
 
-**入场判断（/clear 重入）**：若 `{{project_root}}/docs/feat-flows/<flow_id>/plan.md` 已存在 → 跳过步骤 1–3，直接从步骤 5 重跑三轮 review；plan.md 不存在 → 按完整步骤 1→2→3→4→5 执行。
+**入场判断（/clear 重入）**：先读 `{{project_root}}/docs/feat-flows/<flow_id>/plan.md`，按下列三种情况分流——
+
+- **plan.md 不存在** → 按完整步骤 1→2→3→4→5 执行。
+- **plan.md 存在，且含「## 待开发者决策（Stage 3）」节、其中还有未决条目**（`决策:` 为「待开发者」）→ **不重跑 review、不写 signal**。说明上一段 session 已停在「等开发者拍板」这一步：把这些未决条目原样呈给开发者、等决策，之后走步骤 5 末尾「结果」里的收尾（回填决策 + 按决策改 plan.md + 写 signal）。
+- **plan.md 存在，且无该节 / 该节条目全部已决策** → 前者跳过步骤 1–3、直接从步骤 5 重跑三轮 review；后者视为审查已闭环，直接走 Signal（**不重跑 review**——重跑会把同一批分歧再提一遍、把已决策的事重新卡住）。
 
 1. **生成 task 草稿**：按「任务格式规范」+「粒度标准」，把 architecture.md 的模块/接口/build 顺序拆成 task。每 task 填 `done` / `files`（符号锚点）/ `TDD` / `depends_on` / `touches_shared` / `output_size`。
    - TDD 约束：
@@ -201,7 +205,26 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 
 **结果**：
 - **无分歧** → 直接写 signal，进入 Stage 4
-- **有分歧**（Round 3 仍有任何 `done` 准确性或覆盖完整性问题未解决）→ gate 等用户决策，用户决策后写 signal
+- **有分歧**（Round 3 仍有任何 `done` 准确性或覆盖完整性问题未解决）→ **停下、不写 signal**，按下面三步走：
+  1. 把每条未决分歧**先落盘**到 plan.md 末尾「## 待开发者决策（Stage 3）」节（格式见下）——**先落盘再开口**，这样 /clear 掉也能从 plan.md 恢复「卡在等决策」这个状态
+  2. 向开发者呈现这些条目并等他拍板（本 stage 无引擎 Gate，`feat-flow approve` 在这里没有意义，**别提示开发者 approve**；就是普通对话里等他回答）
+  3. 开发者决策后：按决策改 plan.md 相关 task，并把该节每条的 `决策:` 从「待开发者」回填成实际结论；全部条目都回填完，才写 signal
+
+「待开发者决策（Stage 3）」节格式（追加在 plan.md 末尾，「执行单元清单」之后）：
+
+```markdown
+## 待开发者决策（Stage 3）
+
+> 三轮内部 review / 独立耦合边界重推导留下的未决分歧。本节还有未决条目时，Stage 3 不得写 signal。
+
+- D1: <一句话分歧点>
+  - 涉及: Task N / U<k>
+  - review 立场: <…>
+  - 主 session 立场: <…及其 design.md / architecture.md 依据，或「无依据」>
+  - 决策: 待开发者
+```
+
+决策回填后该条变成 `决策: <开发者结论 + 已据此对 plan 做的改动>`。本节是 flow 内归档，可以用 `Task N` / `U<k>` 这类内部指代。
 
 冲突处理：
 - 开发者提异议 → `{{flow_root}}/references/revision-protocol.md`（入口 A）
@@ -222,7 +245,7 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 - 一致 → 通过
 - 不一致（它认为该合但没合 / 它认为不该合却合了）→ 主 session 回头核实：找到具体依据维持原判（同 Round 2 纪律，必须引用 architecture.md / design.md 具体条目，不能凭感觉维持），或采纳调整 plan.md 的 unit 划分
 
-**结果路由**：不一致且未能给出依据解决 → 视为「有分歧」，走上面「结果」同一条路径（gate 等用户决策）；一致或已解决 → 视为「无分歧」的一部分,可与三轮 review 一并写 signal 进入 Stage 4（不新起一套分歧处理机制）。
+**结果路由**：不一致且未能给出依据解决 → 视为「有分歧」，走上面「结果」同一条路径（落盘「待开发者决策（Stage 3）」节 + 停下不写 signal + 等开发者拍板）；一致或已解决 → 视为「无分歧」的一部分,可与三轮 review 一并写 signal 进入 Stage 4（不新起一套分歧处理机制）。
 
 ## 输出规格
 
@@ -231,6 +254,7 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 格式：
 - 每 task = `### Task N` + `unit` + `TDD` + `done` + `verify` + `read_first` + `decisions` + `files`（符号锚点）+ 可选 `depends_on` / `touches_shared` + `output_size` + 可选 `effort_hint` + 可选 `contract`（stub task）
 - plan.md 末尾含「## 执行单元（串行）」清单
+- 有未决分歧时，plan.md 再追加「## 待开发者决策（Stage 3）」节（格式见「内部 Review 机制」§结果）——这是 /clear 重入时识别「卡在等开发者拍板」的唯一落盘依据
 
 ## 完成条件
 
@@ -238,10 +262,13 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 - 每单元符合「粒度标准」（最大内聚切片 + 优先级化拆分轴）；无 `output_size: large` 未拆者；`files` 无行号
 - 每个 `decisions` 条目带可解析 `⟵ 来源`；无 orphan 决策
 - 「执行单元清单」存在，符合拆分轴（截断防御 / 风险等级 / 跨上下文写冲突），无超大单元
-- 三轮内部 review（语义维度 + 三道结构门 + 结构门 7）完成，无分歧（或有分歧但用户已决策）
-- **独立耦合边界重推导已跑**：独立子代理基于 architecture.md/design.md 重新判断的耦合关系与 plan.md 执行单元清单已核对一致（或不一致项已给出依据解决 / 已走 gate 由用户决策）
+- 三轮内部 review（语义维度 + 三道结构门 + 结构门 7）完成，无分歧（或分歧已落盘「待开发者决策（Stage 3）」节、开发者已逐条决策、plan.md 已按决策更新）
+- **独立耦合边界重推导已跑**：独立子代理基于 architecture.md/design.md 重新判断的耦合关系与 plan.md 执行单元清单已核对一致（或不一致项已给出依据解决 / 已落盘待决策节并由开发者决策）
+- plan.md 若有「## 待开发者决策（Stage 3）」节，**其中不得残留 `决策: 待开发者` 的条目**——有残留 = 还没到写 signal 的时候
 
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
 **动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+
+⚠️ 写前最后一查：plan.md 的「## 待开发者决策（Stage 3）」节（若存在）已无 `决策: 待开发者` 的残留条目。

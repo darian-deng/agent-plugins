@@ -1,10 +1,42 @@
-# grill-flow 设计文档（实现思路与对齐基线）
+# grill-flow 设计文档（设计意图与决策档案）
 
-> 本文档是 grill-flow 的**设计真相源**。给开发者与新会话 AI 看：读完即可透彻理解每个 stage 做什么、为什么这么做、引擎怎么支撑、以及落地时要逐条核对什么。可当**标尺**量实现有没有跑偏。
+> # ⚠️ 读前必读：本文档正文部分已过时，**不是行为真相源**
+>
+> **最后核实：2026-08-05，对照 ai-flow v0.43.0 的 `plugins/ai-flow/.ai-flow/grill-flow/` 现版文件。**
+>
+> **给新会话 AI 的指令（据此调整信任度，不要跳过）**：凡涉及 grill-flow **当前实际怎么跑**的问题——谁执行、谁评审、用什么模型、机器门断言什么、commit 怎么落、注释怎么治理——一律以下列现版文件为准，**不得引用本文档正文的执行模型描述作为依据**：
+>
+> ```
+> plugins/ai-flow/.ai-flow/grill-flow/config.json
+> plugins/ai-flow/.ai-flow/grill-flow/stages/*.md
+> plugins/ai-flow/.ai-flow/grill-flow/references/*.md
+> plugins/ai-flow/.ai-flow/grill-flow/scripts/*.cjs
+> plugins/ai-flow/.ai-flow/grill-flow/helper.md
+> ```
+>
+> 本文档正文写于 flow 落地之前；落地后 flow 经过至少两轮真实需求复盘迭代（flow_id `2026-07-27-cy8t`、`2026-08-01-4u4z`），**正文没有回写**。
+>
+> ### 正文的执行模型一律作废
+>
+> 实际执行模型是：**主 session 只做轻量编排器 → 串行派发 fresh 实施子代理（`sonnet`/1M）→ 每票并行派三个评审子代理（`opus`：Standards / Spec / correctness）→ 编排器裁 findings + 逐 ticket 把门 → `gate-stage-3.cjs` fail-closed 兜底**。正文凡出现「亲做 / 主 session 做 / 人在场」字样处一律不可信；这些段落作为**当时的设计取舍与 rationale** 仍有阅读价值，作为**实现描述**已作废，正式取代者是下方两节「⚠ 设计修订」+ 现版 flow 文件。
+>
+> 误导风险最高的几处已**就地加了内联 ⚠️ 标注**（§4 表、§7 章首 / correctness 轴 / `--amend` / 机器门断言、§10 第 4 条、§13）。**未被标注、但涉及执行模型的段落同样不可信——本块统一覆盖**（不逐条列举：列举会被读成「没列到的就可信」）。
+>
+> **正文完全没有记载、别指望能从这里读到的后续实现**：① **`comment` skill**（ai-flow v0.42.0 起内置的注释纪律与清理）——per-ticket commit 前必调、stage-4 环节 C 的 reset 后与 squash 前各调一次，见 `references/per-ticket-review.md`、`references/assembly-review.md`；② **真机验证协议**（`rm:pending` / `rm:done` / `## 待真机验证` 段）——见下方 2026-08-02 修订与 `stages/stage-4.md`。
+>
+> ### 仍然可信、值得读的部分
+>
+> - **§3 引擎事实基线**——逐条对 `plugins/ai-flow/src/` 源码核实过，仍成立（这是全文最耐久的一节）。
+> - **§12 关键决策记录**——历程与 rationale 是历史事实，不因实现演进而失效；本文档剩余价值的主体。
+> - **顶部两节「⚠ 设计修订」（2026-07-29 / 2026-08-02）**——写于落地之后，是最新的设计陈述，优先级高于正文。
+> - **§13** 中与执行模型无关的条目（1、3、4、7、8、9、10、11、12）。
+> - **§5 / §6 / §9** 的 stage-1 / stage-2 / stage-5 设计意图基本仍成立（细节以现版 stage 提示词为准）。
+
+> 本文档是 grill-flow 的**设计意图与决策 rationale 档案**——回答「为什么这么设计、当时否掉了什么、依赖引擎的哪些事实」。**它不回答「现在怎么跑」，也不再是可以拿来量实现的标尺**（行为真相以 `.ai-flow/grill-flow/` 现版文件为准，见上方警示块）。
 >
 > 记录的是 **grill-flow 这个 flow 本身的设计**（元层面、稳定），不是"用 grill-flow 做某个功能"时 stage-2 产出的 `spec.md`（运行时实例、每次 run 会变）。两者别混。
 >
-> 状态：设计定稿（5 stage，含 wayfinder 隐式子模式），待落地（`/ai-flow:create`）。落地时逐条核对 §13 必修清单。经两轮对抗性审查（引擎接续 + mattpocock 保真），结论与修正已并入本文。
+> 状态：**已落地并投入使用**（5 stage，含 wayfinder 隐式子模式；随 ai-flow 插件分发，当前 v0.43.0）。落地后经至少两轮真实需求复盘整改（见顶部两节设计修订），实现已在多处超出本文正文。落地前的两轮对抗性审查（引擎接续 + mattpocock 保真）结论已并入本文。
 
 ---
 
@@ -17,12 +49,12 @@
 - **质量不在敲代码的位置**：质量来自散文 spec + tracer-bullet 切片 + diff 级三轴评审（Standards/Spec/correctness）+ 门，全部与「谁敲的代码」无关；唯一绑定「人在主 session」的价值是「人当 per-ticket 门」，而人不在场时它是空的、只剩 context 爆炸的代价。
 - **context 实测**：8 段 stage-3 主 session 峰值 ≤ 647k（1M 窗口），实施子代理承担的是其真子集（correctness/地板/回灌/重读都不在它身上），单窗口装得下最大迁移/删表 ticket，富余 350k+。故**不预切、不特判迁移大 ticket**，只留 feat-flow 式**截断自保护**兜底罕见超窗。
 
-改后形态：主 session 只编排（context 干净、「继续流」也安全）；实施子代理 `sonnet`/1M、精瘦派发（指针不灌全文）；三评审子代理 `opus`；决策/安全型 finding → `AskUserQuestion` 停下问人（人在环的新落点）；per-ticket 质量门 = 编排器逐 ticket 核验 + `gate-stage-3.cjs` fail-closed（每 `[x]` 有含 `T<n>` 的 commit + `qc:done`）。**代价（已认）**：执行层因此 ≈ feat-flow stage-4，grill-flow 差异化收敛到上游（散文 spec + tracer-bullet + wayfinder）。细节以 `stages/stage-3.md` + `references/per-ticket-review.md` 现版为准。
+改后形态：主 session 只编排（context 干净、「继续流」也安全）；实施子代理 `sonnet`/1M、精瘦派发（指针不灌全文）；三评审子代理 `opus`；决策/安全型 finding → `AskUserQuestion` 停下问人（人在环的新落点）；per-ticket 质量门 = 编排器逐 ticket 核验 + `gate-stage-3.cjs` fail-closed（每 `[x]` 有 subject 含 `T<n>` 的独占 commit + 该条上的 `qc:done`）。**代价（已认）**：执行层因此 ≈ feat-flow stage-4，grill-flow 差异化收敛到上游（散文 spec + tracer-bullet + wayfinder）。细节以 `stages/stage-3.md` + `references/per-ticket-review.md` 现版为准。
 
 **另（P0-3）**：stage-5 沉淀 approve 后须 `git commit --amend` 折进 stage-4 那笔 `flow-squash` 提交（照搬 feat-flow stage-6），否则沉淀游离未提交、破坏「单 flow 单 commit」不变量。已并入 `stages/stage-5.md`。
 
 **同批修的复盘 P1**（均已并入现版文件）：
-- **P1-5**（per-ticket "一个 commit" 与记账后置矛盾）：每 ticket 只产一笔**代码** commit（含 `T<n>`）；记账（candidates.md、tickets.md 的 `qc:done`/`[x]`）留工作树、由 stage-4 环节 C `git reset` + `git add -A` squash 一并吸收（既有机制，非新增）。见 `references/per-ticket-review.md`。
+- **P1-5**（per-ticket "一个 commit" 与记账后置矛盾）：每 ticket 只产一笔**代码** commit（subject 含 `T<n>`）；记账（candidates.md、tickets.md 的 `qc:done`/`[x]`）留工作树、由 stage-4 环节 C `git reset` + `git add -A` squash 一并吸收（既有机制，非新增）。见 `references/per-ticket-review.md`。
 - **P1-6**（gate-pending 门无复检）：引擎 `approve` 放行前，对配了 `completion.script` 的 stage **重跑一次结构门**（复用 signal 时同一 `runScript`），不过则 deny + 回 stderr。**影响所有 flow（含 feat-flow）**——合规时幂等必过。见 `src/lib/commands/approve.ts`。
 - **P1-7**（上游 scope 未结清）：stage-1 写 signal 前 `AskUserQuestion` 逐条结账（功能对等边界/删除项/推迟未来 flow 项）＋替换迁移型强制《功能覆盖缺口清单》；stage-2 稳定跨端/跨仓契约沉淀为 spec 附录、gate-pending 范围级变更回写 alignment。见 `stages/stage-1.md`、`stages/stage-2.md`。
 - **P1-8**（monorepo commit 撞 pre-commit 被迫 `--no-verify`）：镜像 feat-flow 的「pre-commit hook 冲突」文档化四步协议（依据须引 `Blocked by`/切片顺序、注明跳过原因、安全网=客观地板+stage-4 环节 A+squash 摊平）；stage-4 环节 C `git add -A` 前做 scope 核对（本 flow 代码 ∪ `docs/grill-flows/**`，挡跨子项目 stray）。见 `references/per-ticket-review.md`、`stages/stage-4.md`、`references/assembly-review.md`。
@@ -36,7 +68,7 @@
 - **停点边界收紧**：frontier 分岔出多张同时够格的 ticket → 按 tickets.md 文件序确定性取第一张、**绝不问「先做哪条」**（顺序不是决策）；「某票需真机验证」也不是停点（打标继续）。stage-3 唯一的 `AskUserQuestion` 停点仍只有一个——每票评审冒出的、与 stage-1/2 spec 有出入的决策/安全型 finding（上文 §… 与 2026-07-29 修订的该落点不变，本节只补「顺序/真机不停」）。
 - **真机验证协议（方案 B，开发者选定）**：原流程 align→spec→implement(机器地板)→code-review(IDE 读 diff)→沉淀，**无运行时验证落点**。改为——stage-3 对需真机/鉴权/运行时验证的票照常实现+地板+提交，打 `rm:pending` 标 + 往 tickets.md `## 待真机验证` 段登记 `- T<n> — 验什么`，**不停、连续跑**；stage-4 环节 C 开发者在场时按清单逐票真机验、收口 `rm:done`，全部收口（或对某票明确豁免）才 squash。真机验证由此**有家、有 gate 兜底**（stage-4 是 gate stage）。契合复盘暴露的「AFK 跑就裸奔」——真机验证集中到人真在场的 stage-4。
 - **三评审并行**：per-ticket 三评审子代理（Standards/Spec/correctness）改**一次并行派**（只读同一份未提交 diff、不写文件、无 race，裁 findings 处天然汇合），与 stage-4 环节 B 双轴并行审一致。2026-07-29 修订的「串行」纪律只约束**实施子代理**，不约束评审——本节澄清、别误伤。
-- **gate 安全性（已核）**：`rm:pending` / `rm:done` / `## 待真机验证` 段不影响 `gate-stage-3.cjs`（只认 `[x]`/`[ ]`/`qc:done`/含 `T<n>` 的 commit）；**清单条目须用 `- T<n> —` 非复选框格式**——写成 `- [ ] T<n>` 会被 gate 的未勾正则误判为未完成 ticket 而 fail-closed。无需改 gate 脚本。
+- **gate 安全性（已核）**：`rm:pending` / `rm:done` / `## 待真机验证` 段不影响 `gate-stage-3.cjs`（只认 `[x]`/`[ ]`/该票那条上的 `qc:done`/subject 含 `T<n>` 的 commit）；**清单条目须用 `- T<n> —` 非复选框格式**——写成 `- [ ] T<n>` 会被 gate 的未勾正则误判为未完成 ticket 而 fail-closed。无需改 gate 脚本。
 
 细节以 `stages/stage-3.md` + `stages/stage-4.md` + `references/per-ticket-review.md` + `references/assembly-review.md` 现版为准。
 
@@ -131,6 +163,8 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
 | 3 implement | 逐 ticket 亲做：实现→**/simplify→Standards+Spec 双轴+correctness**→修→地板→**commit**→qc marker→勾[x]（commit 在质量链后，审查才审得到真实改动）| script | unrestricted |
 | 4 code-review | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环 → squash 一笔 feat commit | **gate** | unrestricted |
 | 5 沉淀 | optimize-claude-context（CLAUDE.md/rules/ADR） | **gate** | unrestricted |
+
+> ⚠️ 表中 stage-3 那格「逐 ticket **亲做**」已废弃——现版是编排器串行派发子代理（见 §7 章首标注与顶部警示块）。stage 数 / completion / write_scope 三列仍与现版 `config.json` 一致。
 
 - **gate（人工 approve）：1 / 2 / 4 / 5（4 个）**。
 - **script（秒级 grep/awk 机器门）：2 / 3**。
@@ -236,6 +270,8 @@ mode: charting | working | clear
 
 ## 7. Stage 3 — implement（completion: script，无 gate）
 
+> ⚠️ **本章执行模型已废弃**：正文的「主 session 亲做」实际是「轻量编排器串行派发 fresh 子代理实施 + 三评审子代理并行 + 编排器把门」。见顶部警示块与两节设计修订；现版以 `stages/stage-3.md` + `references/per-ticket-review.md` 为准。下文保留作当时的设计 rationale。
+
 - **入场**：全部 flow docs（alignment+wayfinder-map+spec+tickets）先 commit → 再写 `mark-base` 捕获 base_sha_code（顺序钉死）；**分支预检**（不在 main/master）；脏树预检豁免 `docs/grill-flows/`。
 - **循环**：读 frontier（第一个未勾 ticket 级项 + 所有 blocker 已勾）→ 主 session 亲做。**commit 在质量链之后**——审查/simplify 必须审到真实改动，commit-first 会让它们审空树、per-ticket 双轴+correctness 集体失效（这是全新独立审查抓到的核心缺陷）：
   1. **脏树预检**（`git status --porcelain`）；重入时用 `git log --oneline <base>..HEAD` 目测 frontier ticket 是否已有 commit（有 commit = 质量已过的锚）。
@@ -244,11 +280,13 @@ mode: charting | working | clear
      - **`/simplify`**（自动 apply 机械型质量修——复用/简化/效率）。
      - **Standards 轴子代理**：携 Fowler baseline + 未提交 diff，report-only 判断型 smell（不 apply，与 simplify 分工；不砍 smell 退化成 correctness）。
      - **Spec 轴子代理**：携 spec.md + 未提交 diff，自定义 prompt 查一致性（早期抓 spec-drift）。内置 skill 给不了。
-     - **correctness**：Claude Code 内置 `/code-review`（默认审当前未提交 diff——ticket 改动全在工作树、正好被它看到；无需 PR、勿加 `--comment`）。
+     - **correctness**：**`opus` 子代理携该 ticket 未提交 diff + 自定义 prompt 专审 bug**（逻辑错误、边界/空值、错误处理与失败路径、并发竞态、注入/鉴权/密钥类安全隐患），report-only、不依赖任何内置 slash 命令或子项目配置。
+       > ⚠️ 已由后续实现修正：初版此处写「用 Claude Code 内置 `/code-review`」，落地时改为自定义子代理（内置命令依赖子项目配置、不通用）。现版依据：`references/per-ticket-review.md` 第 4 步、`helper.md` 环境要求、`preflight.cjs` 注释——`/code-review` 在整个 `.ai-flow/grill-flow/` 下一次都不出现。
      - **子代理都不开 worktree**（看未提交 diff）——引擎只算主 session context，子代理不计入；~30 ticket 约 4-6 次 /clear。
      - 按 findings 修复（仍未提交）；关键修复独立复核兜底。
   4. **per-ticket 客观地板**（AI 自觉纪律，非引擎强制）：typecheck + 该 ticket 相关测试绿；**假绿检测**=测试选择器实际匹配 ≥1 个测试；**枚举负空间检查**=ticket 蕴含 N 个错误码/状态/分支时逐项核 diff 都实现+断言；**回归纪律**=既有测试挂了当回归、改代码不改测试。
-  5. **commit**：实现+simplify+修复**一次性提交为一个独立 commit**（引用 ticket 号）作**执行期锚点**、**无需 --amend**（一次到位）。commit = 本 ticket 质量完成锚；这些 per-ticket commit 收尾在 stage-4 环节 C 被 `git reset` 摊平、squash 成一笔。
+  5. **commit**：实现+simplify+修复**一次性提交为该 ticket 唯一一笔独立 commit**（**commit subject 首行必须含 `T<n>`**，机器门只解析 subject 据此核对 ticket↔commit；见 §13 必修 6 的 ⚠️）作**执行期锚点**。**常规路径一次到位；例外是截断自保护**——实施子代理近窗口上限时先 `git commit` 已完成部分（message 标 `[partial]`）+ 留「剩余工作」清单，编排器续派下一轮，**末轮用 `git add -A && git commit --amend` 折回那笔 `[partial]`、去掉标记**，保住「一 ticket 一 commit」。commit = 本 ticket 质量完成锚；这些 per-ticket commit 收尾在 stage-4 环节 C 被 `git reset` 摊平、squash 成一笔。
+     > ⚠️ 已由后续实现修正：初版此处写「**无需 `--amend`**（一次到位）」，落地时新增了截断自保护，末轮 `--amend` 是它的必要环节。现版依据：`references/per-ticket-review.md` 第 1 步与重入判据、`stages/stage-3.md` 输出规格。
   6. 落沉淀候选（**带 ticket ID 前缀，append 前 grep 去重**）到 candidates.md。
   7. **写 qc marker**（tickets.md 该条 `qc:done`）**再标 ticket 级 `[x]`**。顺序铁律：实现→simplify→双轴→correctness→修复→地板→commit→候选→qc marker→勾[x]。
   8. **重入判据（防质量步骤被静默跳过 / 防丢进度）**，以"有无该 ticket commit"为质量完成锚：
@@ -259,6 +297,7 @@ mode: charting | working | clear
 - **context**：提示词只一句"进度在 tickets.md 勾选 + qc marker + candidates.md；/clear 后重读 tickets.md 从 frontier 续"。阈值叙述不写进提示词（引擎+config 管；grill-flow 配宽松 warn、不配 block）。
 - **切片撑爆窗口** = 上游切片错 → **就地在 tickets.md 重切该 ticket 并知会开发者**（引擎无反向 stage 转移）。
 - **script 门（秒级，fail-closed）**：先 `[ -f "$TICKETS" ] || exit 1`；再用 awk **同时断言"≥1 个已勾 ticket 级项 AND 无未勾"**（`awk 'BEGIN{c=0}/^- \[x\] T/{c++}/^- \[ \] T/{bad=1}END{exit (bad||c==0)}'`）——**不能依赖"空文件自然非零"**（裸 awk 对空文件走 END、未置标志会 exit 0 = 误 PASS；stage-3 无 gate，误放行直接把空 tickets 冲进 stage-4）。**禁 `grep&&exit1||exit0` 反相 idiom**。**诚实定位**：防"忘做"（漏勾）+ 防编译破；**拦不住** AI 谎标[x]/空实现——真正反谎报靠 stage-4 全量测试 + 人工 gate。
+  > ⚠️ 断言清单已过时：现版 `scripts/gate-stage-3.cjs` 断言**三条**（本文只写了第一条）——① ≥1 已勾且无未勾（非标准复选框的 ticket 级行直接拦）；② 每个 `[x]` ticket 在自己那条上（该行内或其缩进子项）写了 `qc:done`（不是全文计数——说明性文字会灌水）；③ 每个 `[x]` ticket 在 `base_sha_code..HEAD` 有属于自己的一笔 commit、**subject 首行含票号**（不看 body），一笔 commit 只能认领一个 ticket（缺 `base_sha_code` 即 fail-closed）。
 - **出口**：frontier 空 → 写 `done` → script 校验全 `[x]` → 自动进 stage-4。
 - **诚实边界**：per-ticket 的 simplify+双轴CR+客观地板都是**纪律，不是引擎强制门**（stage 内无挂载点）；强制兜底在 stage-4 gate。
 
@@ -291,7 +330,8 @@ mode: charting | working | clear
 1. **script 门只做秒级、可移植、grep/awk 型结构检查**，**一律 fail-closed**（每个被检文件先 `[ -f ]||exit 1`，非空段用裸 awk，禁反相 idiom）。绝不把耗时命令塞进同步 hook。
 2. **耗时验证（测试/typecheck）由 AI 跑**（异步可见），结果落报告；假绿检测/枚举负空间/回归纪律是纪律；**人在 gate 看原始输出**把关。
 3. **判断型 review = 独立子代理**（context 隔离），绝不让主 session 自评刚写的 diff。
-4. **人在场**（主 session 亲做、每个 ticket 看得见）替代 feat-flow 的 AFK 补偿重门。
+4. ~~**人在场**（主 session 亲做、每个 ticket 看得见）替代 feat-flow 的 AFK 补偿重门。~~
+   > ⚠️ **已废弃**（2026-07-29 修订逐字点名作废本条）：实践证伪「人在场」前提（开发者是「继续流」）。现行替代物 = **编排器逐 ticket 把门 + `gate-stage-3.cjs` fail-closed + stage-4 gate 的人审**；人在环的落点收敛为 stage-3 的决策/安全型 `AskUserQuestion` 与 stage-4 环节 C（含真机验证清单）。
 5. **wayfinder / per-ticket 循环跨 /clear 存活，全靠产物落盘 + marker + 提示词自读**（引擎只到 stage 级）。marker = wayfinder mode、qc、tickets [x]。
 6. **flow_id 一律从 `{{flow_root}}/state/active.json` 读**（`node -p`，`||exit 1`），禁 `{{flow_id}}` 占位符和 jq。
 7. **script 路径**：cwd=flowDir → `./state/active.json` 读 id、`$(cd ../.. && pwd)` 拼 project_root；preflight 的 cwd=repoRoot 另算。
@@ -329,8 +369,11 @@ mode: charting | working | clear
 2. **所有 script 门 fail-closed**：stage-2/3 每条 script 对每个被检文件先 `[ -f "$F" ]||exit 1`，非空段用裸 awk，**禁 `grep&&exit1||exit0` 反相 idiom**。**stage-3 尤其**（无 gate，误放行直接冲 stage-4）：用 awk **显式断言"≥1 已勾 ticket 级项 AND 无未勾"**，**别信"空文件自然非零"**（空文件走 awk END、未置标志会 exit 0=误 PASS）。
 3. **wayfinder 四态重入 + mode marker 写进 stage-1 提示词开头**：map 不存在→grill / charting→建图 / working→读 frontier / clear→综合 alignment 去 gate；marker 缺失/非法→停下问开发者；clear 后又提迷雾→翻回 working。**用 marker 判模式，不用"map 是否存在"**（否则 bootstrap 死循环）。写 signal 前置=`mode:clear`+已确认。**Y2 兜底诚实写**：误写 signal 后走 gate-pending 分支、不重注 stage-1 提示词，"探测"跑不到——靠用户拒批 + AI 主动重读 map/当前 stage 提示词续，前置条件才是主防线。
 4. **charting 禁 resolve 设成硬约束祈使句**（charting 与 working 是互斥指令挤一份提示词、最尖锐的 mode-confusion 点）：charting 只建图、唯一出口写 `mode:working`。
-5. **per-ticket 双轴的实现机制写死**：**Spec 轴 = 子代理携 spec.md + 该 ticket 自定义 prompt**（内置 `/code-review` 审 current diff、不吃 spec.md，给不了 Spec 轴——照字面接会把双轴又丢回上一版净损失）；**Standards 轴 = 子代理携 Fowler baseline、report-only 判断型 smell**（不 apply，与 simplify 的 apply 分工，别把 smell 砍掉退化成 correctness）；correctness 子项用 **Claude Code 内置 `/code-review`**（默认审当前未提交 diff，无需 PR）。注：双轴与收尾组装审是自定义子代理 prompt、不调 `/code-review` 命令，故不涉及此项。
-6. **per-ticket commit 时序 + 防跳过**：**commit 在质量链之后**（实现→simplify→双轴→correctness→修复→地板→commit），让审查/simplify 审到真实未提交改动——commit-first 会让它们审空树、核心审查失效（全新独立审查抓到的 🔴）。每 ticket 一个独立 commit 作**执行期锚点**、**无需 --amend**（收尾在 stage-4 环节 C squash 成一笔）；qc marker 用 tickets.md `qc:done`；重入以"有无该 ticket commit"为质量完成锚（无 commit+有工作树改动→重跑质量链；有 commit 无 qc→补收尾；有 qc 无 [x]→补勾）。
+5. **per-ticket 双轴的实现机制写死**：**Spec 轴 = 子代理携 spec.md + 该 ticket 自定义 prompt**（内置 `/code-review` 审 current diff、不吃 spec.md，给不了 Spec 轴——照字面接会把双轴又丢回上一版净损失）；**Standards 轴 = 子代理携 Fowler baseline、report-only 判断型 smell**（不 apply，与 simplify 的 apply 分工，别把 smell 砍掉退化成 correctness）；**correctness 子项 = `opus` 子代理携未提交 diff + 自定义 prompt 专审 bug 与安全隐患，report-only、不依赖任何内置 slash 命令**（任何仓库/子项目都通用）。三轴一次并行派，全部是自定义子代理 prompt。
+    > ⚠️ 已由后续实现修正：初版此条写「correctness 子项用 Claude Code 内置 `/code-review`」，落地时改为自定义子代理。现版依据：`references/per-ticket-review.md` 第 4 步、`preflight.cjs` 注释（明写 correctness 轴无需 preflight 检测内置命令）。
+6. **per-ticket commit 时序 + 防跳过**：**commit 在质量链之后**（实现→simplify→双轴→correctness→修复→地板→commit），让审查/simplify 审到真实未提交改动——commit-first 会让它们审空树、核心审查失效（全新独立审查抓到的 🔴）。每 ticket 一个独立 commit 作**执行期锚点**、**commit subject（首行）必须含 `T<n>` 且一笔只认领一票**（收尾在 stage-4 环节 C squash 成一笔）；**例外：截断自保护的 `[partial]` 提交，末轮须 `git add -A && git commit --amend` 折回**（下方 ⚠️）；qc marker 用 tickets.md `qc:done`；重入以"有无该 ticket commit"为质量完成锚（无 commit+有工作树改动→重跑质量链；有 commit 无 qc→补收尾；有 qc 无 [x]→补勾）。
+    > ⚠️ 已由后续实现修正：初版此条写「**无需 `--amend`**」。落地新增了截断自保护（实施子代理近窗口上限先提交 `[partial]` + 剩余清单，编排器续派，**末轮 `--amend` 折回**），`--amend` 成为该路径的必要环节。现版依据：`references/per-ticket-review.md`、`stages/stage-3.md`。
+    > ⚠️ 已就地修正为当前事实：初版此条写「**message** 必须含 `T<n>`」，现版 `gate-stage-3.cjs` 已收紧到**只解析 commit subject（首行）、不看 body**，并逐 commit 一一配对（一笔 commit 只能认领一个 ticket）。理由：「pre-commit hook 冲突」协议要求把跳过原因写进 message、字面例子就是「consumer 修复落在 `T<n>`」——这是系统性地往 body 里种**对未来票号的前向引用**，若整段 message 都算数，一句提及就能替尚未存在的票顶包。故跳过说明须用第二个 `-m` 写进 body、subject 只留本票号。现版依据：`scripts/gate-stage-3.cjs` 断言③、`references/per-ticket-review.md` 步骤 7 与 hook 协议第 2 条。
 7. **ticket 级完成标记与 AC checkbox 区分**：frontier/门只认 ticket 级 `- [ ] T<n>`，ticket 内 AC 子项不参与判定。
 8. **stage-1 prototype 每次增改走 Bash（禁 Edit/Write）**（docs_only 会 deny 非 docs 的 Edit/Write，Bash 不受管）、**写 repo 之外 `$(mktemp -d)`**（否则 stage-3 脏树恒脏）、标 throwaway、不 commit。
 9. **wayfinder-map.md 落 docs_paths 内**（否则 write_scope 拒）；preflight cwd=repoRoot（写 mmdc 检查时别假设 flowDir）。

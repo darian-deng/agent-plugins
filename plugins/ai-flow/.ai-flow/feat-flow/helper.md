@@ -44,7 +44,7 @@ feat-flow help                      # 查看本文档
 |----|------|------|---------|
 | stage-1 | 需求确认（接地式问询 / load-bearing 结论走 AskUserQuestion / 术语表 / 需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
 | stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成 tech-design.html 开发者对齐视图） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ mermaid/mmdc（配图） |
-| stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 三道结构门，有分歧才 gate） | ❌（内部 review 无分歧时无 Gate） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
+| stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review + 三道结构门，有分歧则落盘 plan.md「待开发者决策」节、停下等开发者拍板） | ❌（无 Gate；有分歧时靠「不写 signal」软停，无引擎兜底） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
 | stage-5 | 质量门（回归 + 组装级双视角 + 人审闭环：集成闭环 + 强制安全 + 人工 review 在工作区 diff→修复→最终 CR→squash 成单 feat 提交） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
 | stage-6 | 知识沉淀（增 / 修 / 退役；代码已由 stage-5 squash） | ✅（汇总表即 gate 呈现，approve 后把知识沉淀 amend 进 feat 提交、结束流程） | optimize-claude-context（handle-one-directive 单工具覆盖 CLAUDE.md/rules/skills/ADR 全 4 层） |
@@ -56,7 +56,7 @@ docs/feat-flows/<flow_id>/
 ├── design.md                # 需求 / 决策记录 / 术语表 / UI 状态 / 项目命令 / AC（Stage 1 起累积）
 ├── architecture.md          # 模块定位 / 接口 / 数据流 / build 顺序（Stage 2）
 ├── tech-design.html         # 开发者对齐视图：术语表靠前 / 现状落位图 / 提议方案(机制可感知) / 实施路径 / 决策台账附录速查（Stage 2 Gate 主审面；从 md 生成的单向视图，重生成而非手改）
-├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）
+├── plan.md                  # Task 列表（Stage 3 起，Stage 4 维护 [x] 进度）；Stage 3 内部 review 若留下未决分歧，追加「## 待开发者决策（Stage 3）」节——这是无 Gate 的 stage-3 «停下等开发者» 状态的唯一落盘依据，/clear 重入靠它恢复
 ├── task-reports.md          # Stage 4 每 task 的元信息累积（新术语 / ADR 候选 等）
 ├── review.md                # 审查结论 + 待开发者决策（Stage 5）
 └── context-delta.md         # Context 变化提案（Stage 2 创建，Stage 5 追加，Stage 6 读取）
@@ -75,7 +75,7 @@ docs/feat-flows/<flow_id>/
 
 写入后有两种行为，由 stage 配置决定：
 - **有 Gate 配置的 stage**：引擎暂停，等待开发者 `feat-flow approve`。**顺序铁律**：approve 提示由引擎在 signal 写入后回注，AI 只能在写 signal、收到引擎「已提交」确认之后才呈现摘要 + 提示 approve；未写 signal 时 `approve` 会被引擎拒绝（见 `commands/approve.ts`）。这条铁律由引擎在注入任何 gated stage 提示词时**自动追加**（`prompt-render.ts` 的 `gateProtocolNote()`，覆盖 start / advance / session 恢复 / resume 四处注入点），不写在各 flow 的 stage `.md` 里——所以新 flow 经 `/ai-flow:create` 创建后也自动具备，flow 作者无需手写
-- **无 Gate 配置的 stage**：引擎立即推进，AI 无需等待开发者确认
+- **无 Gate 配置的 stage**：引擎立即推进，AI 无需等待开发者确认。**引擎没有「条件 gate」这种原语**（`gate` 是静态布尔，见 `src/lib/flow-schema.ts`），也**没有反向 stage 转移**——所以「某些情况下才停下等开发者」只能由 AI 用**不写 signal** 软停实现，并且必须把「在等什么」落盘（stage-3 有分歧时写 plan.md 的「待开发者决策（Stage 3）」节，就是这个机制；无 Gate 的 stage 也不该提示开发者 `approve`，那会被引擎拒绝）
 
 session 恢复时引擎会读取 signal 内容自动识别当前状态（gate 等待、自愈推进或正常恢复）
 

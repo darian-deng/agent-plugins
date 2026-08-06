@@ -2,7 +2,7 @@
 // grill-flow stage-2 完成门（秒级结构检查，fail-closed）。
 // 引擎在 AI 写 signal=done 时以 cwd=flowDir 跑 `node scripts/gate-stage-2.cjs`。
 // exit 0 = 通过（随后进人工 gate）；非 0 = deny 写 signal，stderr 回给 AI 逼修。
-// 只做结构检查（文件存在 + 段落非空 + ticket 格式），不跑测试、不做语义判断。
+// 只做结构检查（文件存在 + 查看器锚点已注入 + 段落非空 + ticket 格式），不跑测试、不做语义判断。
 'use strict';
 
 const { existsSync, readFileSync } = require('fs');
@@ -41,12 +41,23 @@ for (const [name, p] of [['spec.md', spec], ['tickets.md', tickets], ['tech-desi
   }
 }
 
+// tech-design.html：查看器资产必须已注入（spec-view.md 完成判据）。
+// 锚点残留 = 注入步骤漏跑，全屏查看器静默失效——HTML 注释在渲染页不可见，
+// 人工 gate 上方案页"看着完整"，只有真去点全屏才发现没反应，所以人审兜不住这条。
+const htmlText = readFileSync(html, 'utf-8');
+if (htmlText.includes('<!--VIEWER_CSS-->') || htmlText.includes('<!--VIEWER_JS-->')) {
+  err('tech-design.html 仍残留 <!--VIEWER_CSS--> / <!--VIEWER_JS--> 占位锚点（查看器资产未注入，全屏查看器会静默失效）'
+    + '\n    怎么改：按 references/spec-view.md 的资产注入步骤，把 viewer.css / viewer.js 内容替换进这两个锚点，'
+    + '再确认 grep -c \'VIEWER_CSS\\|VIEWER_JS\' 该文件为 0。');
+  process.exit(FAIL);
+}
+
 // spec.md 三个段必须存在且非空（段标题到下一个 ## / 文件尾之间有非空白内容）。
 // 段标题字符串与 stage-2 提示词写死一致（改一处必同步另一处，否则门永远失败）。
 function sectionNonEmpty(text, heading) {
   const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 前缀匹配，不锚行尾——允许标题后带注解（如 "## User Stories（编号）"），
-  // 避免注解诱导下门永远失败（见 design §14 必修1 的字符串对死风险）。
+  // 避免注解诱导下门永远失败（见 design §13 架构必修1 的字符串对死风险）。
   const re = new RegExp('^##\\s+' + esc, 'm');
   const m = re.exec(text);
   if (!m) return false;

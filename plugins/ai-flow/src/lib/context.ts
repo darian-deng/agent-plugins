@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { existsSync, openSync, fstatSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -7,6 +7,10 @@ interface TokenUsage {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
 }
+
+// Bytes of transcript tail to read per attempt. The answer is normally within
+// the last few lines, so this is generously sized; on a miss it grows ×8.
+const TAIL_WINDOW_BYTES = 256 * 1024;
 
 function transcriptPathFor(sessionId: string, cwd: string): string {
   const encoded = cwd.replace(/\//g, '-');
@@ -22,25 +26,48 @@ function transcriptPathFor(sessionId: string, cwd: string): string {
 export function readTokenCount(sessionId: string, cwd: string, transcriptPath?: string): number {
   const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
   if (!existsSync(p)) return 0;
+  // We only want the LAST assistant entry carrying a usage block, so read the
+  // tail and walk backwards — the first hit is already the answer. Reading and
+  // parsing the whole file cost ~27ms and ~110MB of transient allocation on a
+  // 16MB transcript, and this runs on every PostToolUse Edit/Write — i.e. most
+  // often exactly when the file is largest.
+  let fd: number | null = null;
   try {
-    const lines = readFileSync(p, 'utf-8').split('\n').filter(Boolean);
-    let lastUsage: TokenUsage | null = null;
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line) as { type?: string; message?: { usage?: TokenUsage } };
-        if (entry.type === 'assistant' && entry.message?.usage) {
-          lastUsage = entry.message.usage;
-        }
-      } catch { /* skip malformed lines */ }
+    fd = openSync(p, 'r');
+    const size = fstatSync(fd).size;
+    if (size === 0) return 0;
+    for (let window = TAIL_WINDOW_BYTES; ; window *= 8) {
+      const start = Math.max(0, size - window);
+      const buf = Buffer.allocUnsafe(size - start);
+      // Honour the actual byte count: the buffer is uninitialised, and a short
+      // read would leave garbage at its tail — which a backwards scan hits FIRST.
+      const bytesRead = readSync(fd, buf, 0, buf.length, start);
+      const lines = buf.subarray(0, bytesRead).toString('utf-8').split('\n');
+      // A window that doesn't start at byte 0 almost certainly cuts a line (and
+      // possibly a multi-byte char) in half — that debris is confined to the
+      // first element, so drop it. It is never the entry we're after: any line
+      // we skip here is covered by the next, larger window.
+      if (start > 0) lines.shift();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        try {
+          const entry = JSON.parse(lines[i]!) as { type?: string; message?: { usage?: TokenUsage } };
+          const usage = entry.type === 'assistant' ? entry.message?.usage : undefined;
+          if (usage) {
+            return (
+              (usage.input_tokens ?? 0) +
+              (usage.cache_creation_input_tokens ?? 0) +
+              (usage.cache_read_input_tokens ?? 0)
+            );
+          }
+        } catch { /* skip malformed lines */ }
+      }
+      if (start === 0) return 0; // whole file scanned, no usage entry
     }
-    if (!lastUsage) return 0;
-    return (
-      (lastUsage.input_tokens ?? 0) +
-      (lastUsage.cache_creation_input_tokens ?? 0) +
-      (lastUsage.cache_read_input_tokens ?? 0)
-    );
   } catch {
     return 0;
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* already gone */ } }
   }
 }
 
