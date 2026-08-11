@@ -1,11 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import {
   readActiveState,
   writeActiveState,
+  patchActiveState,
   hasActiveFlow,
   readSignal,
   writeSignalFile,
@@ -86,6 +87,108 @@ describe('writeActiveState', () => {
     await writeActiveState(root, 'test-flow', state);
     const loaded = await readActiveState(root, 'test-flow');
     expect(loaded).toEqual(state);
+  });
+});
+
+describe('patchActiveState', () => {
+  it('merges only the given fields, leaving the rest as they are on disk', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState({ base_sha_code: 'CODE_SHA' }));
+    const merged = await patchActiveState(root, 'test-flow', { current_stage: 'review' });
+    expect(merged!.current_stage).toBe('review');
+    expect(merged!.base_sha_code).toBe('CODE_SHA');
+    expect((await readActiveState(root, 'test-flow'))!.base_sha_code).toBe('CODE_SHA');
+  });
+
+  it('returns null and creates nothing when active.json is absent', async () => {
+    const root = makeTmp();
+    const result = await patchActiveState(root, 'test-flow', { current_stage: 'review' });
+    expect(result).toBeNull();
+    expect(existsSync(join(root, '.ai-flow', 'test-flow', 'state', 'active.json'))).toBe(false);
+  });
+
+  it('derives the patch from the state at write time, not from the caller', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState({ last_session_id: 'owner' }));
+    const seen: Array<string | null> = [];
+    await patchActiveState(root, 'test-flow', (cur) => {
+      seen.push(cur.last_session_id);
+      return { last_session_id: 'taken-over' };
+    });
+    expect(seen).toEqual(['owner']);
+  });
+
+  // The failure mode this whole mechanism exists for. PostToolUse fires for
+  // subagent tool calls too, so a hook can still be holding an ActiveState it read
+  // seconds ago while the owner advances the stage and captures base_sha_code.
+  it('a lagging writer neither rolls back current_stage nor erases base_sha_code', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState());
+    const stale = (await readActiveState(root, 'test-flow'))!;
+
+    await patchActiveState(root, 'test-flow', { current_stage: 'review' });
+    await patchActiveState(root, 'test-flow', { base_sha_code: 'CODE_SHA' });
+
+    const warning = { warned: true, warned_at_pct: 62, warned_at: '2024-01-01T00:00:00.000Z' };
+    await patchActiveState(root, 'test-flow', { context_warning: warning });
+
+    const after = (await readActiveState(root, 'test-flow'))!;
+    expect(after.current_stage).toBe('review');
+    expect(after.base_sha_code).toBe('CODE_SHA');
+    expect(after.context_warning.warned_at_pct).toBe(62);
+
+    // Same intent expressed as a whole-document write — the shape every mutating
+    // call site used to have. It loses both fields, which is why writeActiveState
+    // is reserved for start/resume.
+    await writeActiveState(root, 'test-flow', { ...stale, context_warning: warning });
+    const clobbered = (await readActiveState(root, 'test-flow'))!;
+    expect(clobbered.current_stage).toBe('work');
+    expect(clobbered.base_sha_code).toBeUndefined();
+  });
+
+  it('concurrent patches all land — every writer keeps its own field', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState());
+    await Promise.all([
+      patchActiveState(root, 'test-flow', { current_stage: 'review' }),
+      patchActiveState(root, 'test-flow', { base_sha_code: 'CODE_SHA' }),
+      patchActiveState(root, 'test-flow', { context_blocked: true }),
+      patchActiveState(root, 'test-flow', { first_prompt_handled: true }),
+    ]);
+    const after = (await readActiveState(root, 'test-flow'))!;
+    expect(after.current_stage).toBe('review');
+    expect(after.base_sha_code).toBe('CODE_SHA');
+    expect(after.context_blocked).toBe(true);
+    expect(after.first_prompt_handled).toBe(true);
+  });
+
+  it('serializes concurrent append-style patches (8 in flight, 8 recorded)', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState({ history_session_ids: [] }));
+    await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        patchActiveState(root, 'test-flow', (cur) => ({
+          history_session_ids: [...(cur.history_session_ids ?? []), `sess-${i}`],
+        }))
+      )
+    );
+    const after = (await readActiveState(root, 'test-flow'))!;
+    expect(after.history_session_ids).toHaveLength(8);
+    expect(new Set(after.history_session_ids)).toEqual(
+      new Set(Array.from({ length: 8 }, (_, i) => `sess-${i}`))
+    );
+  });
+
+  it('proceeds when the lock file was orphaned by a dead hook process', async () => {
+    const root = makeTmp();
+    await writeActiveState(root, 'test-flow', makeActiveState());
+    const lockPath = join(root, '.ai-flow', 'test-flow', 'state', 'active.json.lock');
+    writeFileSync(lockPath, '');
+    // Backdate past the staleness cutoff so the lock is broken rather than waited on.
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, old, old);
+    const merged = await patchActiveState(root, 'test-flow', { current_stage: 'review' });
+    expect(merged!.current_stage).toBe('review');
   });
 });
 

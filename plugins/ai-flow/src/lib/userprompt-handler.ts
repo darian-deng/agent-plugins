@@ -8,7 +8,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { resolveActiveFlow, findRepoRoot, writeActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
+import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -77,8 +77,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
         gatePending = isGatePending(signal, config, active.state.current_stage);
       } catch { /* non-fatal — guidance still injected without gate info */ }
 
-      const updatedState = { ...active.state, first_prompt_handled: true };
-      await writeActiveState(active.repoRoot, active.flowName, updatedState);
+      await patchActiveState(active.repoRoot, active.flowName, { first_prompt_handled: true });
 
       const flowRoot = join(active.repoRoot, '.ai-flow', active.flowName);
       const statusLine = flowStatusLine({

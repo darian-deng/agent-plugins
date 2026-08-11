@@ -1,4 +1,16 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, renameSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  appendFileSync,
+  renameSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  statSync,
+} from 'fs';
 import { randomBytes } from 'crypto';
 import { join, dirname } from 'path';
 import type { FlowConfig } from './flow-schema.js';
@@ -63,12 +75,92 @@ export async function readActiveState(repoRoot: string, flowName: string): Promi
   }
 }
 
+/**
+ * Replace active.json wholesale. Only correct for callers that OWN the entire
+ * document — creating a flow instance (start) or restoring a snapshot (resume).
+ * Everywhere else use `patchActiveState`: a whole-document write reinstates every
+ * field as of the caller's own read, silently undoing whatever another process
+ * changed in between.
+ */
 export async function writeActiveState(repoRoot: string, flowName: string, state: ActiveState): Promise<void> {
   const dir = stateDir(repoRoot, flowName);
   mkdirSync(dir, { recursive: true });
   const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString('hex')}.tmp`);
   writeFileSync(tmp, JSON.stringify(state, null, 2));
   renameSync(tmp, statePath(repoRoot, flowName, 'active.json'));
+}
+
+const LOCK_STALE_MS = 10_000;
+const LOCK_POLL_MS = 8;
+const LOCK_MAX_WAIT_MS = 1_000;
+
+/**
+ * Cross-process mutex for active.json, on an O_EXCL lock file (the only
+ * exclusion primitive available to hooks, which are separate short-lived
+ * processes with no shared memory).
+ *
+ * Fails OPEN on timeout — the returned release is then a no-op and the caller
+ * proceeds unlocked. Blocking longer would stall the developer's tool call, and
+ * an unlocked patch still re-reads before merging, so the worst case degrades to
+ * a microsecond-wide window instead of losing the update outright.
+ *
+ * A lock older than LOCK_STALE_MS is broken rather than waited on: its holder
+ * was a hook process that died before releasing, and nothing else will ever
+ * clean it up.
+ */
+async function acquireStateLock(repoRoot: string, flowName: string): Promise<() => void> {
+  const lockPath = statePath(repoRoot, flowName, 'active.json.lock');
+  mkdirSync(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, 'wx'));
+      return () => {
+        try { unlinkSync(lockPath); } catch { /* already reaped as stale */ }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch { /* vanished or won by another waiter — just retry */ }
+    }
+    if (Date.now() >= deadline) return () => {};
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+
+/**
+ * Merge `patch` into active.json under the state lock, re-reading immediately
+ * before the merge so only the caller's own fields move.
+ *
+ * Why every mutation but start/resume must go through here: hooks are concurrent
+ * processes, and PostToolUse also fires for subagent tool calls (a subagent
+ * shares its parent's session_id), so a stage that fans out parallel subagents
+ * has several hooks in flight at once. Each captured an ActiveState at its own
+ * entry; writing that object back would roll `current_stage` backwards or erase
+ * a `base_sha_code` captured meanwhile — and a missing base_sha_code hard-fails
+ * the fail-closed completion scripts that diff against it.
+ *
+ * Pass a function to derive the patch from the fresh state — that is the only
+ * way to make a check-then-set (ownership handover, first-writer-wins) atomic.
+ *
+ * Returns the state written, or null when active.json is absent: a completed or
+ * aborted flow must not be resurrected by a hook that was still in flight.
+ */
+export async function patchActiveState(
+  repoRoot: string,
+  flowName: string,
+  patch: Partial<ActiveState> | ((current: ActiveState) => Partial<ActiveState>)
+): Promise<ActiveState | null> {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged: ActiveState = { ...current, ...(typeof patch === 'function' ? patch(current) : patch) };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
+  }
 }
 
 export function findRepoRoot(cwd: string): string | null {

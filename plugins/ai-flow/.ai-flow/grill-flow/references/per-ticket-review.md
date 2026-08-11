@@ -62,7 +62,7 @@
 
 ## /clear 重入判据（防质量步骤被静默跳过）
 
-引擎只恢复到"stage-3"，不记 ticket 内做到第几步。commit 在质量链之后，所以**"有无该 ticket 的 commit"就是"质量有没有跑完"的锚**。编排器重入看当前 frontier ticket（`git log --oneline <base>..HEAD` 看有无 **subject 含 `T<n>`** 的 commit——`--oneline` 只显示 subject，与门的口径一致；**别去翻 body**，body 里的前向引用不算数）：
+引擎只恢复到"stage-3"，不记 ticket 内做到第几步。commit 在质量链之后，所以**"有无该 ticket 的 commit"就是"质量有没有跑完"的锚**。编排器重入看当前 frontier ticket（`git log --oneline --no-merges <base>..HEAD` 看有无 **subject 含 `T<n>`** 的 commit——`--oneline` 只显示 subject，与门的口径一致；**别去翻 body**，body 里的前向引用不算数；**`--no-merges` 不能省**：分支名带票号时 git 自动生成的 `Merge wt/T<n> into …` 也含票号，会让重入误判「这票已完成」而跳过整条质量链）：
 - **无 commit，但工作树有该 ticket 未提交改动**（质量链中途 /clear）→ 先定夺工作树（reset 重来 or 在现状上续，把决定写进重派 prompt）→ 重跑编排（实施续/重派 → 三评审 → 裁 → 地板 → commit → 候选 → qc → [x]）。
 - **有 `[partial]` commit + 剩余清单**（截断自保护留下的）→ 按清单续派实施（不做 git 考古）→ 末轮 `--amend` 折回、去 `[partial]` → 走评审/地板/收尾。
 - **有 commit 但无 `qc:done`** → 已提交（质量已过）、收尾没做完 → 补落候选 + 写 qc marker + 勾选。**不是"见 commit 就直接补勾"跳过收尾**。

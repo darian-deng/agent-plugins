@@ -2,7 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import {
   readActiveState,
-  writeActiveState,
+  patchActiveState,
   nextStage,
   appendLog,
   activeJsonPath,
@@ -51,8 +51,13 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
 
   // Reset first_prompt_handled so Layer 2 re-injects guidance on the first
   // non-command prompt in the newly entered stage (e.g. after approve).
-  const updated = { ...state, current_stage: next, first_prompt_handled: false };
-  await writeActiveState(repoRoot, flowName, updated);
+  // Patch, not whole-state write: the read at the top of this function and this
+  // write straddle a config load, and a hook that wrote base_sha_code or the
+  // ownership fields inside that window must not be undone by the advance.
+  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  if (!advanced) {
+    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
+  }
   // Clear signal so the new stage starts without a stale trigger
   const sigFile = signalPath(repoRoot, flowName);
   if (existsSync(sigFile)) unlinkSync(sigFile);

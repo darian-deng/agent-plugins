@@ -1,4 +1,5 @@
 import { join, relative, resolve } from 'path';
+import { existsSync } from 'fs';
 import type { PreToolInput } from './types.js';
 import {
   resolveActiveFlow,
@@ -31,6 +32,45 @@ function allow(): PreToolResult {
 function resolvePath(repoRoot: string, filePath: string): string {
   if (filePath.startsWith('/')) return filePath;
   return join(repoRoot, filePath);
+}
+
+type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts';
+
+/**
+ * Classify a write target as one of the flow's control-plane files, or null.
+ *
+ * Matching is on the path SUFFIX rather than on `relative(repoRoot, …)`, because
+ * a git worktree of the same repository holds a second copy of every tracked
+ * control-plane file at a path that is not under repoRoot at all
+ * (`../wt-x/.ai-flow/<flow>/stages/…`). Editing that copy and merging the branch
+ * back changes the real stage prompts / config / gate scripts, so it is the same
+ * privilege as editing them in place and must be refused the same way.
+ *
+ * A suffix match alone over-reaches: a project may legitimately VENDOR flow
+ * templates in its tree (ai-flow's own repo ships `.ai-flow/<flow>/` copies
+ * under the plugin directory) and those are ordinary content, editable during a
+ * flow. What separates the two is that a worktree — and only a worktree — has
+ * its own `.git` beside `.ai-flow`, which is also exactly the condition under
+ * which an edit there can travel back into the flow's own checkout.
+ */
+function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): ControlPlaneRole | null {
+  const norm = absPath.replace(/\\/g, '/');
+  const marker = `/.ai-flow/${flowName}/`;
+  const idx = norm.lastIndexOf(marker);
+  if (idx === -1) return null;
+
+  // `|| '/'` keeps anchor absolute when `.ai-flow` sits at the filesystem root,
+  // where the slice is empty and both checks below would resolve against the
+  // process cwd instead.
+  const anchor = norm.slice(0, idx) || '/';
+  const rest = norm.slice(idx + marker.length);
+  if (resolve(anchor) !== resolve(repoRoot) && !existsSync(join(anchor, '.git'))) return null;
+
+  if (rest === 'state/active.json') return 'active.json';
+  if (rest === 'config.json') return 'config.json';
+  if (rest.startsWith('stages/')) return 'stages';
+  if (rest.startsWith('scripts/')) return 'scripts';
+  return null;
 }
 
 export async function handlePreTool(input: PreToolInput): Promise<PreToolResult | null> {
@@ -199,34 +239,23 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   }
 
   // ─── Control plane protection ─────────────────────────────────────────────────
-  const rel = relative(repoRoot, absPath);
-  const flowBase = join('.ai-flow', activeFlowName);
-
-  // active.json direct write
-  if (rel === join(flowBase, 'state', 'active.json')) {
-    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json`);
-    return deny('Direct writes to active.json are blocked (control plane protection).');
-  }
-
-  // config.json
-  if (rel === join(flowBase, 'config.json')) {
-    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json`);
-    return deny('config.json is read-only during flow execution.');
-  }
-
-  // stages/
-  if (rel.startsWith(join(flowBase, 'stages') + '/')) {
-    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
-    return deny('Stage prompt files are read-only during flow execution.');
-  }
-
-  // scripts/ — special message
-  if (rel.startsWith(join(flowBase, 'scripts') + '/')) {
-    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
-    return deny('Script files cannot be modified during flow execution. Ask the user to replace them manually.');
+  switch (controlPlaneRole(repoRoot, activeFlowName, absPath)) {
+    case 'active.json':
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json: ${fp}`);
+      return deny('Direct writes to active.json are blocked (control plane protection).');
+    case 'config.json':
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json: ${fp}`);
+      return deny('config.json is read-only during flow execution — this also covers the copy in any worktree of this repository.');
+    case 'stages':
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
+      return deny('Stage prompt files are read-only during flow execution — this also covers the copy in any worktree of this repository.');
+    case 'scripts':
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
+      return deny('Script files cannot be modified during flow execution — this also covers the copy in any worktree of this repository. Ask the user to replace them manually.');
   }
 
   // ─── Write scope enforcement ──────────────────────────────────────────────────
+  const rel = relative(repoRoot, absPath);
   const stageCfg = getStageConfig(config, state.current_stage);
   if (stageCfg.write_scope === 'docs_only') {
     const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);

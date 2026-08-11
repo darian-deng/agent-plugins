@@ -5,6 +5,14 @@ export interface BaseHookInput {
   cwd: string;
   transcript_path?: string;
   permission_mode?: string;
+  /**
+   * Populated only when the hook fires inside a subagent; a subagent shares its
+   * parent's session_id, so this is the only way to tell the two apart. Optional
+   * on purpose — clients that don't send it must keep behaving as before, so
+   * every consumer has to branch on presence, never on a value.
+   */
+  agent_id?: string;
+  agent_type?: string;
 }
 
 export interface UserPromptInput extends BaseHookInput {
@@ -31,7 +39,6 @@ export interface SessionStartInput extends BaseHookInput {
   hook_event_name: 'SessionStart';
   source?: 'startup' | 'resume' | 'clear' | 'compact';
   model?: string;
-  agent_type?: string;
 }
 
 export interface SessionEndInput extends BaseHookInput {

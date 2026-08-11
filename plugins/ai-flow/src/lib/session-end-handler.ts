@@ -1,5 +1,5 @@
 import type { SessionEndInput } from './types.js';
-import { resolveActiveFlow, writeActiveState, appendLog, gcRegistry } from './state.js';
+import { resolveActiveFlow, patchActiveState, appendLog, gcRegistry } from './state.js';
 import { unbindSession } from './session-registry.js';
 
 export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
@@ -14,10 +14,16 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
   if (active) {
     const { flowName, state, repoRoot } = active;
     // Only clear if this session is the current owner — prevents a non-owner
-    // SessionEnd from releasing a lock it doesn't hold.
+    // SessionEnd from releasing a lock it doesn't hold. The ownership test is
+    // repeated inside the patch because a takeover can land between resolve and
+    // write, and releasing then would hand the flow to nobody.
     if (state.last_session_id === session_id) {
-      await writeActiveState(repoRoot, flowName, { ...state, last_session_id: null });
-      await appendLog(repoRoot, flowName, session_id, `SESSION_END cleared last_session_id`);
+      const written = await patchActiveState(repoRoot, flowName, (cur) =>
+        cur.last_session_id === session_id ? { last_session_id: null } : {}
+      );
+      if (written && written.last_session_id === null) {
+        await appendLog(repoRoot, flowName, session_id, `SESSION_END cleared last_session_id`);
+      }
     }
   }
 

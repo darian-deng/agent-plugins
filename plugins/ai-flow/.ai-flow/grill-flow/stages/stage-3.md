@@ -43,7 +43,7 @@
 ## 输出规格
 
 git commits（每 ticket 一笔**代码** commit，**subject 首行含 `T<n>`**，质量链后置；截断自保护的 `[partial]` 提交末轮 `--amend` 折成该 ticket 单笔）+ `tickets.md` 进度（`qc:done` + `[x]`，真机票另带 `rm:pending` 标 + `## 待真机验证` 段，交 stage-4 环节 C 收口）+ `candidates.md`（沉淀候选，带 ticket ID 前缀）——后两者为**工作树未提交状态**，由 stage-4 收尾 squash 吸收。
-验证：机器门 `scripts/gate-stage-3.cjs`（fail-closed）三条断言——① ticket 级项 ≥1 已勾且无未勾（`- [ ] T<n>` / `- [x] T<n>` 之外的非标准复选框写法会被直接拦下）；② **每个 `[x]` ticket 在自己那条上写了 `qc:done`**（该 ticket 行内或其缩进子项；全文别处的 `qc:done` 不算）；③ **每个 `[x]` ticket 在 `base_sha_code..HEAD` 有属于自己的一笔 commit，subject 首行含票号**，且一笔 commit 只能认领一个 ticket（subject 写多个票号会导致相互争用而 fail）。
+验证：机器门 `scripts/gate-stage-3.cjs`（fail-closed）三条断言——① ticket 级项 ≥1 已勾且无未勾（`- [ ] T<n>` / `- [x] T<n>` 之外的非标准复选框写法会被直接拦下）；② **每个 `[x]` ticket 在自己那条上写了 `qc:done`**（该 ticket 行内或其缩进子项；全文别处的 `qc:done` 不算）；③ **每个 `[x]` ticket 在 `base_sha_code..HEAD` 有属于自己的一笔非 merge commit、subject 首行含票号**，且一笔 commit 只能认领一个 ticket（subject 写多个票号会导致相互争用而 fail）。门用 `--no-merges` 排除 merge commit：分支名带票号时（`wt/T<n>`）git 自动生成的 `Merge wt/T<n> into …` 也含票号，不排除的话，一个没写过任何实施 commit 的票能靠它顶过本断言。
 
 ## 完成条件
 

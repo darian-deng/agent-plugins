@@ -425,3 +425,125 @@ describe('handlePostTool — signal detection', () => {
     expect(state).toBeNull();
   });
 });
+
+describe('handlePostTool — concurrent state writes', () => {
+  // PostToolUse fires per write tool call and hooks run in parallel, so the
+  // mark-base capture and a context-warning write can be in flight at the same
+  // moment, each holding the ActiveState it read at its own entry. A whole-document
+  // write-back makes the later one erase the other's field; base_sha_code is the
+  // costly loss, since the stage completion scripts that diff against it are
+  // fail-closed and reject the gate when it is missing.
+  it('mark-base capture racing a context warning → both fields survive', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const head = execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim();
+
+    const markInput = makeInput(repo.repoRoot, 'Write', 10);
+    (markInput.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+    const warnInput = makeInput(repo.repoRoot, 'Write', 80);
+
+    await Promise.all([handlePostTool(markInput), handlePostTool(warnInput)]);
+
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.base_sha_code).toBe(head);
+    expect(state!.context_warning.warned).toBe(true);
+    expect(state!.context_warning.warned_at_pct).toBe(80);
+  });
+
+  it('two mark-base captures racing → first-writer-wins, one SHA only', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const head = execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim();
+    const mark = () => {
+      const i = makeInput(repo.repoRoot, 'Write', 10);
+      (i.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+      return handlePostTool(i);
+    };
+    const outs = await Promise.all([mark(), mark()]);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBe(head);
+    expect(outs.filter((o) => /已存在/.test(o?.additionalContext ?? ''))).toHaveLength(1);
+  });
+
+  it('context warning does not resurrect a flow that completed meanwhile', async () => {
+    const repo = makeRepo();
+    // No active.json: stands in for a flow completed or aborted while a hook from
+    // the previous stage was still in flight.
+    const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 80));
+    expect(out).toBeNull();
+    expect(existsSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'))).toBe(false);
+  });
+});
+
+describe('handlePostTool — subagent context accounting', () => {
+  function makeSubagentInput(repoRoot: string, contextPct: number, agentId = 'agent-abc'): PostToolInput {
+    return { ...makeInput(repoRoot, 'Write', contextPct), agent_id: agentId, agent_type: 'reviewer' };
+  }
+
+  function seed(repoRoot: string): void {
+    writeActiveState(repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+  }
+
+  it('agent_id present → no warning injected and no state write', async () => {
+    const repo = makeRepo();
+    seed(repo.repoRoot);
+    const before = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8');
+    const out = await handlePostTool(makeSubagentInput(repo.repoRoot, 80));
+    expect(out).toBeNull();
+    const after = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8');
+    expect(after).toBe(before);
+  });
+
+  it('agent_id absent → warning injected (unchanged main-session behavior)', async () => {
+    const repo = makeRepo();
+    seed(repo.repoRoot);
+    const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 80));
+    expect(out!.additionalContext).toMatch(/Context 当前 80%/);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.context_warning.warned).toBe(true);
+  });
+
+  it('agent_id present + past block threshold → context_blocked NOT latched', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    seed(repo.repoRoot);
+    const out = await handlePostTool(makeSubagentInput(repo.repoRoot, 95));
+    expect(out).toBeNull();
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.context_blocked).toBe(false);
+  });
+
+  it('agent_id absent + past block threshold → context_blocked latched (unchanged)', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    seed(repo.repoRoot);
+    const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 95));
+    expect(out!.additionalContext).toMatch(/block 阈值/);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.context_blocked).toBe(true);
+  });
+
+  it('agent_id present → mark-base capture still runs (only accounting is skipped)', async () => {
+    const repo = makeRepo();
+    seed(repo.repoRoot);
+    const head = execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim();
+    const input = makeSubagentInput(repo.repoRoot, 10);
+    (input.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+    await handlePostTool(input);
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBe(head);
+  });
+});

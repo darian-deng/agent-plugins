@@ -3,13 +3,14 @@ import { join } from 'path';
 import type { SessionStartInput } from './types.js';
 import {
   resolveActiveFlow,
-  writeActiveState,
+  patchActiveState,
   readSignal,
   isGatePending,
   nextStage,
   appendLog,
   activeJsonPath,
   gcRegistry,
+  type ActiveState,
 } from './state.js';
 import { bindSession } from './session-registry.js';
 import { truncateError, flowStatusLine } from './format.js';
@@ -68,29 +69,28 @@ export async function handleSessionStart(
 
   // Note: there is an inherent TOCTOU race here — two sessions could both read
   // last_session_id=null and both pass the mutex check above before either writes.
-  // The atomic rename in writeActiveState prevents torn writes but not this race.
-  // In practice, two Claude Code sessions opening the same repo within milliseconds
-  // is rare enough that we accept the risk rather than add a lockfile.
-
-  // Track all sessions that have ever owned this flow (append-only).
-  const newHistoryIds = [...(state.history_session_ids ?? [])];
-  if (isNewSession && !newHistoryIds.includes(session_id)) {
-    newHistoryIds.push(session_id);
-  }
-
-  const updated = {
-    ...state,
-    last_session_id: session_id,
-    history_session_ids: newHistoryIds,
-    ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
-  };
-  if (isNewSession || isClear) {
-    updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
-    updated.context_blocked = false;
-    // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
-    updated.first_prompt_handled = false;
-  }
-  await writeActiveState(repoRoot, flowName, updated);
+  // patchActiveState makes the write itself lose nothing, but it cannot undo a
+  // check that already passed on stale data. In practice, two Claude Code sessions
+  // opening the same repo within milliseconds is rare enough that we accept the
+  // risk rather than gate the whole handler on the lock.
+  await patchActiveState(repoRoot, flowName, (cur) => {
+    // history_session_ids is append-only, so it must extend the list as it stands
+    // now — extending the entry-time copy would drop a concurrently added owner.
+    const historyIds = [...(cur.history_session_ids ?? [])];
+    if (isNewSession && !historyIds.includes(session_id)) historyIds.push(session_id);
+    const patch: Partial<ActiveState> = {
+      last_session_id: session_id,
+      history_session_ids: historyIds,
+      ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
+    };
+    if (isNewSession || isClear) {
+      patch.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
+      patch.context_blocked = false;
+      // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
+      patch.first_prompt_handled = false;
+    }
+    return patch;
+  });
   // (Re)bind this session to the anchor. Covers flows started before bindings
   // existed, and re-anchors after a session takeover / resume.
   bindSession(session_id, repoRoot, flowName);

@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import type { PostToolInput } from './types.js';
 import {
   resolveActiveFlow,
-  writeActiveState,
+  patchActiveState,
   writeSignalFile,
   appendLog,
   signalPath,
@@ -47,9 +47,6 @@ export async function handlePostTool(
   const markBase = markBasePath(repoRoot, flowName);
   if (fp === markBase) {
     try { if (existsSync(markBase)) unlinkSync(markBase); } catch { /* marker cleanup best-effort */ }
-    if (state.base_sha_code) {
-      return { additionalContext: `[ai-flow] base_sha_code 已存在(${state.base_sha_code}),跳过重复捕获。` };
-    }
     let sha = '';
     try {
       sha = execSync('git rev-parse HEAD', { cwd: repoRoot, encoding: 'utf-8' }).trim();
@@ -58,7 +55,20 @@ export async function handlePostTool(
       await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURE_FAIL`);
       return { additionalContext: `[ai-flow] base_sha_code 捕获失败:无法 git rev-parse HEAD(仓库是否已有提交?)。请先完成 docs 提交再写 mark-base。` };
     }
-    await writeActiveState(repoRoot, flowName, { ...state, base_sha_code: sha });
+    // First-writer-wins has to be decided against the state as it is at write
+    // time, not against the copy read at hook entry: two markers written back to
+    // back would both see it unset and the later HEAD would win.
+    let alreadyCaptured: string | undefined;
+    const written = await patchActiveState(repoRoot, flowName, (cur) => {
+      alreadyCaptured = cur.base_sha_code;
+      return alreadyCaptured ? {} : { base_sha_code: sha };
+    });
+    if (!written) {
+      return { additionalContext: `[ai-flow] 流程已结束或已中止,base_sha_code 未写入。` };
+    }
+    if (alreadyCaptured) {
+      return { additionalContext: `[ai-flow] base_sha_code 已存在(${alreadyCaptured}),跳过重复捕获。` };
+    }
     await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURED ${sha}`);
     return { additionalContext: `[ai-flow] ✓ base_sha_code 已捕获:${sha}(Stage 5/6 的代码 diff 基准,已写入引擎状态)。` };
   }
@@ -105,6 +115,17 @@ export async function handlePostTool(
     // Signal content is not 'done' — fall through to context monitoring
   }
 
+  // ─── Context monitoring: main session only ─────────────────────────────────
+  // A subagent runs on its own context window, so its token usage says nothing
+  // about the main session's budget — delegating implementation to subagents is
+  // precisely how a stage avoids spending it. Measuring it here would not only
+  // mis-report: crossing block_at_pct latches context_blocked on the shared flow
+  // state, after which PreToolUse denies every write for the rest of the flow.
+  // The upstream contract is that agent_id appears only inside a subagent; a
+  // client that never sends it falls back to today's behavior, which is why this
+  // branches on presence and not on any particular value.
+  if (input.agent_id !== undefined) return null;
+
   // Load flow config to get per-flow context thresholds.
   let flowContextCfg: Awaited<ReturnType<typeof loadFlowConfig>>['context'] | undefined;
   try {
@@ -127,12 +148,10 @@ export async function handlePostTool(
   // ─── Block threshold ───────────────────────────────────────────────────────
   if (blockAt !== undefined && pct >= blockAt) {
     if (!state.context_blocked) {
-      const updated = {
-        ...state,
+      await patchActiveState(repoRoot, flowName, {
         context_blocked: true,
         context_warning: { warned: true, warned_at_pct: pct, warned_at: new Date().toISOString() },
-      };
-      await writeActiveState(repoRoot, flowName, updated);
+      });
     }
     return {
       additionalContext:
@@ -148,11 +167,9 @@ export async function handlePostTool(
   const prevPct = warning.warned_at_pct ?? 0;
   if (warning.warned && pct < prevPct + rewarnDelta) return null;
 
-  const updated = {
-    ...state,
+  await patchActiveState(repoRoot, flowName, {
     context_warning: { warned: true, warned_at_pct: pct, warned_at: new Date().toISOString() },
-  };
-  await writeActiveState(repoRoot, flowName, updated);
+  });
 
   return {
     additionalContext:

@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { writeFileSync, chmodSync, mkdirSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { readActiveState } from '../src/lib/state.js';
+import { bindSession, unbindSession } from '../src/lib/session-registry.js';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
 
@@ -256,6 +257,105 @@ describe('handlePreTool — control plane protection', () => {
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: `echo done > "${signalPath}"` }));
     expect(out?.permissionDecision).toBe('deny');
+  });
+});
+
+describe('handlePreTool — control plane protection across git worktrees', () => {
+  // A worktree holds a second copy of every tracked control-plane file at a path
+  // that is not under repoRoot, so `relative(repoRoot, …)` matching never sees it.
+  // Editing that copy and merging the branch back rewrites the flow's own stage
+  // prompts / config / gate scripts, which is why it must be refused identically.
+  function makeWorktree(repoRoot: string, name: string): string {
+    const wt = join(dirname(repoRoot), `${name}-wt`);
+    execSync(`git worktree add "${wt}" -b ${name} 2>/dev/null`, { cwd: repoRoot });
+    cleanups.push(() => {
+      try { execSync(`rm -rf "${wt}"`); } catch { /* already gone */ }
+    });
+    return wt;
+  }
+
+  // The real caller is a subagent whose cwd is the worktree; the flow still
+  // resolves to the main checkout through the session→anchor binding.
+  function makeWorktreeInput(wt: string, filePath: string): PreToolInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      session_id: 'sess-wt',
+      cwd: wt,
+      tool_name: 'Write',
+      tool_input: { file_path: filePath, content: 'x' },
+    };
+  }
+
+  afterEach(() => unbindSession('sess-wt'));
+
+  it('write to stages/*.md inside a worktree → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    bindSession('sess-wt', repo.repoRoot, 'test-flow');
+    const wt = makeWorktree(repo.repoRoot, 'wt-stage');
+    const out = await handlePreTool(
+      makeWorktreeInput(wt, join(wt, '.ai-flow', 'test-flow', 'stages', 'work.md'))
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/Stage prompt files are read-only/);
+  });
+
+  it('write to config.json inside a worktree → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    bindSession('sess-wt', repo.repoRoot, 'test-flow');
+    const wt = makeWorktree(repo.repoRoot, 'wt-config');
+    const out = await handlePreTool(
+      makeWorktreeInput(wt, join(wt, '.ai-flow', 'test-flow', 'config.json'))
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/config\.json is read-only/);
+  });
+
+  it('write to scripts/ inside a worktree → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    bindSession('sess-wt', repo.repoRoot, 'test-flow');
+    const wt = makeWorktree(repo.repoRoot, 'wt-scripts');
+    const out = await handlePreTool(
+      makeWorktreeInput(wt, join(wt, '.ai-flow', 'test-flow', 'scripts', 'gate-stage-3.cjs'))
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/Script files cannot be modified/);
+  });
+
+  it('write to state/active.json inside a worktree → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    bindSession('sess-wt', repo.repoRoot, 'test-flow');
+    const wt = makeWorktree(repo.repoRoot, 'wt-active');
+    const out = await handlePreTool(
+      makeWorktreeInput(wt, join(wt, '.ai-flow', 'test-flow', 'state', 'active.json'))
+    );
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/active\.json/);
+  });
+
+  it('write to ordinary code inside a worktree → ALLOW (guard must not swallow the whole worktree)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work'); // unrestricted stage
+    bindSession('sess-wt', repo.repoRoot, 'test-flow');
+    const wt = makeWorktree(repo.repoRoot, 'wt-code');
+    const out = await handlePreTool(makeWorktreeInput(wt, join(wt, 'src', 'main.ts')));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('write to a vendored .ai-flow template copy in the tree → ALLOW (no .git beside it)', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot, 'work');
+    // Mirrors ai-flow's own repo, which ships flow templates at
+    // plugins/ai-flow/.ai-flow/<flow>/ while running a flow from the repo root.
+    const vendored = join(repo.repoRoot, 'plugins', 'ai-flow', '.ai-flow', 'test-flow', 'stages');
+    mkdirSync(vendored, { recursive: true });
+    const out = await handlePreTool(
+      makeInput(repo.repoRoot, 'Write', { file_path: join(vendored, 'work.md'), content: 'x' })
+    );
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 });
 

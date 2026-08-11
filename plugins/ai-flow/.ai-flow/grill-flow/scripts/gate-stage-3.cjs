@@ -4,11 +4,15 @@
 // stage-3 无人工 gate——通过即自动进 stage-4，所以这道门尤其必须 fail-closed。
 // 断言：① ≥1 已勾 ticket 且无未勾（只认标准复选框）；
 //       ② 每个 [x] ticket 自己的块里写了 qc:done（不是全文数 qc:done——说明性文字会灌水）；
-//       ③ 每个 [x] ticket 在 base_sha_code..HEAD 有**属于自己的一笔** commit
+//       ③ 每个 [x] ticket 在 base_sha_code..HEAD 有**属于自己的一笔非 merge commit**
 //          （subject 含该 ticket 号，且一笔 commit 只能认领一个 ticket；
 //           防"勾了 [x] 却没做 / 没 commit"、防一笔 commit 顶多票）。
 // 诚实定位：拦"忘做 / 漏 commit / 漏 qc"+ 编译级破坏；拦不住"有 commit 但空实现 / 谎标"——
 //          那靠 stage-4 全量测试 + 人工 gate。
+//          也分辨不出 squash 回合：`git merge --squash` 产出的是单亲 commit，与手写 commit
+//          在拓扑上无从区分，故照单当证据（它确实带着那批代码）。代价只在收紧方向：
+//          一笔 squash commit 折进多票时只能认领一票（报争用）、squash 时 subject 丢了票号
+//          则报缺 commit —— 两者都 fail-closed，不会因此误放行。
 'use strict';
 
 const { existsSync, readFileSync } = require('fs');
@@ -140,9 +144,14 @@ if (missingQc.length > 0) {
 // 协议已同步收紧到 subject（per-ticket-review 步骤 7 / stage-3 第 5 步），本门与之一致：
 // 宁可让漏写 subject 的 commit 被拦下（AI 可 `git commit --amend` 秒修），
 // 也不放行"根本没这笔 commit"——stage-3 无人工 gate，这道门是唯一兜底。
+// `--no-merges`：merge commit 不算证据。分支名带票号时（`wt/T2`），git 自动生成的
+//   「Merge wt/T2 into feat/req」照样命中 \bT2\b（`/` 非单词字符），于是没写过任何实施
+//   commit 的票也能顶过 ③——而 ③ 防的正是这个。按拓扑（父数 ≥ 2）筛而非匹配 "Merge " 字样：
+//   后者随 locale 与 `-m` 文案变（`-m "回合 T2"` 不含该词）。侧分支自己那笔仍在区间内、
+//   不丢证据；被排除的只有"代码仅存于解冲突 merge"，它本就违反每票一笔独立 commit。
 let raw;
 try {
-  raw = execFileSync('git', ['log', '--format=%s', baseSha + '..HEAD'], {
+  raw = execFileSync('git', ['log', '--format=%s', '--no-merges', baseSha + '..HEAD'], {
     cwd: projectRoot,
     encoding: 'utf-8',
     maxBuffer: 4 * 1024 * 1024,
@@ -153,7 +162,7 @@ try {
 }
 const subjects = raw.split('\n').filter((l) => l.length > 0);
 
-// 候选：subject 含 \bT<n>\b 的 commit（词边界保证 T1 不误匹配 T10、T10 不误匹配 T1）。
+// 候选：subject 含 \bT<n>\b 的非 merge commit（词边界保证 T1 不误匹配 T10、T10 不误匹配 T1）。
 for (const d of done) {
   const re = new RegExp('\\b' + d.num + '\\b');
   for (let ci = 0; ci < subjects.length; ci++) if (re.test(subjects[ci])) d.cand.push(ci);
@@ -180,20 +189,26 @@ for (let ti = 0; ti < done.length; ti++) {
 if (noCommit.length > 0 || contested.length > 0) {
   const short = baseSha.slice(0, 8);
   if (noCommit.length > 0) {
-    err('这些已勾 ticket 在 ' + short + '..HEAD 没有自己的 commit（要求 commit subject 首行含票号，'
-      + 'body 里的提及不算——「consumer 修复落在 T<n>」这类前向引用不能当证据）: ' + noCommit.join(', ')
-      + '\n    怎么改：确实做了 → 补提交或 `git commit --amend` 把票号写进 subject 首行；'
+    err('这些已勾 ticket 在 ' + short + '..HEAD 没有自己的 commit'
+      + '（要求某笔「非 merge」commit 的 subject 首行含票号；body 里的提及不算'
+      + '——「consumer 修复落在 T<n>」这类前向引用不能当证据；merge commit 也不算'
+      + '——分支名带票号时「Merge wt/T<n> into …」这种自动 subject 不是实施证据）: ' + noCommit.join(', ')
+      + '\n    怎么改：确实做了 → 补提交或 `git commit --amend` 把票号写进 subject 首行'
+      + '（若该票的改动只落在一笔解冲突 merge commit 里，就补一笔带票号的普通 commit）；'
       + '确实没做 → 把该 ticket 改回 `- [ ] T<n>` 并继续实施，别勾 [x]。');
   }
   if (contested.length > 0) {
     err('这些已勾 ticket 只能与别的 ticket 争用同一笔 commit——一笔 commit 只能认领一个 ticket: '
       + contested.join(', ')
-      + '\n    通常是两种情况之一：(a) 一笔 commit 的 subject 写了多个票号、顶了多票；'
-      + '(b) 该票压根没自己的 commit，只是被别人 subject 里的提及（如「修复落在 T<n>」）蹭到了。'
-      + '\n    怎么改：per-ticket 协议要求每票一笔独立代码 commit——把顶多票的 commit 拆开，'
-      + '或为缺的票补自己的 commit（subject 首行含它自己的票号；'
-      + 'subject 里顺带提到别的票号本身不算问题，一笔 commit 不能同时被两票认领才是）；'
-      + '确实没做的票改回 `- [ ] T<n>`。');
+      + '\n    三种可能：(a) 一笔 commit 的 subject 写了多个票号、顶了多票；'
+      + '(b) 该票压根没自己的 commit，只是被别人 subject 里的提及（如「修复落在 T<n>」）蹭到了；'
+      + '(c) 回合方式用了 `git merge --squash`——多票的改动被折进一笔 commit，'
+      + '或该票原本那笔 commit 的 subject 在 squash 时丢了票号，只剩别人的票号在里面。'
+      + '\n    怎么改：先分清是哪一种。(c) 别去拆已有 commit——换成保留每票各自 commit 的回合方式'
+      + '（merge / rebase / cherry-pick 都保留原 commit），或给该票补一笔自己的 commit；'
+      + '(a) 把顶多票的 commit 拆开；(b) 为缺的票补自己的 commit'
+      + '（subject 首行含它自己的票号；subject 里顺带提到别的票号本身不算问题，'
+      + '一笔 commit 不能同时被两票认领才是）；确实没做的票改回 `- [ ] T<n>`。');
   }
   process.exit(FAIL);
 }
