@@ -6,15 +6,27 @@ var __export = (target, all) => {
 };
 
 // src/hooks/posttool.ts
-import { readFileSync as readFileSync7 } from "fs";
+import { readFileSync as readFileSync6 } from "fs";
 
 // src/lib/posttool-handler.ts
-import { existsSync as existsSync6, unlinkSync as unlinkSync3 } from "fs";
+import { existsSync as existsSync6, unlinkSync as unlinkSync4 } from "fs";
 import { join as join7 } from "path";
 import { execSync } from "child_process";
 
 // src/lib/state.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  writeFileSync as writeFileSync2,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  appendFileSync,
+  renameSync as renameSync2,
+  openSync,
+  closeSync,
+  unlinkSync as unlinkSync2,
+  statSync
+} from "fs";
 import { randomBytes } from "crypto";
 import { join as join2, dirname } from "path";
 
@@ -68,6 +80,45 @@ async function writeActiveState(repoRoot, flowName, state) {
   const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString("hex")}.tmp`);
   writeFileSync2(tmp, JSON.stringify(state, null, 2));
   renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
+}
+var LOCK_STALE_MS = 1e4;
+var LOCK_POLL_MS = 8;
+var LOCK_MAX_WAIT_MS = 1e3;
+async function acquireStateLock(repoRoot, flowName) {
+  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
+  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return () => {
+        try {
+          unlinkSync2(lockPath);
+        } catch {
+        }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+      } catch {
+      }
+    }
+    if (Date.now() >= deadline) return () => {
+    };
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+async function patchActiveState(repoRoot, flowName, patch) {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
+  }
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
@@ -143,9 +194,10 @@ function truncateError(e, max = 120) {
 }
 
 // src/lib/context.ts
-import { readFileSync as readFileSync3, existsSync as existsSync3 } from "fs";
+import { existsSync as existsSync3, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "fs";
 import { join as join3 } from "path";
 import { homedir as homedir2 } from "os";
+var TAIL_WINDOW_BYTES = 256 * 1024;
 function transcriptPathFor(sessionId, cwd) {
   const encoded = cwd.replace(/\//g, "-");
   return join3(homedir2(), ".claude", "projects", encoded, `${sessionId}.jsonl`);
@@ -153,22 +205,39 @@ function transcriptPathFor(sessionId, cwd) {
 function readTokenCount(sessionId, cwd, transcriptPath) {
   const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
   if (!existsSync3(p)) return 0;
+  let fd = null;
   try {
-    const lines = readFileSync3(p, "utf-8").split("\n").filter(Boolean);
-    let lastUsage = null;
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === "assistant" && entry.message?.usage) {
-          lastUsage = entry.message.usage;
+    fd = openSync2(p, "r");
+    const size = fstatSync(fd).size;
+    if (size === 0) return 0;
+    for (let window = TAIL_WINDOW_BYTES; ; window *= 8) {
+      const start = Math.max(0, size - window);
+      const buf = Buffer.allocUnsafe(size - start);
+      const bytesRead = readSync(fd, buf, 0, buf.length, start);
+      const lines = buf.subarray(0, bytesRead).toString("utf-8").split("\n");
+      if (start > 0) lines.shift();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        try {
+          const entry = JSON.parse(lines[i]);
+          const usage = entry.type === "assistant" ? entry.message?.usage : void 0;
+          if (usage) {
+            return (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+          }
+        } catch {
         }
+      }
+      if (start === 0) return 0;
+    }
+  } catch {
+    return 0;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync2(fd);
       } catch {
       }
     }
-    if (!lastUsage) return 0;
-    return (lastUsage.input_tokens ?? 0) + (lastUsage.cache_creation_input_tokens ?? 0) + (lastUsage.cache_read_input_tokens ?? 0);
-  } catch {
-    return 0;
   }
 }
 function contextPct(sessionId, cwd, contextWindowSize, transcriptPath) {
@@ -179,7 +248,7 @@ function contextPct(sessionId, cwd, contextWindowSize, transcriptPath) {
 var DEFAULT_CONTEXT_WINDOW = 1e6;
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
 import { join as join4 } from "path";
 
 // node_modules/zod/v3/external.js
@@ -4285,7 +4354,7 @@ async function loadFlowConfig(repoRoot, flowName) {
   if (!existsSync4(configPath)) throw new FlowNotFoundError(flowName);
   let raw2;
   try {
-    raw2 = JSON.parse(readFileSync4(configPath, "utf-8"));
+    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
   } catch (e) {
     throw new FlowConfigParseError(configPath, e);
   }
@@ -4303,14 +4372,15 @@ function getStageConfig(config, stageId) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5, unlinkSync as unlinkSync2 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
 import { join as join6 } from "path";
 
 // src/lib/prompt-render.ts
 import { join as join5 } from "path";
 function renderPrompt(content, repoRoot, flowName) {
   const flowRoot = join5(repoRoot, ".ai-flow", flowName);
-  return content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  return substituted + "\n" + writtenDocLengthNote();
 }
 function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   const flowRoot = join5(repoRoot, ".ai-flow", flowName);
@@ -4321,6 +4391,15 @@ function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
+}
+function writtenDocLengthNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
+    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u7F29\u53D9\u8FF0\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
+    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF0C\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\u2014\u2014`,
+    `\u7B80\u6D01\u53EA\u9488\u5BF9\u53D9\u8FF0\u4E0E\u5197\u4F59\uFF0C\u7EDD\u4E0D\u7528\u5B83\u7701\u6389\u5FC5\u9700\u6761\u76EE\u3002`
+  ].join("\n");
 }
 function gateProtocolNote() {
   return [
@@ -4345,9 +4424,9 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync5(activeJson)) unlinkSync2(activeJson);
+    if (existsSync5(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync5(sig)) unlinkSync2(sig);
+    if (existsSync5(sig)) unlinkSync3(sig);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4356,17 +4435,19 @@ async function advanceStage(repoRoot, flowName, sessionId) {
       terminal: true
     };
   }
-  const updated = { ...state, current_stage: next, first_prompt_handled: false };
-  await writeActiveState(repoRoot, flowName, updated);
+  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  if (!advanced) {
+    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
+  }
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync5(sigFile)) unlinkSync2(sigFile);
+  if (existsSync5(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join6(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
   if (existsSync5(promptPath)) {
     try {
-      promptContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
+      promptContent = renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName);
     } catch {
     }
   }
@@ -4398,11 +4479,8 @@ async function handlePostTool(input2) {
     const markBase = markBasePath(repoRoot, flowName);
     if (fp === markBase) {
       try {
-        if (existsSync6(markBase)) unlinkSync3(markBase);
+        if (existsSync6(markBase)) unlinkSync4(markBase);
       } catch {
-      }
-      if (state.base_sha_code) {
-        return { additionalContext: `[ai-flow] base_sha_code \u5DF2\u5B58\u5728(${state.base_sha_code}),\u8DF3\u8FC7\u91CD\u590D\u6355\u83B7\u3002` };
       }
       let sha = "";
       try {
@@ -4413,7 +4491,17 @@ async function handlePostTool(input2) {
         await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURE_FAIL`);
         return { additionalContext: `[ai-flow] base_sha_code \u6355\u83B7\u5931\u8D25:\u65E0\u6CD5 git rev-parse HEAD(\u4ED3\u5E93\u662F\u5426\u5DF2\u6709\u63D0\u4EA4?)\u3002\u8BF7\u5148\u5B8C\u6210 docs \u63D0\u4EA4\u518D\u5199 mark-base\u3002` };
       }
-      await writeActiveState(repoRoot, flowName, { ...state, base_sha_code: sha });
+      let alreadyCaptured;
+      const written = await patchActiveState(repoRoot, flowName, (cur) => {
+        alreadyCaptured = cur.base_sha_code;
+        return alreadyCaptured ? {} : { base_sha_code: sha };
+      });
+      if (!written) {
+        return { additionalContext: `[ai-flow] \u6D41\u7A0B\u5DF2\u7ED3\u675F\u6216\u5DF2\u4E2D\u6B62,base_sha_code \u672A\u5199\u5165\u3002` };
+      }
+      if (alreadyCaptured) {
+        return { additionalContext: `[ai-flow] base_sha_code \u5DF2\u5B58\u5728(${alreadyCaptured}),\u8DF3\u8FC7\u91CD\u590D\u6355\u83B7\u3002` };
+      }
       await appendLog(repoRoot, flowName, session_id, `BASE_CAPTURED ${sha}`);
       return { additionalContext: `[ai-flow] \u2713 base_sha_code \u5DF2\u6355\u83B7:${sha}(Stage 5/6 \u7684\u4EE3\u7801 diff \u57FA\u51C6,\u5DF2\u5199\u5165\u5F15\u64CE\u72B6\u6001)\u3002` };
     }
@@ -4453,6 +4541,7 @@ async function handlePostTool(input2) {
         return { additionalContext: pathsPreamble + result.additionalContext };
       }
     }
+    if (input2.agent_id !== void 0) return null;
     let flowContextCfg;
     try {
       const config = await loadFlowConfig(repoRoot, flowName);
@@ -4467,12 +4556,10 @@ async function handlePostTool(input2) {
     const blockAt = flowContextCfg?.block_at_pct;
     if (blockAt !== void 0 && pct >= blockAt) {
       if (!state.context_blocked) {
-        const updated2 = {
-          ...state,
+        await patchActiveState(repoRoot, flowName, {
           context_blocked: true,
           context_warning: { warned: true, warned_at_pct: pct, warned_at: (/* @__PURE__ */ new Date()).toISOString() }
-        };
-        await writeActiveState(repoRoot, flowName, updated2);
+        });
       }
       return {
         additionalContext: `[ai-flow] Context \u5DF2\u8FBE ${pct}%\uFF08block \u9608\u503C ${blockAt}%\uFF09\u3002\u540E\u7EED\u6240\u6709 write \u5DE5\u5177\u5C06\u88AB\u81EA\u52A8\u62D2\u7EDD\uFF08context \u4FDD\u62A4\u5DF2\u6FC0\u6D3B\uFF09\uFF0C\u4E0D\u8981\u518D\u5C1D\u8BD5\u4EFB\u4F55\u5DE5\u5177\u8C03\u7528\u3002\u8BF7\u7ACB\u5373\u505C\u6B62\u5F53\u524D\u5DE5\u4F5C\uFF0C\u5411\u5F00\u53D1\u8005\u8BF4\u660E\u539F\u56E0\uFF1Acontext \u5DF2\u8D85\u8FC7 block \u9608\u503C\uFF0C\u8BF7\u8FD0\u884C /clear \u540E\u91CD\u5165\u7EE7\u7EED\uFF08ai-flow \u8FDB\u5EA6\u5DF2\u6301\u4E45\u5316\uFF09\u3002`
@@ -4481,11 +4568,9 @@ async function handlePostTool(input2) {
     if (pct < warnAt) return null;
     const prevPct = warning.warned_at_pct ?? 0;
     if (warning.warned && pct < prevPct + rewarnDelta) return null;
-    const updated = {
-      ...state,
+    await patchActiveState(repoRoot, flowName, {
       context_warning: { warned: true, warned_at_pct: pct, warned_at: (/* @__PURE__ */ new Date()).toISOString() }
-    };
-    await writeActiveState(repoRoot, flowName, updated);
+    });
     return {
       additionalContext: `[ai-flow] Context \u5F53\u524D ${pct}%\uFF08warn \u9608\u503C ${warnAt}%\uFF09\u3002\u8BF7\u5411\u5F00\u53D1\u8005\u8F93\u51FA\u4E00\u6761\u9192\u76EE\u63D0\u9192\uFF08\u7528 > \u5F15\u7528\u5757\u6216\u52A0\u7C97\uFF09\uFF0C\u5185\u5BB9\uFF1A"\u26A0\uFE0F Context \u5DF2\u8FBE ${pct}%\u3002\u5982\u9700\u9AD8\u8D28\u91CF\u6267\u884C\uFF0C\u53EF Ctrl+C \u505C\u6B62\u4EFB\u52A1 \u2192 /clear \u2192 \u91CD\u5165\u540E\u4ECE\u65AD\u70B9\u7EE7\u7EED\uFF08ai-flow \u8FDB\u5EA6\u5DF2\u6301\u4E45\u5316\uFF09\u3002"\u8F93\u51FA\u63D0\u9192\u540E\u7EE7\u7EED\u6B63\u5E38\u6267\u884C\u5F53\u524D\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u4E2D\u65AD\u6216\u505C\u6B62\u3002`
     };
@@ -4501,7 +4586,7 @@ async function handlePostTool(input2) {
 // src/hooks/posttool.ts
 var raw = (() => {
   try {
-    return readFileSync7(0, "utf-8");
+    return readFileSync6(0, "utf-8");
   } catch {
     return "{}";
   }

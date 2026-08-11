@@ -4,7 +4,19 @@
 import { readFileSync as readFileSync3 } from "fs";
 
 // src/lib/state.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  writeFileSync as writeFileSync2,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  appendFileSync,
+  renameSync as renameSync2,
+  openSync,
+  closeSync,
+  unlinkSync as unlinkSync2,
+  statSync
+} from "fs";
 import { randomBytes } from "crypto";
 import { join as join2, dirname } from "path";
 
@@ -89,6 +101,45 @@ async function writeActiveState(repoRoot, flowName, state) {
   writeFileSync2(tmp, JSON.stringify(state, null, 2));
   renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
 }
+var LOCK_STALE_MS = 1e4;
+var LOCK_POLL_MS = 8;
+var LOCK_MAX_WAIT_MS = 1e3;
+async function acquireStateLock(repoRoot, flowName) {
+  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
+  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return () => {
+        try {
+          unlinkSync2(lockPath);
+        } catch {
+        }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+      } catch {
+      }
+    }
+    if (Date.now() >= deadline) return () => {
+    };
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+async function patchActiveState(repoRoot, flowName, patch) {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -145,8 +196,14 @@ async function handleSessionEnd(input2) {
   if (active) {
     const { flowName, state, repoRoot } = active;
     if (state.last_session_id === session_id) {
-      await writeActiveState(repoRoot, flowName, { ...state, last_session_id: null });
-      await appendLog(repoRoot, flowName, session_id, `SESSION_END cleared last_session_id`);
+      const written = await patchActiveState(
+        repoRoot,
+        flowName,
+        (cur) => cur.last_session_id === session_id ? { last_session_id: null } : {}
+      );
+      if (written && written.last_session_id === null) {
+        await appendLog(repoRoot, flowName, session_id, `SESSION_END cleared last_session_id`);
+      }
     }
   }
   unbindSession(session_id);

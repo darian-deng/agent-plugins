@@ -10,9 +10,22 @@ import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
 import { join as join4, relative, resolve } from "path";
+import { existsSync as existsSync4 } from "fs";
 
 // src/lib/state.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  writeFileSync as writeFileSync2,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  appendFileSync,
+  renameSync as renameSync2,
+  openSync,
+  closeSync,
+  unlinkSync as unlinkSync2,
+  statSync
+} from "fs";
 import { join as join2, dirname } from "path";
 
 // src/lib/session-registry.ts
@@ -4282,6 +4295,20 @@ function resolvePath(repoRoot, filePath) {
   if (filePath.startsWith("/")) return filePath;
   return join4(repoRoot, filePath);
 }
+function controlPlaneRole(repoRoot, flowName, absPath) {
+  const norm = absPath.replace(/\\/g, "/");
+  const marker = `/.ai-flow/${flowName}/`;
+  const idx = norm.lastIndexOf(marker);
+  if (idx === -1) return null;
+  const anchor = norm.slice(0, idx) || "/";
+  const rest = norm.slice(idx + marker.length);
+  if (resolve(anchor) !== resolve(repoRoot) && !existsSync4(join4(anchor, ".git"))) return null;
+  if (rest === "state/active.json") return "active.json";
+  if (rest === "config.json") return "config.json";
+  if (rest.startsWith("stages/")) return "stages";
+  if (rest.startsWith("scripts/")) return "scripts";
+  return null;
+}
 async function handlePreTool(input2) {
   const { cwd, tool_name, tool_input, session_id } = input2;
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
@@ -4379,24 +4406,21 @@ Fix the issues and try again.`);
       await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_ALLOW stage=${state.current_stage}`);
       return allow();
     }
+    switch (controlPlaneRole(repoRoot, activeFlowName, absPath)) {
+      case "active.json":
+        await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json: ${fp}`);
+        return deny("Direct writes to active.json are blocked (control plane protection).");
+      case "config.json":
+        await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json: ${fp}`);
+        return deny("config.json is read-only during flow execution \u2014 this also covers the copy in any worktree of this repository.");
+      case "stages":
+        await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
+        return deny("Stage prompt files are read-only during flow execution \u2014 this also covers the copy in any worktree of this repository.");
+      case "scripts":
+        await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
+        return deny("Script files cannot be modified during flow execution \u2014 this also covers the copy in any worktree of this repository. Ask the user to replace them manually.");
+    }
     const rel = relative(repoRoot, absPath);
-    const flowBase = join4(".ai-flow", activeFlowName);
-    if (rel === join4(flowBase, "state", "active.json")) {
-      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED direct write to active.json`);
-      return deny("Direct writes to active.json are blocked (control plane protection).");
-    }
-    if (rel === join4(flowBase, "config.json")) {
-      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to config.json`);
-      return deny("config.json is read-only during flow execution.");
-    }
-    if (rel.startsWith(join4(flowBase, "stages") + "/")) {
-      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to stage prompt: ${fp}`);
-      return deny("Stage prompt files are read-only during flow execution.");
-    }
-    if (rel.startsWith(join4(flowBase, "scripts") + "/")) {
-      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
-      return deny("Script files cannot be modified during flow execution. Ask the user to replace them manually.");
-    }
     const stageCfg = getStageConfig(config, state.current_stage);
     if (stageCfg.write_scope === "docs_only") {
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);

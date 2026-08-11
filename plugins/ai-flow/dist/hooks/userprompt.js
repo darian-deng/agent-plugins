@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // src/hooks/userprompt.ts
-import { readFileSync as readFileSync9 } from "fs";
+import { readFileSync as readFileSync8 } from "fs";
 
 // src/lib/userprompt-handler.ts
 import { join as join13 } from "path";
@@ -4184,12 +4184,24 @@ function parseFlowCommand(prompt, knownFlows) {
 }
 
 // src/lib/commands/start.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync4 } from "fs";
 import { join as join7 } from "path";
 import { execSync } from "child_process";
 
 // src/lib/state.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync3, readdirSync as readdirSync3, appendFileSync, renameSync as renameSync2 } from "fs";
+import {
+  existsSync as existsSync3,
+  mkdirSync as mkdirSync2,
+  writeFileSync as writeFileSync2,
+  readFileSync as readFileSync3,
+  readdirSync as readdirSync3,
+  appendFileSync,
+  renameSync as renameSync2,
+  openSync,
+  closeSync,
+  unlinkSync as unlinkSync2,
+  statSync
+} from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { join as join3, dirname } from "path";
 
@@ -4260,6 +4272,45 @@ async function writeActiveState(repoRoot, flowName, state) {
   const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes2(4).toString("hex")}.tmp`);
   writeFileSync2(tmp, JSON.stringify(state, null, 2));
   renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
+}
+var LOCK_STALE_MS = 1e4;
+var LOCK_POLL_MS = 8;
+var LOCK_MAX_WAIT_MS = 1e3;
+async function acquireStateLock(repoRoot, flowName) {
+  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
+  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return () => {
+        try {
+          unlinkSync2(lockPath);
+        } catch {
+        }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+      } catch {
+      }
+    }
+    if (Date.now() >= deadline) return () => {
+    };
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+async function patchActiveState(repoRoot, flowName, patch) {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
+  }
 }
 function findRepoRoot(cwd) {
   let dir = cwd;
@@ -4343,7 +4394,8 @@ function activeJsonPath(repoRoot, flowName) {
 import { join as join4 } from "path";
 function renderPrompt(content, repoRoot, flowName) {
   const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-  return content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  return substituted + "\n" + writtenDocLengthNote();
 }
 function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   const flowRoot = join4(repoRoot, ".ai-flow", flowName);
@@ -4354,6 +4406,15 @@ function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
+}
+function writtenDocLengthNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
+    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u7F29\u53D9\u8FF0\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
+    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF0C\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\u2014\u2014`,
+    `\u7B80\u6D01\u53EA\u9488\u5BF9\u53D9\u8FF0\u4E0E\u5197\u4F59\uFF0C\u7EDD\u4E0D\u7528\u5B83\u7701\u6389\u5FC5\u9700\u6761\u76EE\u3002`
+  ].join("\n");
 }
 function gateProtocolNote() {
   return [
@@ -4405,9 +4466,10 @@ async function runScript(command, cwd, opts) {
 }
 
 // src/lib/context.ts
-import { readFileSync as readFileSync4, existsSync as existsSync5 } from "fs";
+import { existsSync as existsSync5, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "fs";
 import { join as join6 } from "path";
 import { homedir as homedir2 } from "os";
+var TAIL_WINDOW_BYTES = 256 * 1024;
 function transcriptPathFor(sessionId, cwd) {
   const encoded = cwd.replace(/\//g, "-");
   return join6(homedir2(), ".claude", "projects", encoded, `${sessionId}.jsonl`);
@@ -4415,22 +4477,39 @@ function transcriptPathFor(sessionId, cwd) {
 function readTokenCount(sessionId, cwd, transcriptPath) {
   const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
   if (!existsSync5(p)) return 0;
+  let fd = null;
   try {
-    const lines = readFileSync4(p, "utf-8").split("\n").filter(Boolean);
-    let lastUsage = null;
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        if (entry.type === "assistant" && entry.message?.usage) {
-          lastUsage = entry.message.usage;
+    fd = openSync2(p, "r");
+    const size = fstatSync(fd).size;
+    if (size === 0) return 0;
+    for (let window = TAIL_WINDOW_BYTES; ; window *= 8) {
+      const start = Math.max(0, size - window);
+      const buf = Buffer.allocUnsafe(size - start);
+      const bytesRead = readSync(fd, buf, 0, buf.length, start);
+      const lines = buf.subarray(0, bytesRead).toString("utf-8").split("\n");
+      if (start > 0) lines.shift();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        try {
+          const entry = JSON.parse(lines[i]);
+          const usage = entry.type === "assistant" ? entry.message?.usage : void 0;
+          if (usage) {
+            return (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+          }
+        } catch {
         }
+      }
+      if (start === 0) return 0;
+    }
+  } catch {
+    return 0;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync2(fd);
       } catch {
       }
     }
-    if (!lastUsage) return 0;
-    return (lastUsage.input_tokens ?? 0) + (lastUsage.cache_creation_input_tokens ?? 0) + (lastUsage.cache_read_input_tokens ?? 0);
-  } catch {
-    return 0;
   }
 }
 function contextPct(sessionId, cwd, contextWindowSize, transcriptPath) {
@@ -4529,7 +4608,7 @@ ${result.reason}`
   const promptPath = join7(repoRoot, ".ai-flow", flowName, firstStage.prompt);
   let stageContent = "";
   if (existsSync6(promptPath)) {
-    stageContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
+    stageContent = renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName);
   }
   if (firstStage.completion.gate) stageContent += "\n" + gateProtocolNote();
   const ctx = buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
@@ -4546,7 +4625,7 @@ current_stage: ${firstStage.id}
 import { join as join9 } from "path";
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6, unlinkSync as unlinkSync2 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync5, unlinkSync as unlinkSync3 } from "fs";
 import { join as join8 } from "path";
 async function advanceStage(repoRoot, flowName, sessionId) {
   const state = await readActiveState(repoRoot, flowName);
@@ -4558,9 +4637,9 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync7(activeJson)) unlinkSync2(activeJson);
+    if (existsSync7(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync7(sig)) unlinkSync2(sig);
+    if (existsSync7(sig)) unlinkSync3(sig);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4569,17 +4648,19 @@ async function advanceStage(repoRoot, flowName, sessionId) {
       terminal: true
     };
   }
-  const updated = { ...state, current_stage: next, first_prompt_handled: false };
-  await writeActiveState(repoRoot, flowName, updated);
+  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  if (!advanced) {
+    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
+  }
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync7(sigFile)) unlinkSync2(sigFile);
+  if (existsSync7(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join8(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
   if (existsSync7(promptPath)) {
     try {
-      promptContent = renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName);
+      promptContent = renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName);
     } catch {
     }
   }
@@ -4641,7 +4722,7 @@ gate-pending \u671F\u95F4\u4EA7\u7269\u88AB\u6539\u52A8\u5230\u4E0D\u5408\u89C4\
 
 // src/lib/commands/abort.ts
 import { execFileSync } from "child_process";
-import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync3 } from "fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4 } from "fs";
 import { join as join10 } from "path";
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
@@ -4703,7 +4784,7 @@ Flow remains active \u2014 active.json was NOT deleted.`;
     return { action: "deny", reason };
   }
   const activeJsonPath2 = join10(repoRoot, ".ai-flow", flowName, "state", "active.json");
-  if (existsSync8(activeJsonPath2)) unlinkSync3(activeJsonPath2);
+  if (existsSync8(activeJsonPath2)) unlinkSync4(activeJsonPath2);
   await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
   const headNote = !originalBranch || originalBranch === "HEAD" ? `
 Note: you were in detached HEAD state; HEAD is now on '${branchName}'.` : "";
@@ -4716,7 +4797,7 @@ To resume: ${flowName} resume ${branchName}`
 
 // src/lib/commands/resume.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { existsSync as existsSync9, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync6 } from "fs";
 import { join as join11 } from "path";
 async function handleResume(repoRoot, flowName, sessionId, branch) {
   const trimmedBranch = branch.trim();
@@ -4787,7 +4868,7 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
   const promptPath = join11(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
   let stageContent = "";
   if (existsSync9(promptPath)) {
-    stageContent = renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName);
+    stageContent = renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName);
   }
   if (stageCfg.completion.gate) stageContent += "\n" + gateProtocolNote();
   const ctx = buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
@@ -4829,13 +4910,13 @@ async function handleStatus(repoRoot, flowName) {
 }
 
 // src/lib/commands/help.ts
-import { existsSync as existsSync10, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync7 } from "fs";
 import { join as join12 } from "path";
 async function handleHelp(repoRoot, flowName) {
   if (flowName) {
     const helperPath = join12(repoRoot, ".ai-flow", flowName, "helper.md");
     if (existsSync10(helperPath)) {
-      const content = readFileSync8(helperPath, "utf-8");
+      const content = readFileSync7(helperPath, "utf-8");
       return { action: "allow", additionalContext: content };
     }
     try {
@@ -4933,8 +5014,7 @@ async function handleUserPrompt(input2) {
         gatePending = isGatePending(signal, config, active.state.current_stage);
       } catch {
       }
-      const updatedState = { ...active.state, first_prompt_handled: true };
-      await writeActiveState(active.repoRoot, active.flowName, updatedState);
+      await patchActiveState(active.repoRoot, active.flowName, { first_prompt_handled: true });
       const flowRoot = join13(active.repoRoot, ".ai-flow", active.flowName);
       const statusLine = flowStatusLine({
         flowName: active.flowName,
@@ -5009,7 +5089,7 @@ Valid commands: ${VALID_COMMANDS.join(", ")}`
 // src/hooks/userprompt.ts
 var raw = (() => {
   try {
-    return readFileSync9(0, "utf-8");
+    return readFileSync8(0, "utf-8");
   } catch {
     return "{}";
   }

@@ -13,7 +13,19 @@ import { readFileSync as readFileSync5, existsSync as existsSync5 } from "fs";
 import { join as join6 } from "path";
 
 // src/lib/state.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2, readdirSync as readdirSync2, appendFileSync, renameSync as renameSync2 } from "fs";
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  writeFileSync as writeFileSync2,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  appendFileSync,
+  renameSync as renameSync2,
+  openSync,
+  closeSync,
+  unlinkSync as unlinkSync2,
+  statSync
+} from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { join as join2, dirname } from "path";
 
@@ -114,6 +126,45 @@ async function writeActiveState(repoRoot, flowName, state) {
   const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes2(4).toString("hex")}.tmp`);
   writeFileSync2(tmp, JSON.stringify(state, null, 2));
   renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
+}
+var LOCK_STALE_MS = 1e4;
+var LOCK_POLL_MS = 8;
+var LOCK_MAX_WAIT_MS = 1e3;
+async function acquireStateLock(repoRoot, flowName) {
+  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
+  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return () => {
+        try {
+          unlinkSync2(lockPath);
+        } catch {
+        }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+      } catch {
+      }
+    }
+    if (Date.now() >= deadline) return () => {
+    };
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+async function patchActiveState(repoRoot, flowName, patch) {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
+  }
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
@@ -4332,6 +4383,7 @@ function getStageConfig(config, stageId) {
 }
 
 // src/lib/context.ts
+var TAIL_WINDOW_BYTES = 256 * 1024;
 var DEFAULT_CONTEXT_WINDOW = 1e6;
 function contextWindowForModel(model) {
   if (!model) return DEFAULT_CONTEXT_WINDOW;
@@ -4345,14 +4397,15 @@ function contextWindowForModel(model) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync as unlinkSync2 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
 import { join as join5 } from "path";
 
 // src/lib/prompt-render.ts
 import { join as join4 } from "path";
 function renderPrompt(content, repoRoot, flowName) {
   const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-  return content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  return substituted + "\n" + writtenDocLengthNote();
 }
 function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   const flowRoot = join4(repoRoot, ".ai-flow", flowName);
@@ -4363,6 +4416,15 @@ function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
+}
+function writtenDocLengthNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
+    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u7F29\u53D9\u8FF0\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
+    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF0C\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\u2014\u2014`,
+    `\u7B80\u6D01\u53EA\u9488\u5BF9\u53D9\u8FF0\u4E0E\u5197\u4F59\uFF0C\u7EDD\u4E0D\u7528\u5B83\u7701\u6389\u5FC5\u9700\u6761\u76EE\u3002`
+  ].join("\n");
 }
 function gateProtocolNote() {
   return [
@@ -4387,9 +4449,9 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync4(activeJson)) unlinkSync2(activeJson);
+    if (existsSync4(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync4(sig)) unlinkSync2(sig);
+    if (existsSync4(sig)) unlinkSync3(sig);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4398,10 +4460,12 @@ async function advanceStage(repoRoot, flowName, sessionId) {
       terminal: true
     };
   }
-  const updated = { ...state, current_stage: next, first_prompt_handled: false };
-  await writeActiveState(repoRoot, flowName, updated);
+  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  if (!advanced) {
+    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
+  }
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync4(sigFile)) unlinkSync2(sigFile);
+  if (existsSync4(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const promptPath = join5(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
@@ -4453,22 +4517,21 @@ async function handleSessionStart(input2) {
     }
     const isNewSession = state.last_session_id !== session_id;
     const isClear = input2.source === "compact" || input2.source === "clear";
-    const newHistoryIds = [...state.history_session_ids ?? []];
-    if (isNewSession && !newHistoryIds.includes(session_id)) {
-      newHistoryIds.push(session_id);
-    }
-    const updated = {
-      ...state,
-      last_session_id: session_id,
-      history_session_ids: newHistoryIds,
-      ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
-    };
-    if (isNewSession || isClear) {
-      updated.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
-      updated.context_blocked = false;
-      updated.first_prompt_handled = false;
-    }
-    await writeActiveState(repoRoot, flowName, updated);
+    await patchActiveState(repoRoot, flowName, (cur) => {
+      const historyIds = [...cur.history_session_ids ?? []];
+      if (isNewSession && !historyIds.includes(session_id)) historyIds.push(session_id);
+      const patch = {
+        last_session_id: session_id,
+        history_session_ids: historyIds,
+        ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
+      };
+      if (isNewSession || isClear) {
+        patch.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
+        patch.context_blocked = false;
+        patch.first_prompt_handled = false;
+      }
+      return patch;
+    });
     bindSession(session_id, repoRoot, flowName);
     const config = await loadFlowConfig(repoRoot, flowName);
     const stageCfg = getStageConfig(config, state.current_stage);
