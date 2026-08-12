@@ -51,7 +51,7 @@
       "name": "ai-flow",
       "source": "./plugins/ai-flow",
       "description": "Generic data-driven AI workflow engine with human-approval gates, cross-session state persistence, and mechanically-enforced hooks.",
-      "version": "0.45.0",
+      "version": "0.46.0",
       "category": "development",
       "tags": [
         "workflow",
