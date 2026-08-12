@@ -147,7 +147,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 **「无法从 diff 判断」的处理**：若某项 verdict 是「无法从 diff 判断」（该项要求落在本次未改动的代码里，reviewer 单看 diff 判不出），主 session 不得当 PASS 也不得当 FAIL 直接放过——须自行读相关代码核实后再落最终 PASS/FAIL，并在 `**审查**` 行该项后加注 `（主 session 核实）`。
 
-**注释治理不在每 task 评审里顺带做**：历史证明"多轴评审里稀释的一条"会漏（某次 feat-flow 源码留了 54 处进程指代）。每 task 只做**写时预防**（实施子代理守「注释规则」，见上），真正的**清理统一由 stage-5 环节 C 显式调用 `comment` skill 做**（专职、grep 候选 + sonnet 语义兜底 + 删完重测）；per-task commit message 会在 stage-5 squash 时被自包含的最终 message 取代，不必在此逐条核。
+**注释治理不在每 task 评审里顺带做**：历史证明"多轴评审里稀释的一条"会漏（某次 feat-flow 源码留了 54 处进程指代）。每 task 只做**写时预防**（实施子代理守「注释规则」，见上），真正的**清理统一由 stage-5 环节 C 显式调用 `comment` skill 做**（专职；机制见 skill、取最新）；per-task commit message 会在 stage-5 squash 时被自包含的最终 message 取代，不必在此逐条核。
 
 **规格 verdict 的额外检查维度**：在 SDD 单次评审产出的规格 verdict 基础上，叠加「越界检查」——
 - **文件范围越界**：commit diff 中是否包含不在本 task `files` 字段范围内的文件修改？（`git show <sha> --name-only` 机械检查）。**单元是耦合簇时**：对比对象改为**簇 `files` 并集**，并结合子代理回报的「每个 task 实际碰了哪些文件」做 per-task 核对（簇内 task 互写对方文件属正常协作，写到簇并集之外才算越界）。

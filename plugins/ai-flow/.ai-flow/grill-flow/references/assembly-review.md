@@ -16,9 +16,9 @@
 
 - **① Standards 轴**：携 `references/fowler-smells.md` 全文，审整体 diff 的跨 ticket smell——Duplicated Code（多 ticket 各写一份类似逻辑）、Shotgun Surgery、错 altitude、过度工程。
 - **② Spec 轴**：携 `spec.md`，对 **User Stories 逐条**查需求闭环——每条 US 是否被兑现、有无缺失/偏离。
-- **安全专项**（有界清单，强制、不外扩）：只看本 diff 的注入 / 鉴权越权 / 密钥处理。
+- **安全专项**（强制）：立场是**默认 diff 里可能有可利用漏洞、外部输入不可信，直到证明无害**（不是「读一遍看有没有」——这个心态转变零成本、抓真漏洞最值）。据此扫本 diff 的注入 / 鉴权与访问控制（越权、缺校验）/ 密钥凭据 / 敏感数据外泄（日志·错误·响应）/ 不安全反序列化，**不强制逐类打勾、不外扩到 diff 之外、不引入多级 severity**（定级沿用下方阻塞 / 建议二元）。
 
-findings 分**阻塞 / 建议**落 review.md。阻塞项修复 → commit `fix: address review finding`。**不做 feat-flow 的 3 轮验证套娃**（grill-flow 刻意保持轻，一次审+修即可；判断型缺陷的最终兜底在环节 C 开发者亲审）。
+findings 分**阻塞 / 建议**落 review.md。阻塞项修复 → commit `fix: address review finding`。**不做 feat-flow 的 3 轮验证套娃**（grill-flow 刻意保持轻，一次审+修即可；判断型缺陷的最终兜底在环节 C 开发者亲审）。**唯一例外：安全类阻塞项修复后加一次独立复核**——另派 `opus` 子代理、report-only（不写文件、不 apply），只核这几行 fix 是否真堵住、有没有开新洞，**不重审全 diff**（per-ticket 层已有「关键修复独立复核」的提法，本例外把它**具体化并限定到 assembly 层的安全阻塞项**，不是等价搬移；「不做 3 轮套娃」禁的是重审整份 diff，这里只窄验几行 fix，粒度一致、不冲突）。**复核判仍不到位 → 直接停下 `AskUserQuestion` 问开发者**（安全红线 = 鉴权绕过 / 注入 / 密钥·敏感数据外泄 / 越权 / RCE）；**不得因此再补第二轮修复——即便只补一次也不行**。**此例外只给安全（可被外部利用、后果不可逆的一类），不外推到 Standards / Spec。**
 
 ## 环节 C：开发者 IDE 人审闭环 + squash（写 signal 前最后一关）
 
@@ -37,7 +37,7 @@ git reset "$BASE_SHA"
 reset 后**立即在 review.md 建「人工 review（环节 C）」节**（哪怕空）——作为 /clear 落在「reset 已跑、开发者还没提问」窗口的恢复标记。
 
 ### 注释清理（显式调用 comment skill，reset 后 + squash 前各一次）
-**编排器显式调用 `comment` skill**（`/ai-flow:comment`，范围=相对 base 的**已追踪改动 ∪ 未追踪新文件**——两半边的取法与理由见 skill，此处不复述）：**reset 后跑一次**（让开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声——即"CR 时改动又乱加注释"）。skill 自带 grep 符号候选 + sonnet 语义判断（含文字类进程指代 / 冗余 / 失效）+ 删完重跑环节 A 测试，只清新增注释、不动老注释。清理结果记 review.md。**判据在 skill 里、每次调用取最新，不在本 stage 复述。**
+**编排器显式调用 `comment` skill**（`/ai-flow:comment`，范围=相对 base 的**已追踪改动 ∪ 未追踪新文件**——两半边的取法与理由见 skill，此处不复述）：**reset 后跑一次**（让开发者亲审的是已清理 diff）；人审-修复循环若动过代码，**squash 前再跑一次**（兜住修复时新灌的噪声——即"CR 时改动又乱加注释"）。清理结果记 review.md。**执行方式与机制——谁跑、怎么并行、是否会动老注释、判据——全在 skill 里、每次调用取最新，本 stage 不复述（本 stage 只定「何时调用 + 范围」）。**
 
 ### 真机验证清单（tickets.md 有 `## 待真机验证` 段时）
 grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——stage-3 机器地板验不了的票都攒在这。逐条走：

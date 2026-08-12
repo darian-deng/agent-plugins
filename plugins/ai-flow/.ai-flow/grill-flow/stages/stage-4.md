@@ -22,7 +22,7 @@
 **先判 /clear 重入**（照 assembly-review.md 重入判据，用 git 状态）：HEAD body 含 `flow-squash` → 补 signal；`HEAD==base_sha_code` 且工作区非空 → 续环节 C 人审循环；否则（HEAD 领先 base）→ 环节 A/B。
 
 1. **环节 A 全量测试**：AI 跑（假绿检测：测试数>0），失败修代码，原始输出（通过/失败计数 + commit SHA）落 review.md。
-2. **环节 B 双轴组装审**（一次，不套娃）：两个 general-purpose 子代理并行审 `git diff <base>..HEAD`——Standards（携 fowler-smells.md，跨 ticket smell）+ Spec（携 spec.md，User Stories 闭环）+ 安全专项（有界清单）。阻塞项修复 → `fix:` commit。
+2. **环节 B 双轴组装审 + 安全专项**（组装审一次、不套娃；**安全阻塞项有「修复后一次独立复核」例外**）：两个 general-purpose 子代理并行审 `git diff <base>..HEAD`——Standards（携 fowler-smells.md，跨 ticket smell）+ Spec（携 spec.md，User Stories 闭环）+ 安全专项。阻塞项修复 → `fix:` commit。**安全专项的对抗立场 / 扫查类别 / 独立复核例外一律以 `assembly-review.md` 为准，本行不复述细节**（细节复述必漂移）。
 3. **环节 C 开发者 IDE 人审 + squash**：reset 前先 `git diff --name-only <base>..HEAD` 记下**本 flow 代码改动范围**写入 review.md（squash 前 scope 核对的依据，跨 /clear 保留）→ `git reset <base>` 摊平为未暂存全量 → 告知开发者去 IDE Changes 组亲审（勿手动 stage，保语言服务）→ **真机验证清单**（若 tickets.md 有 `## 待真机验证` 段：逐票请开发者做真机 / 鉴权 / 运行时验证，验过 → 把该票 `rm:pending` 改 `rm:done`，验出问题 → 并入人审-修复循环。这是全流程唯一的真机验证落点）→ **人审-修复循环**（开发者提问题 → AI 改工作树 → 重跑全量测试 → 记 review.md）→ 开发者确认无更多问题**且无 `rm:pending` 残留（或开发者明确豁免）** → 最终 CR（条件式，子代理用 `git diff --staged <base>`）→ **squash 前工作树 scope 核对**（见下）→ **squash 成单个 feat commit**（body 末行 `flow-squash: <flow_id>`）。
 
 **squash 前工作树 scope 核对**（`git add -A` 之前必做，防 monorepo 里把跨子项目 stray 改动一并吞进 squash）：逐条核对 `git status --porcelain`，只有落在**本 flow 范围**内的改动才纳入 squash。本 flow 范围 = reset 前记下的代码改动范围 ∪ `docs/grill-flows/**`（记账 tracking：candidates.md、tickets.md 的 `qc:done` / `[x]`——属本 flow、**必须纳入** squash，别把它们排除掉，收尾吸收记账靠的就是它们）。落在范围外的**跨子项目 stray 代码改动**（本 flow 未触及、其他子项目的改动）→ **不 `git add` 进 squash**，停下问开发者如何处理，别一把 `git add -A` 吞进去。

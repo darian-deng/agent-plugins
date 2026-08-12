@@ -9,7 +9,7 @@
 ## 核心内核（"轻"在哪、质量在哪）
 
 - **轻 = mattpocock 内核**：散文 spec 不搞接口枚举、tracer-bullet 不搞字段矩阵、提示词薄（细节在 references/）。执行沿用子代理派发（主 session 只编排、context 干净），差异化落在上游散文 spec + tracer-bullet 竖切。
-- **质量把控齐**：per-ticket simplify + Standards/Spec/correctness 三轴评审子代理并行 + 注释清理 + 客观地板（假绿检测/枚举负空间/回归）；stage-2 对抗性方案审查；收尾组装双轴 + 安全专项；集中沉淀。
+- **质量把控齐**：per-ticket simplify + Standards/Spec/correctness 三轴评审子代理并行 + 注释清理 + 客观地板（假绿检测/枚举负空间/回归）；stage-2 对抗性方案审查；收尾组装双轴 + 安全专项（对抗立场 + 阻塞项独立复核）；集中沉淀。
 
 ## 命令速查
 
@@ -57,7 +57,7 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 - **系统**：Node.js ≥ 18、git、claude CLI、mermaid-cli（`mmdc`，stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
 - **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
 - **内置命令**：`/simplify`（stage-3 per-ticket 机械型质量修，Claude Code 内置）。correctness 轴不用内置命令，改由子代理携未提交 diff 审 bug（通用、见 `references/per-ticket-review.md`）。
-- **内置 skill**：`comment`（注释纪律与清理，会真删——实施子代理写时守；stage-3 每票 commit 前编排器显式调用一次；stage-4 环节 C reset 后 + squash 前各一次。机制「grep 机械兜底进程指代 + sonnet 判冗余 + 删完重测」；随 ai-flow 一起装、无需额外安装）。
+- **内置 skill**：`comment`（注释纪律与清理，会真删——实施子代理写时守；stage-3 每票 commit 前编排器显式调用一次；stage-4 环节 C reset 后 + squash 前各一次。机制与判据见 skill 自身、取最新；随 ai-flow 一起装、无需额外安装）。
 - preflight 按上述检测；缺失给安装命令并阻止启动。
 
 > **行为真相以本目录（`.ai-flow/grill-flow/`）现版文件为准**（stage 提示词 / references / scripts / config.json）。仓库根 `docs/grill-flow-design.md` 是**设计 rationale 与决策历程档案**——回答「当时为什么这么设计、否掉了什么」，正文的执行模型描述已过时，**不要拿它量实现**。

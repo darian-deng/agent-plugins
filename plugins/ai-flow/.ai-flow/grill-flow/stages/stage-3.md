@@ -30,7 +30,7 @@
 
 1. **精瘦派发实施子代理**（`sonnet`/1M，传入纪律见 `per-ticket-review.md`）：携该 ticket 的 tracer-bullet 竖切 + spec 相关段 + files 符号锚点 + 前置 ticket 的 commit SHA 指针 + 相关 ADR 路径 → 子代理 TDD 只在 seam、实现、`/simplify` apply、**改动留工作树不 commit**、回精简形状；近上限走**截断自保护**（commit `[partial]` + 剩余清单，编排器续派）。
 2. **并行派 Standards / Spec / correctness 三评审子代理**（`opus`，一次并行派三个：只读同一份未提交 `git diff`、不写文件、无 race（竞态），第 3 步裁 findings 处天然汇合）report-only。
-3. **编排器裁 findings**：质量 / smell / spec-drift / bug → 派子代理改工作树；**决策型 / 安全型（推翻方案、安全红线、需开发者拍板的取舍）→ 停下 `AskUserQuestion` 问开发者**（编排器模型里人在环的唯一落点）。**「该票需真机 / 鉴权 / 运行时验证」不是停点**——按第 5 步打 `rm:pending` 标、连续跑，真机验证由 stage-4 环节 C 集中做。
+3. **编排器裁 findings**：质量 / smell / spec-drift / bug → 派子代理改工作树；**决策型 / 安全型（推翻方案、安全红线、需开发者拍板的取舍）→ 停下 `AskUserQuestion` 问开发者**（编排器模型里人在环的唯一落点）。**「安全红线」有客观锚点、不凭感觉**：命中**鉴权绕过 / 注入 / 密钥·敏感数据外泄 / 越权 / RCE** 这几类才强制停；纯防御性加固、不涉及可利用路径的当常规 bug 内联修、不必停（免得「安全型」被一刀切频繁打断连续主循环）。**「该票需真机 / 鉴权 / 运行时验证」不是停点**——按第 5 步打 `rm:pending` 标、连续跑，真机验证由 stage-4 环节 C 集中做。
 4. **编排器跑客观地板**：typecheck + 该 ticket 测试绿 + 假绿检测 + 枚举负空间 + 回归纪律。
 5. **编排器 commit**（把该 ticket **代码**——实现 + simplify + 修复——提交为该 ticket 唯一一笔独立 commit、**subject 首行含 `T<n>` 且只含本票号**、执行期锚点，**只含代码**；机器门只解析 subject 逐 commit 一一配对，body 里的票号提及不算数——跳过 hook 之类的说明用第二个 `-m` 写进 body）→ 落候选 candidates.md → 在该 ticket 那条上写 `qc:done`（行内或其缩进子项，写在别处不算）→ **判真机**：该票改动若需真机 / 鉴权 / 运行时验证（触发原生 / 主进程运行时、鉴权登录态流转、设备 I/O、跨端真机行为等，机器地板验不了的）→ 在该 ticket 行加 `rm:pending`（与 `qc:done` 并列）+ 往 tickets.md `## 待真机验证` 段 append 一条 `- T<n> — <一句话验什么>`（**清单条目用 `- T<n> — …` 格式**）→ 勾 `[x]`；**candidates.md / tickets.md 的记账改动留工作树、不单独 commit，跨 ticket 累积，由 stage-4 收尾 `git add -A` squash 统一吸收**（详见 `per-ticket-review.md`）。
 
