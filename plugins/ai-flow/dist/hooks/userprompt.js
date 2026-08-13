@@ -4203,7 +4203,8 @@ import {
   statSync
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
-import { join as join3, dirname } from "path";
+import { execFileSync } from "child_process";
+import { join as join3, dirname, resolve } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync as existsSync2, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
@@ -4321,6 +4322,20 @@ function findRepoRoot(cwd) {
     dir = parent;
   }
 }
+function isInsideLinkedWorktree(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [gitDir, commonDir] = out.trim().split("\n");
+    if (!gitDir || !commonDir) return false;
+    return resolve(gitDir) !== resolve(commonDir);
+  } catch {
+    return false;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -4331,7 +4346,7 @@ async function hasActiveFlow(cwd) {
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
       }
-      return null;
+      if (!isInsideLinkedWorktree(dir)) return null;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
@@ -4721,11 +4736,40 @@ gate-pending \u671F\u95F4\u4EA7\u7269\u88AB\u6539\u52A8\u5230\u4E0D\u5408\u89C4\
 }
 
 // src/lib/commands/abort.ts
-import { execFileSync } from "child_process";
-import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4 } from "fs";
+import { execFileSync as execFileSync2 } from "child_process";
+import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, realpathSync } from "fs";
 import { join as join10 } from "path";
 function git(args, cwd) {
-  return execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
+  return execFileSync2("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
+}
+function flowWorktrees(repoRoot, flowId) {
+  let out;
+  try {
+    out = git(["worktree", "list", "--porcelain"], repoRoot);
+  } catch {
+    return [];
+  }
+  let base = repoRoot;
+  try {
+    base = realpathSync(repoRoot);
+  } catch {
+  }
+  const prefix = join10(base, ".worktrees") + "/" + flowId + "-";
+  const found = [];
+  let cur = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      const p = line.slice("worktree ".length).trim();
+      cur = p.startsWith(prefix) ? { path: p, branch: "(detached)" } : null;
+      if (cur) found.push(cur);
+    } else if (cur && line.startsWith("branch ")) {
+      cur.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+      cur = null;
+    } else if (line.trim() === "") {
+      cur = null;
+    }
+  }
+  return found;
 }
 async function handleAbort(repoRoot, flowName, sessionId, args = "") {
   const state = await readActiveState(repoRoot, flowName);
@@ -4733,6 +4777,8 @@ async function handleAbort(repoRoot, flowName, sessionId, args = "") {
     return { action: "deny", reason: "No active flow to abort." };
   }
   const confirmed = args.split(/\s+/).includes("--confirm");
+  const worktrees = flowWorktrees(repoRoot, state.flow_id);
+  const worktreeList = worktrees.map((w) => `      - ${w.path} (${w.branch})`).join("\n");
   if (!confirmed) {
     return {
       action: "deny",
@@ -4741,7 +4787,25 @@ async function handleAbort(repoRoot, flowName, sessionId, args = "") {
   \u2022 \u5C06\u5F53\u524D\u6240\u6709\u6539\u52A8 commit \u5230\u8BE5 branch
   \u2022 \u5220\u9664 active.json\uFF08flow \u7EC8\u6B62\uFF0Chooks \u89E3\u9501\uFF09
 
-\u786E\u8BA4\u6267\u884C\uFF1A${flowName} abort --confirm`
+` + (worktrees.length > 0 ? `\u26A0 \u672C flow \u8FD8\u6709 ${worktrees.length} \u4E2A\u672A\u6536\u53E3\u7684 worktree\uFF1A
+${worktreeList}
+  \u5FEB\u7167\u53EA\u8986\u76D6\u4E3B\u5DE5\u4F5C\u6811\uFF0C\u8FD9\u4E9B worktree \u91CC\u7684\u6539\u52A8\u4E0E commit \u4E0D\u4F1A\u88AB\u4FDD\u5B58\u3002
+  \u5148\u6536\u53E3\uFF08\u5F52\u5E76\u6216\u81EA\u884C\u4FDD\u7559\u5206\u652F\uFF09\u518D abort\u3002
+
+` : "") + `\u786E\u8BA4\u6267\u884C\uFF1A${flowName} abort --confirm`
+    };
+  }
+  if (worktrees.length > 0) {
+    await appendLog(repoRoot, flowName, sessionId, `ABORT_REFUSED_WORKTREES count=${worktrees.length}`);
+    return {
+      action: "deny",
+      reason: `Abort \u5DF2\u62D2\u7EDD\uFF1A\u672C flow \u6709 ${worktrees.length} \u4E2A\u672A\u6536\u53E3\u7684 worktree\uFF0C\u5FEB\u7167\u4F1A\u6F0F\u6389\u5B83\u4EEC\u7684\u6539\u52A8\u3002
+${worktreeList}
+
+\u5904\u7406\u5176\u4E2D\u6BCF\u4E00\u4E2A\uFF0C\u7136\u540E\u91CD\u8BD5\uFF1A
+  \u2022 \u8981\u4FDD\u7559\u5176\u5DE5\u4F5C\uFF1A\u5148\u5F52\u5E76\u56DE\u5F53\u524D\u5206\u652F\uFF08\`git merge --ff-only <branch>\`\uFF09\uFF0C\u6216\u7559\u4E0B\u8BE5\u5206\u652F\u4E0D\u5220
+  \u2022 \u786E\u5B9A\u4E22\u5F03\uFF1A\`git worktree remove --force <path> && git branch -D <branch>\`
+  \u2022 \u76EE\u5F55\u5DF2\u624B\u52A8\u5220\u9664\u4F46\u6761\u76EE\u4ECD\u5728\uFF1A\`git worktree prune\``
     };
   }
   let originalBranch;
@@ -4796,7 +4860,7 @@ To resume: ${flowName} resume ${branchName}`
 }
 
 // src/lib/commands/resume.ts
-import { execFileSync as execFileSync2 } from "child_process";
+import { execFileSync as execFileSync3 } from "child_process";
 import { existsSync as existsSync9, readFileSync as readFileSync6 } from "fs";
 import { join as join11 } from "path";
 async function handleResume(repoRoot, flowName, sessionId, branch) {
@@ -4817,7 +4881,7 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
   }
   function gitTry(args) {
     try {
-      return execFileSync2("git", args, { cwd: repoRoot, stdio: "pipe", encoding: "utf-8" }).trim();
+      return execFileSync3("git", args, { cwd: repoRoot, stdio: "pipe", encoding: "utf-8" }).trim();
     } catch {
       return null;
     }

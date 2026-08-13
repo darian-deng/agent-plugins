@@ -179,17 +179,18 @@ function install(flow, dir, force) {
 function ensureGitignore(target) {
   const root = gitRoot(target) ?? target;
   const giPath = join(root, ".gitignore");
-  const rule = "**/.ai-flow/**/state/";
+  const rules = ["**/.ai-flow/**/state/", ".worktrees/"];
   let existing = "";
   try {
     existing = existsSync(giPath) ? readFileSync(giPath, "utf-8") : "";
   } catch {
   }
-  const hasRule = existing.split(/\r?\n/).some((l) => l.trim() === rule);
-  if (hasRule) return;
+  const present = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+  const missing = rules.filter((r) => !present.has(r));
+  if (missing.length === 0) return;
   const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
   try {
-    appendFileSync(giPath, `${prefix}${rule}
+    appendFileSync(giPath, `${prefix}${missing.join("\n")}
 `);
   } catch {
   }
@@ -238,5 +239,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 export {
   builtinFlows,
   detect,
+  ensureGitignore,
   nearestProjectRoot
 };

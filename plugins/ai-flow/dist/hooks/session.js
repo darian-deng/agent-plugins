@@ -27,7 +27,8 @@ import {
   statSync
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
-import { join as join2, dirname } from "path";
+import { execFileSync } from "child_process";
+import { join as join2, dirname, resolve } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -166,6 +167,20 @@ async function patchActiveState(repoRoot, flowName, patch) {
     release();
   }
 }
+function isInsideLinkedWorktree(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [gitDir, commonDir] = out.trim().split("\n");
+    if (!gitDir || !commonDir) return false;
+    return resolve(gitDir) !== resolve(commonDir);
+  } catch {
+    return false;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -176,7 +191,7 @@ async function hasActiveFlow(cwd) {
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
       }
-      return null;
+      if (!isInsideLinkedWorktree(dir)) return null;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;

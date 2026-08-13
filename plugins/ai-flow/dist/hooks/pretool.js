@@ -9,8 +9,7 @@ var __export = (target, all) => {
 import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
-import { join as join4, relative, resolve } from "path";
-import { existsSync as existsSync4 } from "fs";
+import { join as join4, relative, resolve as resolve2 } from "path";
 
 // src/lib/state.ts
 import {
@@ -26,7 +25,8 @@ import {
   unlinkSync as unlinkSync2,
   statSync
 } from "fs";
-import { join as join2, dirname } from "path";
+import { execFileSync } from "child_process";
+import { join as join2, dirname, resolve } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -69,6 +69,20 @@ async function readActiveState(repoRoot, flowName) {
     return null;
   }
 }
+function isInsideLinkedWorktree(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [gitDir, commonDir] = out.trim().split("\n");
+    if (!gitDir || !commonDir) return false;
+    return resolve(gitDir) !== resolve(commonDir);
+  } catch {
+    return false;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -79,7 +93,7 @@ async function hasActiveFlow(cwd) {
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
       }
-      return null;
+      if (!isInsideLinkedWorktree(dir)) return null;
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
@@ -4302,11 +4316,12 @@ function controlPlaneRole(repoRoot, flowName, absPath) {
   if (idx === -1) return null;
   const anchor = norm.slice(0, idx) || "/";
   const rest = norm.slice(idx + marker.length);
-  if (resolve(anchor) !== resolve(repoRoot) && !existsSync4(join4(anchor, ".git"))) return null;
+  if (resolve2(anchor) !== resolve2(repoRoot) && !isInsideLinkedWorktree(anchor)) return null;
   if (rest === "state/active.json") return "active.json";
   if (rest === "config.json") return "config.json";
   if (rest.startsWith("stages/")) return "stages";
   if (rest.startsWith("scripts/")) return "scripts";
+  if (rest === "state/signal" && resolve2(anchor) !== resolve2(repoRoot)) return "signal";
   return null;
 }
 async function handlePreTool(input2) {
@@ -4370,10 +4385,13 @@ async function handlePreTool(input2) {
     if (!WRITE_TOOLS.has(tool_name)) return null;
     const fp = String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? "");
     if (!fp) return null;
-    if (!fp.startsWith("/") && resolve(cwd) !== resolve(repoRoot)) {
+    if (!fp.startsWith("/") && resolve2(cwd) !== resolve2(repoRoot)) {
       await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
       return deny(
-        `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a relative path \u2014 the Write tool would resolve it against the current cwd and silently create it there. Re-issue the write with an absolute path to the location you actually intend: a flow-root artifact is ${join4(repoRoot, fp)}; a file under the current dir is ${resolve(cwd, fp)}.`
+        `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a relative path \u2014 the Write tool would resolve it against the current cwd and silently create it there. Re-issue the write with an absolute path to the location you actually intend:
+  \u2022 a file in the tree you are working in (a worktree checkout, if you are in one): ${resolve2(cwd, fp)}
+  \u2022 a flow artifact that belongs to the main checkout: ${join4(repoRoot, fp)}
+Neither is "the right one" by default \u2014 pick by what the file IS. Code and tests belong to the tree you are working in; flow bookkeeping under docs/ belongs to the main checkout.`
       );
     }
     const absPath = resolvePath(repoRoot, fp);
@@ -4419,6 +4437,13 @@ Fix the issues and try again.`);
       case "scripts":
         await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
         return deny("Script files cannot be modified during flow execution \u2014 this also covers the copy in any worktree of this repository. Ask the user to replace them manually.");
+      case "signal":
+        await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to worktree signal copy: ${fp}`);
+        return deny(
+          `\u8FD9\u662F\u672C\u4ED3\u67D0\u4E2A worktree \u91CC\u7684 signal \u526F\u672C\uFF0C\u5199\u5B83\u4E0D\u4F1A\u63A8\u8FDB\u6D41\u7A0B\uFF08'state/' \u88AB gitignore\uFF0C\u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u8BFB\u8FD9\u4EFD\u526F\u672C\uFF09\u3002
+signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${signalPath(repoRoot, activeFlowName)}
+\u82E5\u4F60\u662F\u5728 worktree \u5185\u6267\u884C\u67D0\u4E00\u7968\u7684\u5B50\u4EE3\u7406\uFF1A\u4EA4\u4ED8\u65B9\u5F0F\u662F\u56DE\u62A5\u7ED9\u7F16\u6392\u5668\uFF0C\u4E0D\u8981\u5199 signal\u3002`
+        );
     }
     const rel = relative(repoRoot, absPath);
     const stageCfg = getStageConfig(config, state.current_stage);
