@@ -236,20 +236,26 @@ function install(flow: string, dir: string, force: boolean) {
   process.stdout.write(lines.join('\n') + '\n');
 }
 
-function ensureGitignore(target: string): void {
+export function ensureGitignore(target: string): void {
   // Write the rule at the git root — not the flow anchor. The anchor may be a
   // monorepo subproject nested under the repo root; a rule sitting there only
   // covers that one directory. One rule at the git root, with a `**/` prefix,
   // ignores every `.ai-flow/**/state/` anywhere in the repo.
   const root = gitRoot(target) ?? target;
   const giPath = join(root, '.gitignore');
-  const rule = '**/.ai-flow/**/state/';
+  // `.worktrees/` is where a flow puts the isolated checkout of a ticket it runs
+  // in parallel. Unignored, the whole directory shows up as untracked and the
+  // squash at the end of a flow (`git add -A`) swallows it as an embedded
+  // repository — which git reports as a *warning*, not an error, so the commit
+  // silently ends up carrying an empty gitlink instead of the work.
+  const rules = ['**/.ai-flow/**/state/', '.worktrees/'];
   let existing = '';
   try { existing = existsSync(giPath) ? readFileSync(giPath, 'utf-8') : ''; } catch { /* treat as empty */ }
-  const hasRule = existing.split(/\r?\n/).some((l) => l.trim() === rule);
-  if (hasRule) return;
+  const present = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
+  const missing = rules.filter((r) => !present.has(r));
+  if (missing.length === 0) return;
   const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  try { appendFileSync(giPath, `${prefix}${rule}\n`); } catch { /* non-fatal */ }
+  try { appendFileSync(giPath, `${prefix}${missing.join('\n')}\n`); } catch { /* non-fatal */ }
 }
 
 function runPreflight(flowDir: string, cwd: string): { ok: boolean; output: string } | null {

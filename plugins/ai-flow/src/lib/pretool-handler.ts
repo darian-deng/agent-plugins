@@ -6,6 +6,7 @@ import {
   appendLog,
   signalPath,
   activeJsonPath,
+  isInsideLinkedWorktree,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
@@ -34,7 +35,7 @@ function resolvePath(repoRoot: string, filePath: string): string {
   return join(repoRoot, filePath);
 }
 
-type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts';
+type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts' | 'signal';
 
 /**
  * Classify a write target as one of the flow's control-plane files, or null.
@@ -49,9 +50,16 @@ type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts';
  * A suffix match alone over-reaches: a project may legitimately VENDOR flow
  * templates in its tree (ai-flow's own repo ships `.ai-flow/<flow>/` copies
  * under the plugin directory) and those are ordinary content, editable during a
- * flow. What separates the two is that a worktree — and only a worktree — has
- * its own `.git` beside `.ai-flow`, which is also exactly the condition under
- * which an edit there can travel back into the flow's own checkout.
+ * flow. What separates the two is whether the copy lives inside a linked
+ * worktree, which is exactly the condition under which an edit there can travel
+ * back into the flow's own checkout via a merge.
+ *
+ * Testing for a `.git` file BESIDE `.ai-flow` is not that condition: `git
+ * worktree add` checks out the whole repository, so under a monorepo sub-project
+ * anchor the `.git` file sits at the worktree root while `.ai-flow/` is nested
+ * under it (ai-flow's own repo has this shape). That spelling let a subagent
+ * rewrite the gate scripts / stage prompts inside its worktree and merge them
+ * back, which is the one thing this guard exists to stop.
  */
 function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): ControlPlaneRole | null {
   const norm = absPath.replace(/\\/g, '/');
@@ -64,12 +72,21 @@ function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): 
   // process cwd instead.
   const anchor = norm.slice(0, idx) || '/';
   const rest = norm.slice(idx + marker.length);
-  if (resolve(anchor) !== resolve(repoRoot) && !existsSync(join(anchor, '.git'))) return null;
+  if (resolve(anchor) !== resolve(repoRoot) && !isInsideLinkedWorktree(anchor)) return null;
 
   if (rest === 'state/active.json') return 'active.json';
   if (rest === 'config.json') return 'config.json';
   if (rest.startsWith('stages/')) return 'stages';
   if (rest.startsWith('scripts/')) return 'scripts';
+  // A worktree's COPY of the signal path. The real one is normally intercepted
+  // earlier (absPath === signalPath(repoRoot, …)) and returns before this switch.
+  // That earlier check is a byte comparison though, so a non-canonical spelling of
+  // the real path (`/repo/./.ai-flow/…`) slips past it and lands here — hence the
+  // explicit anchor test, so we never tell the agent its own main-checkout signal
+  // is "a worktree copy".
+  // Writing the copy is worse than a no-op: `state/` is gitignored so nothing
+  // reads it, and a subagent that "signalled" there believes it has delivered.
+  if (rest === 'state/signal' && resolve(anchor) !== resolve(repoRoot)) return 'signal';
   return null;
 }
 
@@ -192,8 +209,11 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     return deny(
       `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a ` +
       `relative path — the Write tool would resolve it against the current cwd and silently create it ` +
-      `there. Re-issue the write with an absolute path to the location you actually intend: ` +
-      `a flow-root artifact is ${join(repoRoot, fp)}; a file under the current dir is ${resolve(cwd, fp)}.`
+      `there. Re-issue the write with an absolute path to the location you actually intend:\n` +
+      `  • a file in the tree you are working in (a worktree checkout, if you are in one): ${resolve(cwd, fp)}\n` +
+      `  • a flow artifact that belongs to the main checkout: ${join(repoRoot, fp)}\n` +
+      `Neither is "the right one" by default — pick by what the file IS. Code and tests belong to the ` +
+      `tree you are working in; flow bookkeeping under docs/ belongs to the main checkout.`
     );
   }
 
@@ -252,6 +272,13 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     case 'scripts':
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to scripts: ${fp}`);
       return deny('Script files cannot be modified during flow execution — this also covers the copy in any worktree of this repository. Ask the user to replace them manually.');
+    case 'signal':
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED write to worktree signal copy: ${fp}`);
+      return deny(
+        `这是本仓某个 worktree 里的 signal 副本，写它不会推进流程（'state/' 被 gitignore，没有任何东西读这份副本）。\n` +
+        `signal 只能由主 session 写主仓那份：${signalPath(repoRoot, activeFlowName)}\n` +
+        `若你是在 worktree 内执行某一票的子代理：交付方式是回报给编排器，不要写 signal。`
+      );
   }
 
   // ─── Write scope enforcement ──────────────────────────────────────────────────

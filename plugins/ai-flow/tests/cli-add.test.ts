@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } from 
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
-import { builtinFlows, detect, nearestProjectRoot } from '../src/cli/add.js';
+import { readFileSync } from 'fs';
+import { builtinFlows, detect, nearestProjectRoot, ensureGitignore } from '../src/cli/add.js';
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'ai-flow-cli-test-'));
@@ -82,5 +83,53 @@ describe('cli/add — detect', () => {
     const result = detect(root);
     expect(result.candidates.length).toBeGreaterThanOrEqual(1);
     expect(result.recommended).toBeTruthy();
+  });
+});
+
+describe('cli/add — ensureGitignore', () => {
+  // Both rules go at the GIT ROOT, not the flow anchor: the anchor may be a
+  // monorepo subproject, and a rule sitting there covers only that directory.
+  it('writes both rules at the git root when .gitignore is absent', () => {
+    const root = tmp();
+    execSync('git init -q', { cwd: root });
+    const anchor = join(root, 'packages', 'foo');
+    mkdirSync(anchor, { recursive: true });
+
+    ensureGitignore(anchor);
+
+    const gi = readFileSync(join(root, '.gitignore'), 'utf-8').split(/\r?\n/);
+    expect(gi).toContain('**/.ai-flow/**/state/');
+    // Without this rule the whole worktree directory reads as untracked, and the
+    // squash at the end of a flow (`git add -A`) swallows it as an embedded
+    // repository — git only warns, so the commit silently carries an empty
+    // gitlink instead of the work.
+    expect(gi).toContain('.worktrees/');
+    expect(existsSync(join(anchor, '.gitignore'))).toBe(false);
+  });
+
+  it('appends only the missing rule and never duplicates', () => {
+    const root = tmp();
+    execSync('git init -q', { cwd: root });
+    writeFileSync(join(root, '.gitignore'), 'node_modules/\n**/.ai-flow/**/state/\n');
+
+    ensureGitignore(root);
+    ensureGitignore(root); // idempotent
+
+    const lines = readFileSync(join(root, '.gitignore'), 'utf-8').split(/\r?\n/).filter(Boolean);
+    expect(lines.filter((l) => l === '**/.ai-flow/**/state/')).toHaveLength(1);
+    expect(lines.filter((l) => l === '.worktrees/')).toHaveLength(1);
+    expect(lines[0]).toBe('node_modules/'); // pre-existing content untouched
+  });
+
+  it('does not lose the last line when the file has no trailing newline', () => {
+    const root = tmp();
+    execSync('git init -q', { cwd: root });
+    writeFileSync(join(root, '.gitignore'), 'dist/');
+
+    ensureGitignore(root);
+
+    const lines = readFileSync(join(root, '.gitignore'), 'utf-8').split(/\r?\n/).filter(Boolean);
+    expect(lines).toContain('dist/');
+    expect(lines).toContain('.worktrees/');
   });
 });

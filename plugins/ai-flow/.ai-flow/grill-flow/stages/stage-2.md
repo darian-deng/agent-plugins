@@ -19,22 +19,30 @@
 1. **散文 spec**（照 to-spec，从 alignment 综合）→ `spec.md`，段标题**建议用这些字面量**（机器门按 `## <标题>` 前缀匹配、容忍后缀，但用纯字面量最稳）：`## Problem` / `## Solution` / `## User Stories` / `## Decisions` / `## Testing Decisions` / `## Out of scope` / `## 方案审查`（User Stories 用编号列表；Testing Decisions 写 seam）。**禁文件路径与 typed 代码**；例外：prototype 产出的、比散文更精确的 snippet（状态机/reducer/schema/type shape）可 inline；**接口契约用散文**（描述行为契约，非签名）。**跨端/跨仓行为契约**（若涉及）：把稳定的跨端/跨仓行为约定沉淀成附录段 `## 跨端/跨仓行为契约`（散文，写清各端/各仓的稳定行为与边界），供 stage-3 读一份定稿、免去每 ticket 现场逆向推导。
 2. **seam 与开发者确认**：在探索代码库、选最高现有 seam 之后提，写进 `## Testing Decisions`。
 3. **对抗性方案审查**（gate 前必跑）：派独立子代理在方案层挑**新引入决策**的复用缺失/过度工程/方案漏洞——**只审本次新增，不重议 grilling 已定方案**。findings 写进 `## 方案审查` 段带 resolved 状态；**即使无阻塞项也必须写该段**（记「已审查，无阻塞项」）——机器门要求此段非空。
+   - 切完 tickets 后**补审一项**：逐票核 `Touches`，找**为了并行而拆散耦合**的切片。征兆是两票的 `Touches` 是同一模块/目录下互补的文件集、却互相没有 `Blocked by`。写 tickets 的一方现在有明确的过度拆分动机（拆开就能并行、就更快），下面那条纪律没有检测方，靠这一审补上。
 4. **HTML 方案视图**：照 `spec-view.md`（sonnet 子代理手写 .mmd→mmdc 渲 SVG→主 session 增量组装）→ `tech-design.html`。
-5. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:`（ticket 内 acceptance criteria 用 `AC:` 前缀子项，不参与 frontier/门）。
+5. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:` + `Touches:`（ticket 内 acceptance criteria 用 `AC:` 前缀子项，不参与 frontier/门）。
+   - **`Blocked by:`** = 实施先后（前置票没做完，这票没法做/没法验证）。写票号列表 `T1, T3`，无前置写 `none`。机器门校验引用完整性 + 无自依赖 + 无环——`TBD`/散文过不去，stage-3 要按它算 frontier。
+   - **`Touches:`** = 本票**预计改哪些文件**。stage-3 用「Touches 不相交」判定哪些票可以各开一个 worktree 并行做，stage-3 机器门还会按该票 commit 的实际改动核对它。预估不了写 `none`——该票只能串行。写法（机器门会校验，不合直接拦）：
+     - 路径**相对 flow 锚点**（就是 `{{project_root}}`），空格或逗号分隔：`src/lib/state.ts src/hooks/ tests/*.test.ts`
+     - **目录必须以 `/` 结尾**——`src/hooks`（漏尾斜杠）会被当成一个叫这个名字的文件、匹配零个，于是该票所有改动都判越界
+     - 支持 `*`（不跨目录）与 `**`（跨目录）；**不支持** `{a,b}` 花括号展开、路径里带空格、反斜杠分隔符
+     - **必须写成该 ticket 行的缩进子项**（和 `Blocked by` 一样）。顶格写能过本 stage 的门，却会被 stage-3 的断言⑥ 静默跳过——所以这里一并拦下
+   - **不要为了让 Touches 不相交而改变切片**：竖切（每片穿透各层、可独立验证）优先，`Touches` 只是如实声明其结果。**耦合的改动仍然应该切进同一票**——把耦合拆到两票换来的并行是假的，stage-3 机器门⑦ 会在实际写集相交时拦下来。
 6. **quiz 粒度**：切完 quiz 开发者、粒度/blocking 确认。
 7. **gate-pending 期间的范围变更**：审查 / 等 approve 时冒出**范围级变更（非措辞级）**——功能对等边界改动、要删/推迟项变化等——按 `revision-protocol.md` 回写 alignment.md（这本属 stage-1 的结账范畴，提示开发者范围结账应前移），再同步 spec/tickets；纯措辞调整就地改 spec 即可。
 
 ## 输出规格
 
 文件 → `docs/grill-flows/<flow_id>/` 下 `spec.md` + `tickets.md` + `tech-design.html`（+ `diagram/*.svg`）。`<flow_id>` 一律用 context 顶部注入的实际值，勿自拼日期或加后缀（机器门读 active.json 的真实 flow_id 定位文件，路径不符会失配）。
-验证：机器门 `scripts/gate-stage-2.cjs` 校验三文件存在 + spec 三段非空 + ticket 格式。
+验证：机器门 `scripts/gate-stage-2.cjs` 校验三文件存在 + spec 三段非空 + 每票有 `Blocked by`（票号列表、引用完整、无自依赖、无环）与 `Touches`。
 
 ## 完成条件
 
 - spec.md 含非空 `## Testing Decisions` / `## User Stories` / `## 方案审查`；seam 已与开发者确认。
 - 涉及跨端/跨仓行为契约的：spec 含 `## 跨端/跨仓行为契约` 附录段（散文、定稿）。
 - tech-design.html 生成、可打开。
-- tickets.md 每条 ticket 级项有 `Blocked by`；粒度已 quiz 确认。
+- tickets.md 每条 ticket 级项有 `Blocked by`（票号列表 / `none`）与 `Touches`；依赖无环；粒度已 quiz 确认。
 
 ## Signal
 

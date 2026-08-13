@@ -12,13 +12,13 @@
 
 ## 环节 B：AI 双轴组装审（一次，不套娃）
 
-补 per-ticket 各自 /clear 窗口看不到整体 diff 的洞。diff 基准 `git diff <base>..HEAD -- . ':(exclude)docs/grill-flows/*'`（pathspec 排除 doc churn）。两个 `general-purpose` 子代理并行（能跑 git、自己 diff、都不开 worktree）：
+补 per-ticket 各自 /clear 窗口看不到整体 diff 的洞。diff 基准 `git diff <base>..HEAD -- . ':(exclude)docs/grill-flows/*'`（pathspec 排除 doc churn）。两个 `general-purpose` 子代理并行（能跑 git、自己 diff、**都不开 worktree**——本 stage 审的就是主树上归并后的整体，stage-3 的并行票到这里已全部回合、worktree 已拆，机器门⑤ 保证了这点）：
 
 - **① Standards 轴**：携 `references/fowler-smells.md` 全文，审整体 diff 的跨 ticket smell——Duplicated Code（多 ticket 各写一份类似逻辑）、Shotgun Surgery、错 altitude、过度工程。
 - **② Spec 轴**：携 `spec.md`，对 **User Stories 逐条**查需求闭环——每条 US 是否被兑现、有无缺失/偏离。
 - **安全专项**（强制）：立场是**默认 diff 里可能有可利用漏洞、外部输入不可信，直到证明无害**（不是「读一遍看有没有」——这个心态转变零成本、抓真漏洞最值）。据此扫本 diff 的注入 / 鉴权与访问控制（越权、缺校验）/ 密钥凭据 / 敏感数据外泄（日志·错误·响应）/ 不安全反序列化，**不强制逐类打勾、不外扩到 diff 之外、不引入多级 severity**（定级沿用下方阻塞 / 建议二元）。
 
-findings 分**阻塞 / 建议**落 review.md。阻塞项修复 → commit `fix: address review finding`。**不做 feat-flow 的 3 轮验证套娃**（grill-flow 刻意保持轻，一次审+修即可；判断型缺陷的最终兜底在环节 C 开发者亲审）。**唯一例外：安全类阻塞项修复后加一次独立复核**——另派 `opus` 子代理、report-only（不写文件、不 apply），只核这几行 fix 是否真堵住、有没有开新洞，**不重审全 diff**（per-ticket 层已有「关键修复独立复核」的提法，本例外把它**具体化并限定到 assembly 层的安全阻塞项**，不是等价搬移；「不做 3 轮套娃」禁的是重审整份 diff，这里只窄验几行 fix，粒度一致、不冲突）。**复核判仍不到位 → 直接停下 `AskUserQuestion` 问开发者**（安全红线 = 鉴权绕过 / 注入 / 密钥·敏感数据外泄 / 越权 / RCE）；**不得因此再补第二轮修复——即便只补一次也不行**。**此例外只给安全（可被外部利用、后果不可逆的一类），不外推到 Standards / Spec。**
+findings 分**阻塞 / 建议**落 review.md。阻塞项修复 → commit `fix: address review finding`。**不做 feat-flow 的 3 轮验证套娃**（grill-flow 刻意保持轻，一次审+修即可；判断型缺陷的最终兜底在环节 C 开发者亲审）。**唯一例外：安全类阻塞项修复后加一次独立复核**——另派 `opus` 子代理、report-only（不写文件、不 apply），只核这几行 fix 是否真堵住、有没有开新洞，**不重审全 diff**（「不做 3 轮套娃」禁的是重审整份 diff，这里只窄验几行 fix，粒度一致、不冲突）。**复核判仍不到位 → 直接停下 `AskUserQuestion` 问开发者**（安全红线五类的定义见 `per-ticket-review.md` 的「安全红线五类」节，不在此复述——复述必漂）；**不得因此再补第二轮修复——即便只补一次也不行**。**此例外只给安全（可被外部利用、后果不可逆的一类），不外推到 Standards / Spec。**
 
 ## 环节 C：开发者 IDE 人审闭环 + squash（写 signal 前最后一关）
 
@@ -63,7 +63,7 @@ grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——
    - 有实质改动 → 派 **Spec/Standards 子代理**聚焦审人审动过的文件；清单含安全敏感改动（鉴权 / 输入 / 密钥 / 序列化）→ 加派**安全**。
    - 纯拼写 / import 级小修 → 主 session 自核。
    - CR 发现问题 → 回人审-修复循环。
-3. CR 干净（或零改动跳过）→ **squash 成单个 feat commit**（下面 `git add -A` 仍限步骤 1 核过的 scope，跨子项目 stray 不纳入；若 commit 撞 pre-commit hook，按 `per-ticket-review.md` 的「pre-commit hook 冲突」文档化协议处理，别默认 `--no-verify`）：
+3. CR 干净（或零改动跳过）→ **squash 成单个 feat commit**（下面 `git add -A` 仍限步骤 1 核过的 scope，跨子项目 stray 不纳入；若 commit 撞 pre-commit hook，按 `per-ticket-review.md` 的「领域事实：预期的中间不可编译态」处理，别默认 `--no-verify`）：
 ```bash
 git add -A && git commit -m "feat: <一句话功能概述>
 
@@ -73,7 +73,15 @@ git add -A && git commit -m "feat: <一句话功能概述>
 
 flow-squash: <flow_id>"
 ```
-commit message **自包含**（不引用 `T<n>` / flow 内部临时指代）。body 末行 `flow-squash: <flow_id>` 是校验锚点。**commit 成功后方可写 signal。**
+commit message **自包含**（不引用 `T<n>` / flow 内部临时指代）。body 末行 `flow-squash: <flow_id>` 是校验锚点。
+
+4. **清理本 flow 的票分支**（squash 之后、写 signal 之前）：stage-3 的并行票留下 `wt/<flow_id>-T<n>` 分支（它们被刻意保留，供 stage-3 的重入相位表区分「已交付未回合」）。squash 已经把全部改动收进一笔 feat commit，这些分支再没有用途，不删会跨 flow 永久累积：
+```sh
+git branch --list "wt/<flow_id>-*" | xargs -r git branch -D
+```
+删之前确认 squash commit 已在（上一步），否则这是唯一还持有那些 per-ticket commit 的引用。
+
+**commit 成功 + 分支已清理后方可写 signal。**
 
 ## /clear 重入判据（照 git 状态判在哪个环节）
 

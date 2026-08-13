@@ -12,7 +12,8 @@ import {
   statSync,
 } from 'fs';
 import { randomBytes } from 'crypto';
-import { join, dirname } from 'path';
+import { execFileSync } from 'child_process';
+import { join, dirname, resolve } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 import { lookupSession, listBindings, removeBinding } from './session-registry.js';
 
@@ -173,6 +174,46 @@ export function findRepoRoot(cwd: string): string | null {
   }
 }
 
+/**
+ * True when `dir` sits ANYWHERE INSIDE a linked git worktree (`git worktree add`),
+ * not merely at its root.
+ *
+ * Checking for a `.git` file at `dir` itself is not enough: `git worktree add`
+ * checks out the whole repository, so with a monorepo sub-project anchor the
+ * worktree root is `<anchor>/.worktrees/<name>` while the anchor's own copy of
+ * `.ai-flow/` lands at `<worktree>/<path-to-anchor>/.ai-flow/` — several levels
+ * below the `.git` file. ai-flow's own repo has exactly this shape.
+ *
+ * `--git-dir` vs `--git-common-dir` differ only for a linked worktree; both a
+ * submodule and a `--separate-git-dir` clone report them equal, which is the
+ * distinction we need (their `.git` is also a plain file).
+ *
+ * `--path-format=absolute` is load-bearing, not tidiness: without it git answers
+ * `--git-dir` with an absolute path but `--git-common-dir` with one relative to
+ * the cwd, and resolving the two against `dir` disagrees whenever `dir` contains
+ * an unresolved symlink (on macOS every path under `/tmp` or `/var` does). That
+ * made an ordinary monorepo sub-project look like a worktree — the exact
+ * over-reach the caller must not have.
+ *
+ * Returns false when git is unavailable or too old for `--path-format` (2.31+):
+ * that keeps the pre-existing behaviour of ending the walk rather than risking
+ * a wrong "yes".
+ */
+export function isInsideLinkedWorktree(dir: string): boolean {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const [gitDir, commonDir] = out.trim().split('\n');
+    if (!gitDir || !commonDir) return false;
+    return resolve(gitDir) !== resolve(commonDir);
+  } catch {
+    return false; // not a git dir / git unavailable / git < 2.31
+  }
+}
+
 export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
   // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
   let dir = cwd;
@@ -184,7 +225,16 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
         const state = await readActiveState(dir, entry.name);
         if (state) return { flowName: entry.name, state, repoRoot: dir };
       }
-      return null; // .ai-flow exists but no active flow inside
+      // `.ai-flow` exists but holds no active flow. Normally that ends the walk:
+      // a monorepo sub-project with its own (idle) anchor must NOT resolve to the
+      // parent's flow. A linked worktree is the one exception — its `.ai-flow` is
+      // a TRACKED copy of the real anchor's, and `state/` is gitignored
+      // (`**/.ai-flow/**/state/`), so it can never hold an active.json. Stopping
+      // here would return null for every subagent working inside a worktree,
+      // which fails OPEN: handlePreTool bails before any guard runs, silently
+      // disabling control-plane protection, signal interception and context
+      // accounting. Keep walking so a worktree nested in the repo reaches it.
+      if (!isInsideLinkedWorktree(dir)) return null;
     }
     const parent = dirname(dir);
     if (parent === dir) return null; // reached filesystem root

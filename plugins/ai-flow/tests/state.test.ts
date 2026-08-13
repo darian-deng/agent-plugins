@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import {
   readActiveState,
   writeActiveState,
@@ -224,6 +224,89 @@ describe('hasActiveFlow', () => {
     );
     const result = await hasActiveFlow(root);
     expect(result!.flowName).toBe('flow-b');
+  });
+
+  // 一个 `.ai-flow` 但没有 active flow 时，walk-up 默认就此结束——monorepo 子项目的
+  // 空闲锚点绝不能解析到父项目的 flow。linked worktree 是唯一的例外：它那份
+  // `.ai-flow/` 是主仓的 tracked 副本，`state/` 被 gitignore 所以永远拿不到
+  // active.json；不放行就等于每个在 worktree 里干活的子代理都解析不到 flow，
+  // 于是 handlePreTool 在任何守卫之前早退——控制面保护、signal 拦截、写作用域、
+  // context 统计全部静默关闭（fail-OPEN）。
+  //
+  // 这些用例建**真** git worktree 而不是手写 `.git` 文件：判据现在问 git
+  // （`rev-parse --git-dir --git-common-dir`），而手写文件模拟不出 monorepo 布局下
+  // 「锚点比 .git 文件深好几层」这个真实形态。
+  describe('walk-up 越过 linked worktree', () => {
+    function gitInit(dir: string): void {
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+    }
+
+    function writeFlowAt(anchor: string, withActive: boolean): void {
+      mkdirSync(join(anchor, '.ai-flow', 'parent-flow', 'state'), { recursive: true });
+      // config.json 代表 `.ai-flow/<flow>/` 里那些**被 git 跟踪**的文件（config /
+      // stages / scripts / references）。它们是 worktree 里也会有一份 `.ai-flow` 的原因，
+      // 而 `state/` 被 gitignore、所以那份副本永远拿不到 active.json。
+      writeFileSync(join(anchor, '.ai-flow', 'parent-flow', 'config.json'), '{}\n');
+      if (withActive) {
+        writeFileSync(
+          join(anchor, '.ai-flow', 'parent-flow', 'state', 'active.json'),
+          JSON.stringify(makeActiveState({ flow_name: 'parent-flow' }))
+        );
+      }
+    }
+
+    it('worktree 里的锚点（monorepo 布局，比 .git 深两层）→ 上溯到主仓 flow', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      const anchor = join(gitRoot, 'packages', 'app');
+      mkdirSync(anchor, { recursive: true });
+      writeFlowAt(anchor, true);
+      // 这条 gitignore 规则由 `/ai-flow:add` 写入，而 worktree 并行**依赖**它：
+      // 没有它，active.json 会被提交进去，worktree 里就有一份陈旧副本，子代理会
+      // 解析到它自己那份、而不是主仓的真状态。
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n.worktrees/\n');
+      writeFileSync(join(gitRoot, 'seed.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      // `git worktree add` 检出整个仓库，所以锚点副本在 <wt>/packages/app —— `.git`
+      // 文件在 <wt>，不在锚点旁边。这正是旧判据漏掉的形态。
+      const wt = join(anchor, '.worktrees', 'f1-T1');
+      execFileSync('git', ['worktree', 'add', '-q', wt, '-b', 'wt/f1-T1'], { cwd: gitRoot });
+      const wtAnchor = join(wt, 'packages', 'app');
+      expect(existsSync(join(wtAnchor, '.ai-flow'))).toBe(true);   // tracked 副本在
+      expect(existsSync(join(wtAnchor, '.git'))).toBe(false);      // 但 .git 不在这层
+
+      const result = await hasActiveFlow(wtAnchor);
+      expect(result).not.toBeNull();
+      expect(result!.flowName).toBe('parent-flow');
+      expect(realpathSync(result!.repoRoot)).toBe(realpathSync(anchor));
+
+      execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: gitRoot });
+    });
+
+    it('submodule 内的空闲锚点 → 仍然 null（它的 .git 也是文件，但不是 worktree）', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);
+      const sub = join(gitRoot, 'vendor', 'sub');
+      mkdirSync(sub, { recursive: true });
+      gitInit(sub);                                   // 独立仓库，模拟 submodule 的检出形态
+      writeFlowAt(sub, false);
+      expect(await hasActiveFlow(sub)).toBeNull();
+    });
+
+    it('普通 monorepo 子项目的空闲锚点 → 仍然 null', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);
+      const pkg = join(gitRoot, 'packages', 'app');
+      mkdirSync(pkg, { recursive: true });
+      writeFlowAt(pkg, false);
+      expect(await hasActiveFlow(pkg)).toBeNull();
+    });
   });
 });
 
