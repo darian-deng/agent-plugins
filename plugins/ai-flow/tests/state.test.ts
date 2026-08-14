@@ -287,6 +287,56 @@ describe('hasActiveFlow', () => {
       execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: gitRoot });
     });
 
+    // worktree 落在**仓库之外**时同样要解析到主仓锚点。向上走到 `.ai-flow` 副本后继续
+    // 上溯只在「worktree 嵌在主仓里」时才碰得到主仓锚点；落点一旦搬出仓库，那条路径
+    // 一直走到文件系统根都找不到 flow，于是每个在 worktree 里干活的子代理都 fail-OPEN
+    // （handlePreTool 直接 bail，控制面保护 / signal 拦截 / context 统计全部不生效）。
+    // 而落点必须能搬出仓库：嵌在仓库内会让 TS 把主树 `node_modules/@types` 也收进编译，
+    // 同一个包出现两份类型身份，worktree 里的 typecheck 因此必然报错。
+    it('worktree 落在仓库外（monorepo 布局）→ 仍上溯到主仓 flow', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      const anchor = join(gitRoot, 'packages', 'app');
+      mkdirSync(anchor, { recursive: true });
+      writeFlowAt(anchor, true);
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+      writeFileSync(join(gitRoot, 'seed.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      const outside = join(makeTmp(), 'lanes', 'f1-R1');   // 与 gitRoot 无祖先关系
+      execFileSync('git', ['worktree', 'add', '-q', outside, '-b', 'wt/f1-R1'], { cwd: gitRoot });
+      const wtAnchor = join(outside, 'packages', 'app');
+      expect(existsSync(join(wtAnchor, '.ai-flow'))).toBe(true);
+      expect(existsSync(join(wtAnchor, '.ai-flow', 'parent-flow', 'state', 'active.json'))).toBe(false);
+
+      const result = await hasActiveFlow(wtAnchor);
+      expect(result).not.toBeNull();
+      expect(result!.flowName).toBe('parent-flow');
+      expect(realpathSync(result!.repoRoot)).toBe(realpathSync(anchor));
+
+      execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
+    });
+
+    // 同一条路径的 fail-closed 边界：worktree 外、主仓那侧锚点是**空闲**的（没有
+    // active.json）时必须仍然返回 null，别因为「在 worktree 里」就放宽成解析父项目的 flow。
+    it('worktree 落在仓库外、主仓对应锚点空闲 → null', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);                       // 顶层有 flow
+      const anchor = join(gitRoot, 'packages', 'app');
+      mkdirSync(anchor, { recursive: true });
+      writeFlowAt(anchor, false);                       // 子项目锚点空闲
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      const outside = join(makeTmp(), 'lanes', 'f1-R2');
+      execFileSync('git', ['worktree', 'add', '-q', outside, '-b', 'wt/f1-R2'], { cwd: gitRoot });
+      expect(await hasActiveFlow(join(outside, 'packages', 'app'))).toBeNull();
+      execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
+    });
+
     it('submodule 内的空闲锚点 → 仍然 null（它的 .git 也是文件，但不是 worktree）', async () => {
       const gitRoot = makeTmp();
       gitInit(gitRoot);

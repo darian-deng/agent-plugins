@@ -151,6 +151,23 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     expect(r.stderr).toContain('重复');
   });
 
+  // 回归锚：跨包票会自然写成 `../pkg/src/`，而 gate-stage-3 的 ⑥ 比的是路径字符串
+  // （git 根相对剥掉锚点前缀），`..` 匹配不上任何实际改动 → 该票全部改动判越界，
+  // 报错方向还是反的。锚点外的包只能写仓库根相对路径。
+  it('Touches 用 `..` 上溯 → 拦下，且报的是上溯而不是尾斜杠', () => {
+    for (const v of ['../net/src/', '..', 'src/../lib/']) {
+      const flowDir = makeRepo(`- [ ] T1 first\n  Blocked by: none\n  Touches: ${v}\n`);
+      const r = runGate(flowDir);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('`..` 上溯');
+    }
+  });
+
+  it('Touches 写仓库根相对路径（锚点外的包）→ 放行', () => {
+    const flowDir = makeRepo('- [ ] T1 first\n  Blocked by: none\n  Touches: packages/net/src/ src/a.ts\n');
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
   // 目录漏尾斜杠会被 gate-stage-3 编译成 `^src/hooks$`、匹配零个文件，
   // 于是该票所有改动都判越界——误报方向，在这里就拦住并说清怎么写。
   it('Touches 目录漏尾斜杠 → 拦下', () => {

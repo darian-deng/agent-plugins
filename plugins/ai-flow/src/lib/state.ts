@@ -10,10 +10,11 @@ import {
   closeSync,
   unlinkSync,
   statSync,
+  realpathSync,
 } from 'fs';
 import { randomBytes } from 'crypto';
 import { execFileSync } from 'child_process';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, relative } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 import { lookupSession, listBindings, removeBinding } from './session-registry.js';
 
@@ -180,9 +181,10 @@ export function findRepoRoot(cwd: string): string | null {
  *
  * Checking for a `.git` file at `dir` itself is not enough: `git worktree add`
  * checks out the whole repository, so with a monorepo sub-project anchor the
- * worktree root is `<anchor>/.worktrees/<name>` while the anchor's own copy of
- * `.ai-flow/` lands at `<worktree>/<path-to-anchor>/.ai-flow/` — several levels
- * below the `.git` file. ai-flow's own repo has exactly this shape.
+ * anchor's own copy of `.ai-flow/` lands at `<worktree>/<path-to-anchor>/.ai-flow/`
+ * — several levels below the `.git` file at the worktree root. ai-flow's own repo
+ * has exactly this shape. Where the worktree itself lives is irrelevant here, and
+ * must stay so: the flow's helper script keeps them beside the repo, not inside it.
  *
  * `--git-dir` vs `--git-common-dir` differ only for a linked worktree; both a
  * submodule and a `--separate-git-dir` clone report them equal, which is the
@@ -214,17 +216,85 @@ export function isInsideLinkedWorktree(dir: string): boolean {
   }
 }
 
+/**
+ * Absolute path with symlinks resolved, falling back to `resolve` for a path that
+ * does not exist yet. Comparing paths that came from different sources needs this:
+ * git prints real paths while the harness passes whatever spelling the agent used,
+ * and on macOS `/tmp` and `/var` are symlinks, so the two never match literally.
+ */
+export function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** The active flow declared at exactly this anchor, or null. */
+async function anchorFlow(
+  dir: string
+): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
+  const aiFlowDir = join(dir, '.ai-flow');
+  if (!existsSync(aiFlowDir)) return null;
+  for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const state = await readActiveState(dir, entry.name);
+    if (state) return { flowName: entry.name, state, repoRoot: dir };
+  }
+  return null;
+}
+
+/**
+ * Inside a linked worktree, the same relative location in the MAIN checkout.
+ *
+ * Needed because walking further up only reaches the real anchor while the
+ * worktree sits INSIDE the main checkout. It must not have to: a worktree nested
+ * in the repo inherits every ancestor `node_modules/@types` of the main tree, so
+ * TypeScript pulls a second identity of packages that are also installed in the
+ * worktree and typecheck fails there for reasons unrelated to the change under
+ * test. Once the worktree lives outside the repo, "keep walking" climbs to the
+ * filesystem root and finds nothing — fail-OPEN for every subagent working in
+ * one (handlePreTool bails before any guard runs).
+ *
+ * git already knows where the main checkout is: for a linked worktree
+ * `--git-common-dir` points at the main repo's `.git`, and `--show-toplevel`
+ * gives this worktree's root, so the difference is `dir`'s path within the repo.
+ *
+ * Returns null when that cannot be established (git too old, bare or
+ * `--separate-git-dir` layout where the parent of the common dir is not a work
+ * tree, `dir` outside the toplevel). Callers fall back to the upward walk, so a
+ * null here costs nothing that was working before.
+ */
+function mainCheckoutCounterpart(dir: string): string | null {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel'],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const [commonDir, wtRoot] = out.trim().split('\n');
+    if (!commonDir || !wtRoot) return null;
+    const mainRoot = dirname(resolve(commonDir));
+    // `realPath`, not `resolve`: git prints real paths, and on macOS every path
+    // under `/tmp` or `/var` reaches its target through a symlink. Comparing the
+    // raw spellings makes `relative()` answer with a stack of `..` for a directory
+    // that is plainly inside the worktree, and the guard below then rejects it.
+    const rel = relative(resolve(wtRoot), realPath(dir));
+    if (rel.startsWith('..')) return null;
+    const counterpart = rel ? join(mainRoot, rel) : mainRoot;
+    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+  } catch {
+    return null;
+  }
+}
+
 export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
   // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join(dir, '.ai-flow');
-    if (existsSync(aiFlowDir)) {
-      for (const entry of readdirSync(aiFlowDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const state = await readActiveState(dir, entry.name);
-        if (state) return { flowName: entry.name, state, repoRoot: dir };
-      }
+    if (existsSync(join(dir, '.ai-flow'))) {
+      const here = await anchorFlow(dir);
+      if (here) return here;
       // `.ai-flow` exists but holds no active flow. Normally that ends the walk:
       // a monorepo sub-project with its own (idle) anchor must NOT resolve to the
       // parent's flow. A linked worktree is the one exception — its `.ai-flow` is
@@ -233,8 +303,18 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
       // here would return null for every subagent working inside a worktree,
       // which fails OPEN: handlePreTool bails before any guard runs, silently
       // disabling control-plane protection, signal interception and context
-      // accounting. Keep walking so a worktree nested in the repo reaches it.
+      // accounting.
       if (!isInsideLinkedWorktree(dir)) return null;
+      // Ask git for the main checkout's copy of THIS anchor (works wherever the
+      // worktree lives). Its verdict is final in both directions: an idle anchor
+      // over there means idle — resolving the parent project's flow instead is
+      // the very over-reach the check above exists to prevent.
+      const counterpart = mainCheckoutCounterpart(dir);
+      if (counterpart && existsSync(join(counterpart, '.ai-flow'))) {
+        return await anchorFlow(counterpart);
+      }
+      // Could not map back (see `mainCheckoutCounterpart`) — keep walking, which
+      // still reaches the anchor for a worktree nested inside the main checkout.
     }
     const parent = dirname(dir);
     if (parent === dir) return null; // reached filesystem root

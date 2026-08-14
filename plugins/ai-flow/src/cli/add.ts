@@ -243,11 +243,16 @@ export function ensureGitignore(target: string): void {
   // ignores every `.ai-flow/**/state/` anywhere in the repo.
   const root = gitRoot(target) ?? target;
   const giPath = join(root, '.gitignore');
-  // `.worktrees/` is where a flow puts the isolated checkout of a ticket it runs
-  // in parallel. Unignored, the whole directory shows up as untracked and the
-  // squash at the end of a flow (`git add -A`) swallows it as an embedded
-  // repository — which git reports as a *warning*, not an error, so the commit
-  // silently ends up carrying an empty gitlink instead of the work.
+  // `.worktrees/` was where a flow used to put the isolated checkout of a ticket it
+  // runs in parallel. Those now live BESIDE the repo (`<repo>.ai-flow-worktrees/`),
+  // because a worktree nested in the repo inherits the main tree's ancestor
+  // `node_modules/@types` and TypeScript then compiles two identities of the same
+  // package — typecheck inside the worktree fails for reasons unrelated to the work.
+  // The rule stays for worktrees opened before that change and for ones a developer
+  // parks there by hand: unignored, the whole directory shows up as untracked and the
+  // squash at the end of a flow (`git add -A`) swallows it as an embedded repository
+  // — which git reports as a *warning*, not an error, so the commit silently ends up
+  // carrying an empty gitlink instead of the work.
   const rules = ['**/.ai-flow/**/state/', '.worktrees/'];
   let existing = '';
   try { existing = existsSync(giPath) ? readFileSync(giPath, 'utf-8') : ''; } catch { /* treat as empty */ }

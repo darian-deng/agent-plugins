@@ -7,6 +7,7 @@ import {
   signalPath,
   activeJsonPath,
   isInsideLinkedWorktree,
+  realPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
@@ -33,6 +34,31 @@ function allow(): PreToolResult {
 function resolvePath(repoRoot: string, filePath: string): string {
   if (filePath.startsWith('/')) return filePath;
   return join(repoRoot, filePath);
+}
+
+/**
+ * True when `segment` is nothing but an invocation of a script that lives in the
+ * active flow's `scripts/` directory: `node [--long-opts] <path> [args…]`.
+ *
+ * Deliberately narrow, because it is the one hole in an otherwise blunt fragment
+ * match. The whole segment must be that invocation; the script must end in
+ * `.cjs`/`.mjs`/`.js` and sit under one of the `scripts` fragments; and with that
+ * single path removed, nothing else control-plane-shaped may remain — which is
+ * what keeps `node <script> > <flow>/state/signal` denied. `node -e "<code>"`
+ * never matches: `-e` is not a long option, and its argument is code, not a path.
+ */
+function isFlowScriptExecution(
+  segment: string,
+  scriptFragments: string[],
+  stateFragments: string[]
+): boolean {
+  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(segment);
+  if (!m) return false;
+  const script = m[2] ?? m[3] ?? m[4] ?? '';
+  if (!/\.(cjs|mjs|js)$/.test(script)) return false;
+  if (!scriptFragments.some((f) => script.includes(f))) return false;
+  const rest = (m[1] ?? '') + (m[5] ?? '');
+  return ![...scriptFragments, ...stateFragments].some((f) => rest.includes(f));
 }
 
 type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts' | 'signal';
@@ -72,7 +98,12 @@ function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): 
   // process cwd instead.
   const anchor = norm.slice(0, idx) || '/';
   const rest = norm.slice(idx + marker.length);
-  if (resolve(anchor) !== resolve(repoRoot) && !isInsideLinkedWorktree(anchor)) return null;
+  // `realPath` on both sides: the two spellings come from different sources — the
+  // write target from the agent, repoRoot from flow resolution, which now answers
+  // with git's real path for a worktree. A literal mismatch here reads as "not this
+  // repo's anchor" and drops the guard, so it must compare the resolved paths.
+  const sameAnchor = realPath(anchor) === realPath(repoRoot);
+  if (!sameAnchor && !isInsideLinkedWorktree(anchor)) return null;
 
   if (rest === 'state/active.json') return 'active.json';
   if (rest === 'config.json') return 'config.json';
@@ -86,7 +117,7 @@ function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): 
   // is "a worktree copy".
   // Writing the copy is worse than a no-op: `state/` is gitignored so nothing
   // reads it, and a subagent that "signalled" there believes it has delivered.
-  if (rest === 'state/signal' && resolve(anchor) !== resolve(repoRoot)) return 'signal';
+  if (rest === 'state/signal' && !sameAnchor) return 'signal';
   return null;
 }
 
@@ -145,18 +176,37 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     // Residual gap (accepted): a `cd` into the state dir followed by a bare
     // filename (`cd .../state && echo done > signal`) is not caught here — the
     // Write-tool interception below remains the precise, primary guard.
-    const cpFragments = [
+    const stateFragments = [
       signalPath(repoRoot, activeFlowName),
       join(repoRoot, flowRel, 'state', 'active.json'),
-      join(repoRoot, flowRel, 'scripts'),
       join(flowRel, 'state', 'signal'),
       join(flowRel, 'state', 'active.json'),
+    ];
+    const scriptFragments = [
+      join(repoRoot, flowRel, 'scripts'),
       join(flowRel, 'scripts'),
     ];
-    if (cpFragments.some((f) => command.includes(f))) {
+    const cpFragments = [...stateFragments, ...scriptFragments];
+    // RUNNING a flow's own helper script must be allowed: stage prompts hand out
+    // commands like `node {{flow_root}}/scripts/worktree.cjs open <flow_id> <name>`
+    // (one per ticket at least), and a fragment match refuses the very command the
+    // flow just instructed — with a message about reads and writes, which is not
+    // what happened. Exempt exactly one shape, and only for the `scripts` fragments:
+    // a whole shell segment that is `node [--long-opts] <script under that dir> [args]`.
+    // Everything else stays denied: `cat <script>`, `echo > <script>`,
+    // `node -e "<reads script>"`, a segment that also names a second control-plane
+    // path, and any command touching signal / active.json (those fragments never
+    // take part in the exemption, so no spelling of them can be smuggled through).
+    const offending = command
+      .split(/&&|\|\||[;|\n]/)
+      .map((s) => s.trim())
+      .filter((seg) => cpFragments.some((f) => seg.includes(f)))
+      .filter((seg) => !isFlowScriptExecution(seg, scriptFragments, stateFragments));
+    if (offending.length > 0) {
       return deny(
         'Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked — matching is by path fragment, so this covers reads too. ' +
-        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually.'
+        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually. ' +
+        'RUNNING a flow script is allowed, but only as a whole command on its own: `node <flow>/scripts/<name>.cjs [args]`.'
       );
     }
 

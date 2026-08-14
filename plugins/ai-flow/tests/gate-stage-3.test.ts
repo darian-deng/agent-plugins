@@ -130,6 +130,23 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(r.stderr).toContain('未收口的 worktree');
   });
 
+  // 落点自 0.50.0 起在仓库**同级**（嵌在仓库内会让 worktree 里的 TS 收进主树的
+  // `node_modules/@types`、同一个包两份类型身份）。⑤ 只查旧落点就会漏掉现在真正用的那个，
+  // 而漏的方向是 fail-open：残留工作树带着没合回来的改动，门却放行。
+  it('仓库同级落点下有残留 worktree → 断言 ⑤ 拦下', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    const lanes = repo + '.ai-flow-worktrees';
+    tmpDirs.push(lanes);
+    git(repo, 'worktree', 'add', '-q', join(lanes, 'f1-R1'), '-b', 'wt/f1-R1');
+    writeTickets(repo);
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('未收口的 worktree');
+  });
+
   // 开发者常年挂着与本 flow 无关的 worktree；⑤ 若写成"除主工作树外为空"就会恒失败。
   it('仓库外的无关 worktree 不触发断言 ⑤', () => {
     const { repo, flowDir, base } = makeRepo();

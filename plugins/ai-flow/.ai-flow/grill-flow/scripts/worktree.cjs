@@ -5,26 +5,46 @@
 // 收口前的干净断言），它们是动作不是判断。写进提示词就是让编排器每批次记 5 条纪律；
 // 放这里，提示词只需要「开票用 `open`、收票用 `close`」。
 //
-//   node scripts/worktree.cjs open  <flow_id> <T<n>> [--install "<cmd>"]
-//   node scripts/worktree.cjs sync  <flow_id> <T<n>>
-//   node scripts/worktree.cjs close <flow_id> <T<n>>
+//   node scripts/worktree.cjs open  <flow_id> <T<n>|R<n>> [--install "<cmd>"]
+//   node scripts/worktree.cjs sync  <flow_id> <T<n>|R<n>>
+//   node scripts/worktree.cjs close <flow_id> <T<n>|R<n>> [--keep]
 //
-// open：建 `<repo>/.worktrees/<flow_id>-T<n>`、分支 `wt/<flow_id>-T<n>`、装依赖。
+// 名字收两种形态，选哪种由 stage-3「执行单位」那一节判定，本脚本对两者一视同仁：
+//   - `T<n>` 一票一树：树的生命周期 = 一票，close 即拆。
+//   - `R<n>` 一组一车道：树长驻，组内每票各自 commit、各自 `close --keep` 回合，末票才真拆。
+//     存在理由是装依赖的成本随**开树次数**走而不是随票数走——票多时一票一树要付 N 次
+//     装依赖（monorepo + native addon 那种，单次就是分钟级），而并行度反被批次上限压住。
+//
+// open：建 `<repo 同级>/<repo 名>.ai-flow-worktrees/<flow_id>-<name>`、
+//       分支 `wt/<flow_id>-<name>`、装依赖。
 //   - 分支名带 flow_id：票号跨 flow 复用，`wt/T1` 会撞上上一个 flow 的残留分支
 //     （`fatal: a branch named 'wt/T1' already exists`）。
-//   - 位置在仓库内：worktree 的 `.ai-flow/` 是 tracked 副本、没有 `state/`，
-//     引擎 walk-up 走到这里若不能继续上溯就会 fail-open（已在 state.ts 修）；
-//     放仓库内则一定能走到主仓锚点。代价是必须 gitignore（否则 `git add -A`
-//     会把它吞成 gitlink，且只是 warning 不报错）——本脚本会检查。
+//   - **位置必须在仓库之外**（这条是 0.50.0 改的，之前放在 `<锚点>/.worktrees/`）：
+//     嵌在仓库内时，worktree 里的每个包都会继承主树所有祖先目录的 `node_modules/@types`，
+//     于是 TypeScript 把同一个包的**两份**类型身份同时收进编译（worktree 自己装的那份
+//     + 主树那份），worktree 里的 typecheck 必然报一堆「同名但不兼容」——与被测改动
+//     毫无关系，却会卡住 pre-commit hook、让每张碰到那些包的票都提交不了。实测过：
+//     落点在 `apps/desktop/.worktrees/` 时，车道里的 web4 typecheck 报 71 个错，
+//     而主树同一条命令 0 错。这不是环境问题，是选址的必然后果。
+//     原先放仓库内的理由（引擎 walk-up 靠继续上溯才能从 worktree 走到主仓锚点）已经
+//     不成立：引擎现在改成问 git 要主检出的对应目录（`mainCheckoutCounterpart`），
+//     与 worktree 放在哪无关。放仓库外顺带不再需要 gitignore（`git add -A` 碰不到它）。
+//   - 旧落点仍然认：`sync` / `close` 先看新落点，不在就找 `<锚点>/.worktrees/<name>`。
+//     升级前开出去的树还在跑，认不出来就等于让它们无法收口。
 //   - 装依赖：新 worktree 是干净 checkout，`node_modules` / 构建缓存都在 gitignore 里
-//     一个都没有。不装，子代理跑不了客观地板。
+//     一个都没有。不装，子代理跑不了客观地板。探测与执行同目录，见 `detectInstall`。
+//   - 派发路径：monorepo 子项目锚点下 worktree 根 ≠ 项目根，两个都要打印，见 `wtAnchor`。
 //
 // sync：把本票分支 rebase 到当前需求分支之上。存在的唯一理由是**不要在提示词里写
 //   `git rebase <主分支>`**——那是个占位符，子代理很可能照字面跑 `git rebase main`，
 //   把本票 replay 到 main 之上，此后 ff 永久失败而它自己看不出错在哪。需求分支名由
 //   本脚本从主仓 `git branch --show-current` 取。
 //
-// close：四条前置断言 → `git merge --ff-only` 回合 → `git worktree remove`。
+// close：四条前置断言 → `git merge --ff-only` 回合 → `git worktree remove`（`--keep` 时不拆）。
+//   - `--keep` 的存在理由是**让断言照跑**：车道模式下想「合了但不拆」，不给这个开关就只能
+//     在主树手敲 `git merge --ff-only`，于是组内每一票的回合都绕过了下面四条断言——而它们
+//     恰好是最值钱的那几条。组内末票收口时去掉 `--keep`，让机器门⑤ 的「无残留 worktree」
+//     如常生效（忘了去掉是 fail-closed：门会拦，不会静默放行）。
 //   - **worktree 干净**：里面的未追踪文件（fixture / migration / 运行时读的 JSON）
 //     不在任何 commit 里。主树的 `git add -A` 看不到另一棵工作树，所以 `--force`
 //     拆掉就是永久丢失，而 stage-3 机器门也发现不了。
@@ -41,40 +61,101 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { existsSync, readFileSync } = require('fs');
-const { join } = require('path');
+const { existsSync } = require('fs');
+const { join, dirname, basename, relative } = require('path');
 
 const flowDir = join(__dirname, '..');
+// flow 锚点（= `{{project_root}}`）。**不是 git 根**：monorepo 子项目锚点下两者不同，
+// 本插件自己就是那种结构（锚点 plugins/ai-flow、git 根是仓库根）。下面凡是要区分的地方
+// 都显式问 git，别拿这个变量当仓库根用。
 const repoRoot = join(flowDir, '..', '..');
 
 const die = (m) => { process.stderr.write('❌  ' + m + '\n'); process.exit(1); };
 const say = (m) => process.stdout.write(m + '\n');
 
+// `trimEnd` 而不是 `trim`：`git status --porcelain` 的状态位**是有意义的前导空格**
+// （` M path` = 工作区已改、索引未改）。整段 trim 只吃掉首行那一个空格，于是下面按
+// `slice(3)` 取路径时首行错位一格（`apps/…` 变成 `pps/…`），记账豁免前缀匹配不上——
+// 结果是 stage-3 明文声明为正常的「主树只有 docs/grill-flows/ 下的记账改动」被判成
+// 「子代理把代码写进了主树」，从第二票起每次回合都被拒，而报错说的是没发生过的事。
+// （第一票躲得过：那时记账文件还是未追踪的 `?? `，没有前导空格。）
 function git(args, opts = {}) {
-  return execFileSync('git', args, { cwd: opts.cwd || repoRoot, encoding: 'utf-8', stdio: 'pipe' }).trim();
+  return execFileSync('git', args, { cwd: opts.cwd || repoRoot, encoding: 'utf-8', stdio: 'pipe' }).trimEnd();
 }
 function gitQuiet(args, opts = {}) {
   try { return { ok: true, out: git(args, opts) }; }
   catch (e) { return { ok: false, out: String((e.stderr || e.stdout || e.message || '')).trim() }; }
 }
 
-function detectInstall() {
-  if (existsSync(join(repoRoot, 'pnpm-lock.yaml'))) return 'pnpm install --frozen-lockfile';
-  if (existsSync(join(repoRoot, 'yarn.lock'))) return 'yarn install --frozen-lockfile';
-  if (existsSync(join(repoRoot, 'package-lock.json'))) return 'npm ci';
-  if (existsSync(join(repoRoot, 'package.json'))) return 'npm install';
+// 锚点相对 git 根的前缀（`plugins/ai-flow/`，锚点就是 git 根时为空串）。
+// worktree 是**整仓** checkout，所以 worktree 里的项目根是 `<wtPath>/<anchorPrefix>`。
+// 尾斜杠去掉：`join()` 会把它带进拼出来的目录名，派发给子代理的 `<WT>` 就成了 `…/proj/`，
+// 契约里再拼 `<WT>/src/x` 会得到双斜杠。`bookkeeping` 那处要的是带尾斜杠的前缀，自己补。
+function anchorPrefix() {
+  // 必须看 ok：`gitQuiet` 失败时 out 是 **stderr 文本**，当成前缀会拼出垃圾路径。
+  const r = gitQuiet(['rev-parse', '--show-prefix']);
+  return r.ok ? r.out.replace(/\/$/, '') : '';
+}
+
+// 装依赖的**探测目录与执行目录必须是同一个**，且必须在 worktree 内部。
+// 原版两处都错：探测基准取 flow 锚点（主树里的那个），执行 cwd 取 worktree 根。锚点 = git 根
+// 时看不出问题，monorepo 子项目锚点下就分叉了。实测后果（本插件自己的仓库）：锚点有
+// `package-lock.json` → 探到 `npm ci` → 在 worktree 根跑，那里没有 package.json，于是 npm
+// 沿父目录上溯找到了**主树**的 `<锚点>/package.json`，把主树的 node_modules 整个重装掉，
+// 而 worktree 里一个依赖都没装成。主树正是 stage-3 的调度中心，这一步是在它脚下换轮子；
+// 更隐蔽的是 node 的模块解析同样会上溯，所以 worktree 里的测试「跑得起来」——用的是主树依赖。
+// 反向布局（锚点是 pnpm workspace 的子包、锁文件在 git 根）也错：探到 `npm install` 在整仓
+// checkout 上跑，`workspace:*` 协议 npm 不认。
+//
+// 规则：候选目录 = worktree 里的项目根 → 逐级上溯到 worktree 根，**就近**取第一个带锁文件的
+// （锚点自带锁文件的独立包胜出，锁文件在仓库根的 workspace 也对）；一个锁文件都没有才退到
+// 就近的 package.json。
+const LOCKS = [
+  ['pnpm-lock.yaml', 'pnpm install --frozen-lockfile'],
+  ['yarn.lock', 'yarn install --frozen-lockfile'],
+  ['package-lock.json', 'npm ci'],
+];
+function installCandidates(wtRoot, prefix) {
+  const dirs = [];
+  let cur = prefix ? join(wtRoot, prefix) : wtRoot;
+  // 以 wtRoot 收尾：prefix 由 git 给出，cur 必然在 wtRoot 之下，循环有界。
+  while (cur !== wtRoot && cur !== dirname(cur)) { dirs.push(cur); cur = dirname(cur); }
+  dirs.push(wtRoot);
+  return dirs;
+}
+function detectInstall(dirs) {
+  for (const d of dirs) {
+    for (const [file, cmd] of LOCKS) if (existsSync(join(d, file))) return { cmd, cwd: d };
+  }
+  for (const d of dirs) if (existsSync(join(d, 'package.json'))) return { cmd: 'npm install', cwd: d };
   return null;
 }
 
 const [, , cmd, flowId, ticket, ...rest] = process.argv;
 if (!cmd || !flowId || !ticket) {
-  die('用法：node scripts/worktree.cjs open|sync|close <flow_id> <T<n>> [--install "<cmd>"]');
+  die('用法：node scripts/worktree.cjs open|sync|close <flow_id> <T<n>|R<n>> [--install "<cmd>"] [--keep]');
 }
-if (!/^T\d+$/.test(ticket)) die('ticket 应形如 T3，收到: ' + ticket);
+// `R<n>` = 一组一条长驻车道。⛔ 不要放宽成任意字符串：这个名字进 worktree 路径与分支名，
+// 而机器门⑤ 是按 `.worktrees/<flow_id>-` 前缀查残留的，形态失控会让残留查不出来。
+if (!/^[TR]\d+$/.test(ticket)) die('名字应形如 T3（一票一树）或 R1（一组一车道），收到: ' + ticket);
 
 const name = `${flowId}-${ticket}`;
-const wtPath = join(repoRoot, '.worktrees', name);
 const branch = `wt/${name}`;
+
+// 落点在仓库**同级**目录（理由见文件头）。gitRoot 问 git 而不是从锚点推：monorepo
+// 子项目锚点下两者不同，按锚点算会把落点放回仓库内、把上面那个缺陷带回来。
+const gitRootProbe = gitQuiet(['rev-parse', '--show-toplevel']);
+const gitRoot = gitRootProbe.ok && gitRootProbe.out ? gitRootProbe.out : repoRoot;
+const lanesRoot = join(dirname(gitRoot), basename(gitRoot) + '.ai-flow-worktrees');
+const wtPathCurrent = join(lanesRoot, name);
+// 0.50.0 之前的落点。`open` 只用新的；`sync`/`close` 要认旧的，否则升级前开出去、
+// 还在跑的那些树永远收不了口（脚本会说「不存在，已收口过？」，方向完全指错）。
+const wtPathLegacy = join(repoRoot, '.worktrees', name);
+const wtPath =
+  cmd === 'open' || existsSync(wtPathCurrent) ? wtPathCurrent
+  : existsSync(wtPathLegacy) ? wtPathLegacy
+  : wtPathCurrent;
+const isLegacyPath = wtPath === wtPathLegacy;
 
 if (cmd === 'open') {
   // gitignore 检查：漏了它，worktree 目录会被 stage-4 的 `git add -A` 吞成 gitlink
@@ -83,11 +164,31 @@ if (cmd === 'open') {
   // `**/.worktrees/`，也可以在 `.git/info/exclude` 里，还可能写在 git 根而锚点是
   // monorepo 子项目（`add.ts` 就是特意写到 git 根的）——任何自己实现的匹配都会误拒。
   // `check-ignore` 对不存在的路径同样判得对，但要带下级路径（裸目录名不行）。
-  const ignored = gitQuiet(['check-ignore', '-q', join(wtPath, '.probe')]).ok;
-  if (!ignored) {
-    die('`.worktrees/` 不在 .gitignore 里。先加上再开 worktree——否则 stage-4 收尾的 '
-      + '`git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，'
-      + '结果是一个空的 gitlink 条目、内容一个都没进去）。');
+  // 只在落点**落在仓库里**时才需要这条检查——新落点在仓库同级，`git add -A` 碰不到它。
+  // 保留是因为落点可以被上面那串回退逻辑推回仓库内（拿不到 git 根时），那种情况下
+  // 漏 gitignore 的后果照旧。
+  const insideRepo = !relative(gitRoot, wtPath).startsWith('..');
+  if (insideRepo) {
+    const ignored = gitQuiet(['check-ignore', '-q', join(wtPath, '.probe')]).ok;
+    if (!ignored) {
+      die('落点在仓库内且不在 .gitignore 里。先加上再开 worktree——否则 stage-4 收尾的 '
+        + '`git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，'
+        + '结果是一个空的 gitlink 条目、内容一个都没进去）。');
+    }
+  }
+  // 选址哨兵：落点的任一祖先目录有 node_modules，worktree 里的包就会继承它的
+  // `node_modules/@types`，TypeScript 于是收进同一个包的两份类型身份 —— 症状是一堆
+  // 「同名但不兼容」，与被测改动无关。落点选在仓库同级正是为了避开这个，但父目录本身
+  // 若也是个 node 项目，问题会以同样的形态回来。只警告不阻断：它取决于开发者的目录布局。
+  const polluted = [];
+  for (let d = dirname(wtPath); ; d = dirname(d)) {
+    if (existsSync(join(d, 'node_modules'))) polluted.push(d);
+    if (dirname(d) === d) break;
+  }
+  if (polluted.length > 0) {
+    say(`⚠️  落点的祖先目录里有 node_modules：${polluted.join(' ')}\n`
+      + `    worktree 里的 typecheck 可能报出一批「同名但不兼容」的类型错（同一个包被收进两份身份），\n`
+      + `    与被测改动无关。把那些 node_modules 移走，或把仓库挪到一个干净的父目录下。`);
   }
   if (existsSync(wtPath)) die(`${wtPath} 已存在。若是上一轮残留：先 close，或 \`git worktree remove ${wtPath}\`。`);
 
@@ -102,19 +203,37 @@ if (cmd === 'open') {
   if (!add.ok) die('git worktree add 失败:\n' + add.out);
   say(`worktree: ${wtPath}\nbranch:   ${branch}`);
 
+  const prefix = anchorPrefix();
+  const wtAnchor = prefix ? join(wtPath, prefix) : wtPath;
+  const detected = detectInstall(installCandidates(wtPath, prefix));
   const flagIdx = rest.indexOf('--install');
-  const installCmd = flagIdx !== -1 ? rest[flagIdx + 1] : detectInstall();
+  // `--install` 只覆盖命令，不覆盖目录：探测出来的那个目录就是「依赖清单所在处」，
+  // 手写命令同样该在那儿跑。真要换目录，命令里自带 `cd`（下面是 shell:true）。
+  const installCmd = flagIdx !== -1 ? rest[flagIdx + 1] : detected && detected.cmd;
+  const installCwd = (detected && detected.cwd) || wtAnchor;
   if (installCmd) {
-    say(`装依赖: ${installCmd}`);
+    say(`装依赖: ${installCmd}\n  cwd:  ${installCwd}`);
     try {
-      execFileSync(installCmd, { cwd: wtPath, shell: true, stdio: 'inherit' });
+      execFileSync(installCmd, { cwd: installCwd, shell: true, stdio: 'inherit' });
     } catch (e) {
-      die(`装依赖失败（worktree 已创建、可手动补）: ${installCmd}\n    ${String(e.message || e)}`);
+      die(`装依赖失败（worktree 已创建、可手动补）: ${installCmd}\n    cwd: ${installCwd}\n    ${String(e.message || e)}`);
     }
   } else {
     say('未探测到依赖清单，跳过装依赖。若该票需要构建/测试，手动装。');
   }
-  say(`\n派发给子代理时给绝对路径：${wtPath}`);
+  // 派发给子代理的 `<WT>` 必须是 worktree 里的**项目根**，不是 worktree 根：契约里的
+  // `<WT>/…` 是拿来和 `Touches` 拼绝对路径的，而 `Touches` 的基准是 flow 锚点。
+  // monorepo 子项目锚点下给了 worktree 根，子代理就会在整仓根凭空建出一层 `src/…`——
+  // 而机器门⑥ 抓不到：它把 git 根相对路径剥掉锚点前缀再比，`src/x` 剥不掉、原样匹配
+  // `Touches: src/`，于是文件建错了层却全绿。锚点外的包（monorepo 里别的 workspace）
+  // 用 worktree 根拼。
+  if (wtAnchor !== wtPath) {
+    say(`\n派发给子代理的绝对路径：`
+      + `\n  <WT>（项目根，和 Touches 同基准，拼路径用这个）：${wtAnchor}`
+      + `\n  <WT_ROOT>（worktree 根，锚点外的包用它，如 monorepo 别的 workspace）：${wtPath}`);
+  } else {
+    say(`\n派发给子代理时给绝对路径：${wtPath}`);
+  }
   process.exit(0);
 }
 
@@ -181,8 +300,8 @@ if (cmd === 'close') {
   // monorepo 子项目锚点下（本插件自己就是），记账文件显示成
   // `?? plugins/ai-flow/docs/grill-flows/…`，写死 `docs/grill-flows/` 会把它判成 stray，
   // 于是**每一票的 close 都被拒**，而报错说的是"子代理写错了地方"——和真实原因无关。
-  const prefix = gitQuiet(['rev-parse', '--show-prefix']).out || '';
-  const bookkeeping = prefix + 'docs/grill-flows/';
+  const prefix = anchorPrefix();
+  const bookkeeping = (prefix ? prefix + '/' : '') + 'docs/grill-flows/';
   const mainSt = gitQuiet(['status', '--porcelain', '-uall']);
   const stray = mainSt.ok
     ? mainSt.out.split('\n')
@@ -233,6 +352,16 @@ if (cmd === 'close') {
       + `\`git -C ${wtPath} commit --amend\` 折回本票那笔 → 再 close。`);
   }
   say(ff.out || `已 fast-forward 到 ${branch}`);
+
+  // 车道模式：合了但不拆，同一棵树继续做本组下一票。断言已经在上面全跑过了——这正是
+  // 走这个开关、而不是在主树手敲 `git merge --ff-only` 的理由。
+  if (rest.includes('--keep')) {
+    say(`按 --keep 保留 ${wtPath} 与分支 ${branch}（车道继续用）。`
+      + `\n    下一票开工前先 \`node scripts/worktree.cjs sync ${flowId} ${ticket}\`：别的车道回合过之后，`
+      + `本车道不 rebase 就会在下次 close 时报「不是直接后继」。`
+      + `\n    ⚠️ 本组末票收口时去掉 --keep，否则机器门⑤ 会拦「未收口的 worktree」。`);
+    process.exit(0);
+  }
 
   const rm = gitQuiet(['worktree', 'remove', wtPath]);
   if (!rm.ok) die('回合成功，但 `git worktree remove` 失败（分支已合，工作未丢）:\n' + rm.out);

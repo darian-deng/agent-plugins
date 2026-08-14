@@ -555,6 +555,98 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
     expect(out?.permissionDecision).toBe('deny');
   });
 
+  // Running a flow's own helper script must be allowed — stage-3 hands out
+  // `node {{flow_root}}/scripts/worktree.cjs open …` (at least once per ticket) and
+  // a bare fragment match refused the very command the flow just instructed, with a
+  // message about reads/writes that pointed nowhere near the real cause.
+  describe('执行 flow 自己的脚本', () => {
+    const script = (repoRoot: string) =>
+      join(repoRoot, '.ai-flow', 'test-flow', 'scripts', 'worktree.cjs');
+
+    it('绝对路径执行 → 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node ${script(repo.repoRoot)} open f1 R1`)
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('相对路径执行 + 长选项 → 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, 'node --no-warnings .ai-flow/test-flow/scripts/gate-stage-3.cjs')
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('引号包住的脚本路径 + 参数带重定向 → 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node "${script(repo.repoRoot)}" close f1 R1 --keep 2>&1`)
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    // 以下每一条都必须仍然 DENY —— 豁免只开「执行」这一个形态。
+    it('读脚本内容 → 仍 DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(makeBashInput(repo.repoRoot, `cat ${script(repo.repoRoot)}`));
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('写脚本 → 仍 DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `echo x > ${script(repo.repoRoot)}`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('执行之后再读另一个控制面文件 → 仍 DENY（逐段判定）', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(
+          repo.repoRoot,
+          `node ${script(repo.repoRoot)} open f1 R1 && cat .ai-flow/test-flow/scripts/gate-stage-2.cjs`
+        )
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('把执行结果重定向进 signal → 仍 DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node ${script(repo.repoRoot)} x > .ai-flow/test-flow/state/signal`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('node -e 里引用脚本 → 仍 DENY（-e 的参数是代码不是路径）', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node -e "require('${script(repo.repoRoot)}')"`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('非 .cjs/.js 结尾的路径（当成目录用）→ 仍 DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node ${join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts')}`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+  });
+
   // The control-plane match must be path-scoped to the flow: an unrelated file
   // that merely happens to be named active.json (the user's own config) must NOT
   // be blocked. Guards against re-introducing an over-broad bare-name match.

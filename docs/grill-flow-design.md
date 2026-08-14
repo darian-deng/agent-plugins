@@ -283,6 +283,7 @@ mode: charting | working | clear
      - **correctness**：**`opus` 子代理携该 ticket 未提交 diff + 自定义 prompt 专审 bug**（逻辑错误、边界/空值、错误处理与失败路径、并发竞态、注入/鉴权/密钥类安全隐患），report-only、不依赖任何内置 slash 命令或子项目配置。
        > ⚠️ 已由后续实现修正：初版此处写「用 Claude Code 内置 `/code-review`」，落地时改为自定义子代理（内置命令依赖子项目配置、不通用）。现版依据：`references/per-ticket-review.md` 第 4 步、`helper.md` 环境要求、`preflight.cjs` 注释——`/code-review` 在整个 `.ai-flow/grill-flow/` 下一次都不出现。
      - **子代理都不开 worktree**（看未提交 diff）——引擎只算主 session context，子代理不计入；~30 ticket 约 4-6 次 /clear。
+       > ⚠️ 已由后续实现推翻：stage-3 现在**按票（或按组）开隔离工作树并行**——`scripts/worktree.cjs open/sync/close`，写集不相交的票同批各占一棵树，票多且组内串行时改成一组一条长驻车道（`R<n>` + `close --keep`）。子代理仍审未提交 diff，只是那份 diff 在它自己的工作树里。**别拿这一行断言「本 flow 不开 worktree / 做不到并行」**（已经发生过一次）。现版依据：`stages/stage-3.md` 的「执行单位」与主循环、`scripts/worktree.cjs` 头部注释。
      - 按 findings 修复（仍未提交）；关键修复独立复核兜底。
   4. **per-ticket 客观地板**（AI 自觉纪律，非引擎强制）：typecheck + 该 ticket 相关测试绿；**假绿检测**=测试选择器实际匹配 ≥1 个测试；**枚举负空间检查**=ticket 蕴含 N 个错误码/状态/分支时逐项核 diff 都实现+断言；**回归纪律**=既有测试挂了当回归、改代码不改测试。
   5. **commit**：实现+simplify+修复**一次性提交为该 ticket 唯一一笔独立 commit**（**commit subject 首行必须含 `T<n>`**，机器门只解析 subject 据此核对 ticket↔commit；见 §13 必修 6 的 ⚠️）作**执行期锚点**。**常规路径一次到位；例外是截断自保护**——实施子代理近窗口上限时先 `git commit` 已完成部分（message 标 `[partial]`）+ 留「剩余工作」清单，编排器续派下一轮，**末轮用 `git add -A && git commit --amend` 折回那笔 `[partial]`、去掉标记**，保住「一 ticket 一 commit」。commit = 本 ticket 质量完成锚；这些 per-ticket commit 收尾在 stage-4 环节 C 被 `git reset` 摊平、squash 成一笔。

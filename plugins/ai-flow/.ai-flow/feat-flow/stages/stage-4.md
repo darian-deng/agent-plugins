@@ -76,7 +76,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 **开跑前**：解析 plan.md 的 task 列表 + 执行单元清单——解析到 0 个 task 或无执行单元清单 → 停下问开发者（疑似 plan.md 损坏或 Stage 3 未完成）。
 
 **抑制 SDD 的越界默认行为**（feat-flow 接管这些，不让 SDD 冲出 stage-4 边界）：
-- **不建 worktree**——feat-flow 在当前工作树跑（引擎按 session 绑定定位 flow、用 base_sha_code 框定代码 diff，worktree 会另起工作树、base_sha 基准失效）
+- **不建 worktree**——feat-flow 在当前工作树跑。理由是本 stage 钉死串行（见下方「钉死串行」）：没有并发写，就没有要隔离的东西，而 SDD 自建的树不受本 flow 管理。⚠️ 不是「引擎做不到」——引擎判得出目录是否在隔离工作树内，`base_sha_code` 在工作树下也照常框得住 diff（grill-flow 就是按票/按组开树并行的）
 - **不调用 `finishing-a-development-branch`**——merge / PR 收尾归 Stage 6 + 开发者
 - **不跑 SDD 的「整体 final reviewer」**——整体审查是 Stage 5 的职责（`base_sha..HEAD` + 组装级双视角审查），在此重复且可能给出打架结论
 - **continuous execution 的边界**：SDD 默认「task 间不停顿、不向开发者要确认」——这指**不做「要不要继续」式的人类 check-in**，**不等于**省略主 session 每 task 之间的落盘 / 待沉淀术语重组 / 审查行回填。这几步是必做的调度动作，不算 check-in，不要为「连续执行」跳过

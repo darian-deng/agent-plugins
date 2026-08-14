@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, realpathSync } from 'fs';
-import { join } from 'path';
+import { join, dirname, basename } from 'path';
 import { readActiveState, appendLog } from '../state.js';
 import type { CommandResult } from '../types.js';
 
@@ -32,11 +32,23 @@ function flowWorktrees(repoRoot: string, flowId: string): { path: string; branch
   // exists to cover.
   let base = repoRoot;
   try { base = realpathSync(repoRoot); } catch { /* keep raw */ }
-  // Scoped to `<repoRoot>/.worktrees/<flow_id>-*`, matching what the flow's own
-  // helper script creates. A developer's unrelated worktree parked at
-  // `.worktrees/dev` must not block aborting — the comment above promises exactly
-  // that, and a bare `.worktrees/` prefix broke the promise.
-  const prefix = join(base, '.worktrees') + '/' + flowId + '-';
+  // Scoped to `<flow_id>-*` under the locations the flow's own helper script uses.
+  // A developer's unrelated worktree parked at `.worktrees/dev` must not block
+  // aborting — the comment above promises exactly that, and a bare `.worktrees/`
+  // prefix broke the promise.
+  //
+  // BOTH locations are checked. The script now creates worktrees as a SIBLING of
+  // the repo (`<repo>.ai-flow-worktrees/`), because one nested inside the repo
+  // inherits the main tree's ancestor `node_modules/@types` and TypeScript then
+  // sees two identities of the same package — typecheck inside the worktree fails
+  // for reasons unrelated to the work. Worktrees opened before that change still
+  // live under `<repoRoot>/.worktrees/`. Missing either one fails OPEN in the
+  // direction this guard exists to cover: the snapshot below runs `git add -A` at
+  // repoRoot only, so work in an unlisted worktree is dropped silently.
+  const prefixes = [
+    join(base, '.worktrees') + '/' + flowId + '-',
+    join(dirname(base), basename(base) + '.ai-flow-worktrees') + '/' + flowId + '-',
+  ];
   const found: { path: string; branch: string }[] = [];
   // Register on the `worktree ` line and read the real branch from the following
   // `branch refs/heads/…` line. Two reasons not to key off `branch ` alone or to
@@ -50,7 +62,7 @@ function flowWorktrees(repoRoot: string, flowId: string): { path: string; branch
   for (const line of out.split('\n')) {
     if (line.startsWith('worktree ')) {
       const p = line.slice('worktree '.length).trim();
-      cur = p.startsWith(prefix) ? { path: p, branch: '(detached)' } : null;
+      cur = prefixes.some((pre) => p.startsWith(pre)) ? { path: p, branch: '(detached)' } : null;
       if (cur) found.push(cur);
     } else if (cur && line.startsWith('branch ')) {
       cur.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');

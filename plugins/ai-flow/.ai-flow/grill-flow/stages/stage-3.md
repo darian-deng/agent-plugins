@@ -39,13 +39,42 @@
 
 **判首次 vs 重入**：注入 context 已含 `base_sha_code` 行，或 tickets.md 已有 `[x]` → 重入，跳过 Step 1（重捕会污染 stage-4 diff 基准，引擎也拒覆写），照下方「重入」走。
 
-**Step 0 预检**：`git branch --show-current`（在 main/master → 停，要开发者切需求分支）；`git status --porcelain`（含**代码**改动 → 停问开发者；仅 `docs/grill-flows/` 改动属正常，豁免）；`git worktree list`（有 `.worktrees/` 下条目 → 这是上一轮残留，照「重入」先收口，别新开）。
+**Step 0 预检**：`git branch --show-current`（在 main/master → 停，要开发者切需求分支）；`git status --porcelain`（含**代码**改动 → 停问开发者；仅 `docs/grill-flows/` 改动属正常，豁免）；`git worktree list`（有 `wt/<flow_id>-` 分支的条目 → 这是上一轮残留，照「重入」先收口，别新开。**除非 tickets.md 里已有 `lane:` 标记**——那是车道模式下正在用的长驻车道，不是残留，按「重入」节的车道判据接着跑）。落点在**仓库同级**的 `<repo 名>.ai-flow-worktrees/`，不在仓库里，所以 `git status` 看不到它们，只有 `git worktree list` 能。
 
 **Step 1 起点 commit + mark-base**：`git add` 全部 flow docs（alignment.md + wayfinder-map.md + spec.md + tickets.md）→ `git commit -m "docs: <feature> stage1-2 outputs"` → 用 Write 写 `{{flow_root}}/state/mark-base`（内容任意如 `capture`）触发引擎捕获 `base_sha_code`。
+
+## 执行单位：一票一树，还是一组一车道
+
+默认**一票一树**（下面主循环写的就是它）。当「开树」本身成为主要成本时改成**一组一车道**：每组各开一棵长驻 worktree（名字 `R<n>`），组内逐票 commit、逐票 `close --keep` 回合，组间并行。
+
+**换单位之前先试更保守的一步**：让装依赖本身变便宜——`open` 支持 `--install "<cmd>"` 覆盖探测结果，把它换成一条复用主树已有产物的命令（依赖目录、native 预编译产物），装依赖就从分钟级掉到秒级，一票一树的成本问题随之消失、机器保护一条不丢。**这条能成就不要切车道**。共享同一份依赖目录会让改依赖版本的票污染别的树，所以只在本期没有票碰依赖清单时可用。
+
+**三条同时成立才切车道**，否则留在一票一树（它的机器保护更强）：
+
+- 票数远多于上限 3；
+- **组内高度串行**——组内票互相 `Blocked by`，或 `Touches` 相交。组内本来就并不起来，车道才没有牺牲票级并行；
+- 组数 ≥ 3，且装依赖仍然贵（monorepo、native addon、分钟级）。一票一树付「票数」次装依赖，车道只付「组数」次；并行度那一侧，一票一树被上限 3 压着，车道是「组数」条同时走。**但组数同时受峰值子代理数约束**：每票 = 1 实施 + 3 评审 + `comment` skill 自己的 fan-out，真正的上限往往是这个而不是票数（见下方「并行度」）。
+
+**代价三条，都要接受**：
+
+1. **机器门⑦ 对它不生效**：并行的票分布在不同车道、不落同一个 `batch:`，所以「同批实际写集不相交」这条查不到它们。⑥（每票实际改动 ⊆ 它声明的 `Touches`）仍逐票生效，所以「按 `Touches` 不相交准入 + ⑥ 核实际」这条链还在；丢掉的是「两票同时改同一文件的不同区段、rebase 也不冲突、于是交界面无人复核」这一种。**处置**：把已知会撞的文件写进 tickets.md 末尾，标成 stage-4 组装审的必查清单，收尾时逐行点名。
+2. **必须按轮推进，快车道要等慢车道**：收口测试（第 6 步）的存在理由是「归并之后这棵树没有人验过」，而车道各自的节奏不同步时，「谁负责验这棵树」就没有落点。所以一轮 = 每条活跃车道各做一票，**本轮全部车道都回合完**才跑一次收口测试 + 记账，然后开下一轮。不设这个屏障就等于取消收口测试。
+3. **车道里的依赖会漂移**：树是长驻的，别的车道回合了改依赖清单的票之后，本车道 `sync` 只 rebase 代码、不重装依赖。本轮有票碰了依赖清单 → 下一轮各车道 sync 之后补装一次。
+
+**车道模式的动作差异**（其余照主循环）：
+
+- **分组是你在这里算的，不是 stage-2 的产物**——tickets.md 只有 `Blocked by` 与 `Touches`，没有分组字段。算法：把「有 `Blocked by` 关系」或「`Touches` 相交」的票视作连通，取**连通分量**；分量比你要的车道数多时合并最小的几个（合并只降并行度、不破坏正确性）。算完立刻落 `lane:`，**之后一律读它、不重算**——重算会在 /clear 之后算出不同的分组。
+- 记账字段用 `lane: R<n>`（和 `qc:done` 同一口径，写在票行或其缩进子项）。⛔ **不要写成 `batch: R1`**——同车道的票必然写集相交，机器门⑦ 会把整组报成违规。
+- 开车道：`worktree.cjs open <flow_id> R<n>`，每组一次、不是每票一次。
+- **每票开工前先 `worktree.cjs sync <flow_id> R<n>`**：别的车道回合过之后本车道就不再是 HEAD 的直接后继，不 rebase 会在 close 时报「不是直接后继」。
+- 回合：`worktree.cjs close <flow_id> R<n> --keep`（四条断言照跑、ff 照做、树留着）。**本组末票去掉 `--keep`** 让树真拆——忘了是 fail-closed，机器门⑤ 会拦「未收口的 worktree」。
+- 第 4 步「回合之前裁完子代理回报」这条纪律不变，但理由换了：车道模式下树没拆、还能进去改，可该票那笔 commit 已经 ff 进需求分支，再改只能另提一笔——一票一 commit 就破了。
 
 ## 主循环
 
 ### 1. 算批次
+
+（本节是一票一树的口径。走车道模式时，「批」= 各车道当前那一票，准入判据同样是 `Touches` 不相交，但不写 `batch:`、写 `lane:`。）
 
 **够格** = 未勾 `- [ ] T<n>` 且所有 `Blocked by` 已勾。
 
@@ -57,17 +86,19 @@
 
 ### 2. 落盘再派发（Clear-Safe）
 
-派发**之前**先把批次写进 tickets.md：给本批每票加 `batch: B<k>` 标记，**写在该票那条行内或其缩进子项**（和 `qc:done` 同一口径——写在别处，机器门⑦ 会静默跳过这票）。批次成员关系只存在于这个字段里，先派后写、/clear 就丢了。
+派发**之前**先把批次写进 tickets.md：给本批每票加 `batch: B<k>` 标记（车道模式写 `lane: R<n>`），**写在该票那条行内或其缩进子项**（和 `qc:done` 同一口径——写在别处，机器门⑦ 会静默跳过这票）。批次成员关系只存在于这个字段里，先派后写、/clear 就丢了。
 
 ### 3. 开 worktree + 派发
 
-每票一个：
+每票一个（车道模式：每组一个，`T<n>` 换成 `R<n>`，且只在该组第一票前开）：
 
 ```sh
 node {{flow_root}}/scripts/worktree.cjs open <flow_id> T<n>
 ```
 
 它负责位置、gitignore 检查、分支命名、装依赖，并打印派发要用的绝对路径。**位置/命名/装依赖不必记，这条命令就是全部。**
+
+**派发用它打印的哪个路径**：锚点是 monorepo 子项目时它会打印两个——`<WT>`（worktree 里的项目根，和 `Touches` 同基准）与 worktree 根。**两个都要带进 dispatch prompt**，后者按契约里的名字给成 `<WT_ROOT>`（只有改锚点外的包时用它）。只给 worktree 根会让子代理在整仓根凭空建出一层同名目录，而机器门⑥ 抓不到——剥不掉锚点前缀的路径原样匹配 `Touches`，全绿。
 
 按 `per-ticket-review.md` 拼 dispatch prompt。契约里的「派发时带什么」是完整清单，其中**最容易漏、漏了就静默空转**的是那条 cwd 纪律（一切 git 用 `git -C <WT>`、一切写用 `<WT>/…` 绝对路径）——务必原样带上。
 
@@ -89,6 +120,7 @@ node {{flow_root}}/scripts/worktree.cjs open <flow_id> T<n>
 
 ```sh
 node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
+# 车道模式：close <flow_id> R<n> --keep（末票去掉 --keep）
 ```
 
 它跑四条前置断言（worktree 干净、票分支上无 merge commit、主树无非记账改动、票分支确有 commit）→ `git merge --ff-only` → 拆除 worktree、保留分支。断言失败时它会说清是哪一条、怎么处置——照它说的做，别绕过。
@@ -107,7 +139,7 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 
 `rm:pending` **排在 `qc:done` 之前**是有原因的：重入相位表用 `qc:done` 当"记账已完成"的锚，如果 `rm:pending` 在它之后写，恰好在两者之间 /clear 就会被"有 `qc:done` 无 `[x]` → 补勾"这条路径永久跳过真机登记。
 
-**推进下一批前**：本批每票都有自己那笔 commit + `qc:done` + `[x]`、`.worktrees/` 已空、无未裁决的决策/安全项。
+**推进下一批前**：本批每票都有自己那笔 commit + `qc:done` + `[x]`、本 flow 的 worktree 已全部拆除、无未裁决的决策/安全项。
 
 ### 连续执行
 
@@ -115,7 +147,7 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 
 ### 并行度
 
-`3` 是起步值，不是测出来的最优。首轮跑完记一笔：省下的（N 份实施+三评审的墙上时间）vs 付出的（回合失败时的 rebase 适配 + 批次收口测试 + N 份装依赖），再调。
+`3` 是起步值，不是测出来的最优。首轮跑完记一笔：省下的（N 份实施+三评审的墙上时间）vs 付出的（回合失败时的 rebase 适配 + 批次收口测试 + N 份装依赖），再调。**装依赖那一项贵到主导总账时，要调的不是这个数字而是执行单位**——见上方那一节。
 
 算成本时别漏了**实际峰值并发**：每票 = 1 实施 + 3 评审 + `comment` skill 自己的 fan-out（每文件一个 `sonnet`、最多 10 并行）。3 票同时走到注释清理那步，峰值可达数十个 agent。真正的上限往往是这个，不是票数。
 
@@ -127,7 +159,7 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 git worktree prune && git worktree list --porcelain
 ```
 
-`.worktrees/` 下有条目 → 先收口存量，**不得重派**（重派会撞 `fatal: a branch named 'wt/<flow_id>-T<n>' already exists`，并留下孤儿 worktree）。
+列出的条目里有 `wt/<flow_id>-` 分支的 → 先收口存量，**不得重派**（重派会撞 `fatal: a branch named 'wt/<flow_id>-T<n>' already exists`，并留下孤儿 worktree）。
 
 逐票判相位——**锚 = 该票那笔 commit（在主分支或在它自己的分支上）+ `qc:done`**：
 
@@ -146,6 +178,8 @@ git worktree prune && git worktree list --porcelain
 
 **查该票 commit**：`git log --oneline --no-merges <base>..HEAD`（在主分支）与 `git log --oneline <base>..wt/<flow_id>-T<n>`（在票分支）。只看 subject 首行，别翻 body——body 里有对未来票号的前向引用。
 
+**车道模式的重入**：票↔车道的映射只存在于 `lane:` 字段里（这就是它必须先落盘的原因）。相位仍按上表判，只把「worktree」一列读成「该票所属车道那棵树」，并改一条判据：**车道树存在 ≠ 该票在飞**（树是长驻的）——在飞看的是车道分支上有没有未回合的 commit（`git log --oneline <需求分支>..wt/<flow_id>-R<n>`，需求分支名用 `git branch --show-current` 取）。空 = 该组上一票已回合、下一票还没派。
+
 - 切片本身错（不是实施问题）→ 就地在 tickets.md 重切并知会开发者（引擎无反向 stage 转移）。
 - 前置产物要改 → 走 `revision-protocol.md`。
 
@@ -162,7 +196,7 @@ git commits（每票一笔代码 commit、subject 首行含 `T<n>`、**历史线
 ## 完成条件
 
 - tickets.md 全部 ticket 级项 `[x]`，每个都有 `qc:done`。
-- `.worktrees/` 已空，历史线性。
+- 本 flow 的 worktree 已全部拆除（机器门⑤ 按落点前缀查，新旧两处都查），历史线性。
 - **本 stage 期间问开发者拍板的结论已逐条落盘**：新增决策写进 `spec.md` 的 `## Decisions`；改动了范围 / 已对齐结论的走 `revision-protocol.md` 回写 `alignment.md`。机器门验不了这条，但它决定下一次 /clear 之后这些结论还在不在——不落盘就等于没问过。
 
 ## Signal

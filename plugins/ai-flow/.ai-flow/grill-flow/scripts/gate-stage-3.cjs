@@ -8,7 +8,7 @@
 //          （subject 含该 ticket 号，且一笔 commit 只能认领一个 ticket；
 //           防"勾了 [x] 却没做 / 没 commit"、防一笔 commit 顶多票）；
 //       ④ base_sha_code..HEAD **无 merge commit**（历史线性）；
-//       ⑤ `.worktrees/` 下无残留 worktree（并行票已全部收口）；
+//       ⑤ 本 flow 落点下无残留 worktree（并行票已全部收口；新旧两个落点都查）；
 //       ⑥ 每个 [x] ticket 那笔 commit 实际改的文件 ⊆ 它声明的 Touches；
 //       ⑦ 同一 batch 内任两票的实际改动文件集不相交。
 //
@@ -32,7 +32,7 @@
 'use strict';
 
 const { existsSync, readFileSync } = require('fs');
-const { join, relative, sep } = require('path');
+const { join, relative, sep, dirname, basename } = require('path');
 const { execFileSync } = require('child_process');
 
 const PASS = 0;
@@ -326,7 +326,7 @@ if (merges.length > 0) {
 }
 
 // ── ⑤ worktree 已收口 ──
-// 只看 `<projectRoot>/.worktrees/` 下的（本 flow 开的那些）。不能写成"除主工作树外为空"：
+// 只看本 flow 落点下的那些。不能写成"除主工作树外为空"：
 // 开发者常年挂着与本 flow 无关的 worktree，那样会让这道门恒失败。
 // 必须先 prune：手动 `rm -rf` 掉目录后条目仍会以 prunable 状态留在 list 里。
 try {
@@ -339,14 +339,22 @@ try {
   err('git worktree list 失败: ' + (e.message || e));
   process.exit(FAIL);
 }
-// 收窄到本 flow 自己那些（`<flow_id>-T<n>`，`worktree.cjs open` 的命名）：`.worktrees/`
-// 是社区通行的放置位置，开发者可能常年在那儿挂与本 flow 无关的工作目录，
-// 那种不该让这道门恒失败。abort 那侧用的是同一判据。
-const wtPrefix = join(projectRoot, '.worktrees') + '/' + flowId + '-';
+// 收窄到本 flow 自己那些（名字 `<flow_id>-T<n>` / `<flow_id>-R<n>`，`worktree.cjs open`
+// 的命名）：开发者可能常年挂着与本 flow 无关的工作目录，那种不该让这道门恒失败。
+// abort 那侧用的是同一判据。
+// **两个落点都要查**：0.50.0 起 worktree 开在仓库同级的 `<repo 名>.ai-flow-worktrees/`
+// （嵌在仓库内会让 worktree 里的 TS 收进主树的 `node_modules/@types`，同一个包两份类型
+// 身份、typecheck 必然报错），而升级前开出去的树还在 `<锚点>/.worktrees/` 下。只查一个
+// 就会漏掉另一个，而漏掉的方向是 fail-open——残留的工作树带着未合回来的改动，门却放行。
+const wtPrefixes = [join(projectRoot, '.worktrees') + '/' + flowId + '-'];
+try {
+  const top = git(['rev-parse', '--show-toplevel']).trim();
+  wtPrefixes.push(join(dirname(top), basename(top) + '.ai-flow-worktrees') + '/' + flowId + '-');
+} catch { /* 非 git 仓库时上面的 git log 早已 fail-closed，走不到这里 */ }
 const staleWt = wtRaw.split('\n')
   .filter((l) => l.startsWith('worktree '))
   .map((l) => l.slice('worktree '.length).trim())
-  .filter((p) => p.startsWith(wtPrefix));
+  .filter((p) => wtPrefixes.some((pre) => p.startsWith(pre)));
 if (staleWt.length > 0) {
   err('还有 ' + staleWt.length + ' 个未收口的 worktree（并行票没合回来 / 没拆掉）:\n'
     + staleWt.map((p) => '      ' + p).join('\n')

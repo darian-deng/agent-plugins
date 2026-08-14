@@ -75,7 +75,7 @@ flow-squash: <flow_id>"
 ```
 commit message **自包含**（不引用 `T<n>` / flow 内部临时指代）。body 末行 `flow-squash: <flow_id>` 是校验锚点。
 
-4. **清理本 flow 的票分支**（squash 之后、写 signal 之前）：stage-3 的并行票留下 `wt/<flow_id>-T<n>` 分支（它们被刻意保留，供 stage-3 的重入相位表区分「已交付未回合」）。squash 已经把全部改动收进一笔 feat commit，这些分支再没有用途，不删会跨 flow 永久累积：
+4. **清理本 flow 的票分支**（squash 之后、写 signal 之前）：stage-3 的并行票留下 `wt/<flow_id>-T<n>`（车道模式是 `-R<n>`）分支（它们被刻意保留，供 stage-3 的重入相位表区分「已交付未回合」）。squash 已经把全部改动收进一笔 feat commit，这些分支再没有用途，不删会跨 flow 永久累积：
 ```sh
 git branch --list "wt/<flow_id>-*" | xargs -r git branch -D
 ```
