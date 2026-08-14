@@ -88,6 +88,8 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
   - `.worktrees/` — 0.50.0 之前的隔离工作树位置。**新落点在仓库同级**（`../<repo 名>.ai-flow-worktrees/`），所以这条规则对新 flow 已经不起作用；保留它是为了兼容升级前开出去、还在跑的树，以及开发者手动在那儿建的工作树——落在仓库内又没被 ignore，stage-4 的 `git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，落地是个空的 gitlink 条目）。落点在仓库内时 `worktree.cjs open` 仍会先检查这条。
   - ⚠️ **为什么把落点搬出仓库**：模块解析（node 与 tsc 都逐级向上找 `node_modules`）在 worktree 嵌在主检出内部时会走出 worktree、落到主树的 `node_modules`，同一个包于是有两个物理路径 = 两份互不相关的同名类型，worktree 里的 typecheck 报一批「同名但不兼容」——与被测改动无关，却会卡住 pre-commit hook、让碰到那些包的票全部提交不了。实测（pnpm workspace）：落点在 `apps/desktop/.worktrees/` 时车道里 71 个错、`--listFilesOnly` 能看到两份 `@types/react`；搬到仓库同级后同一条命令 0 错。查证手段：`tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u`，出现两个不同前缀就是越界。
   - `**/.ai-flow/**/state/` — 这条是**并行的前提**，不只是卫生。少了它，`state/active.json` 会被提交进 worktree，于是 worktree 里的子代理解析到的是一份**陈旧的** flow 状态副本，而不是主仓的真状态。
+- **交互式命令在本环境起不来**（无 tty）：`git rebase -i`、`git add -i`、`git add -p` 会挂住或被宿主直接拒。所以凡是要改写历史的地方，文档给的都是非交互形态——`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base>`。⚠️ 另有一条容易连带踩的：stage-3 期间主树**一直有未提交的记账改动**，`--autostash` 因此不是可选项；漏了它 rebase 直接拒绝，而按报错去提交记账会造出一笔不归属任何票的 commit、被机器门③ 拦下。
+- **`git reset` / `git cherry-pick` / `git merge --ff-only` 都是非交互的**，stage-4 环节 C 的摊平与 squash 全用它们——那一段不需要开发者代跑命令。
 - **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
 - **内置命令**：`/simplify`（stage-3 per-ticket 机械型质量修，Claude Code 内置）。correctness 轴不用内置命令，改由子代理携未提交 diff 审 bug（通用、见 `references/per-ticket-review.md`）。
 - **内置 skill**：`comment`（注释纪律与清理，会真删——实施子代理写时守；stage-3 每票 commit 前编排器显式调用一次；stage-4 环节 C reset 后 + squash 前各一次。机制与判据见 skill 自身、取最新；随 ai-flow 一起装、无需额外安装）。

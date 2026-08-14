@@ -143,7 +143,20 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 
 本批全部回合完后，**一次**跑该批相关测试 + typecheck。理由是「批次全部归并后这棵树没有人验过」——批内前几次回合的结果都会被最后一次覆盖，逐票各跑一遍是重复劳动。
 
-**收口测试失败怎么办**：worktree 已拆，`--amend` 折回中间那笔票 commit 做不到。就在主树修，另提**一笔 subject 不含任何票号的 `fix:` commit**——票↔commit 是一一配对的，带票号会造成争用；不带票号则不占用配对。但机器门要求区间内每笔 commit 都归属某一票，所以这笔要**紧接着 `git rebase -i` squash 进它真正属于的那张票**那笔里（或用 `--fixup` + `--autosquash`）。同时在回报/review 交接里记下它属于哪票。
+**收口测试失败怎么办**：worktree 已拆，`--amend` 折回中间那笔票 commit 做不到。就在主树修，然后把修复**squash 进它真正属于的那张票**那笔里（机器门要求区间内每笔 commit 都归属某一票，所以不能留一笔独立的 `fix:`）。两条命令，都能在无人值守下跑完：
+
+```sh
+git commit --fixup=<该票那笔的 sha>     # 生成 `fixup! …`，别自己写票号（会与该票争用配对）
+GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>
+```
+
+三处**必须原样照抄**的细节，少一个就卡住：
+
+- **`GIT_SEQUENCE_EDITOR=true` 不能省**。这里的 `-i` 不是让你交互——本环境没有 tty，交互式 git 起不来（`git rebase -i` / `git add -i` 会挂住或直接被拒）。这个变量让 rebase 直接接受自动生成的 todo，`--autosquash` 于是照 `fixup!` 前缀自动归位。
+- **`--autostash` 不能省**。stage-3 期间主树**一直有未提交的记账改动**（tickets.md 的 `qc:done` / `[x]`、candidates.md），而 rebase 在工作树脏时直接拒绝。那条报错（"cannot rebase: You have unstaged changes"）会诱你去提交记账——**别提**，那会造出一笔不归属任何票的 commit，机器门③ 立刻拦。
+- rebase 中途有冲突时，autostash 的恢复**推迟到 rebase 结束或 `--abort` 之后**，期间记账改动看不见。别以为丢了、别重写一遍。
+
+同时在回报 / review 交接里记下这笔修复属于哪票。
 
 然后逐票记账（留工作树、不单独 commit），**顺序照这个来**：落 candidates.md（带 ticket ID 前缀、append 前 grep 去重）→ 需真机的票加 `rm:pending` 并往 tickets.md `## 待真机验证` 段 append 一条 `- T<n> — <一句话验什么>` → 在该票那条上写 `qc:done`（行内或其缩进子项，写在别处不算）→ 勾 `[x]`。
 

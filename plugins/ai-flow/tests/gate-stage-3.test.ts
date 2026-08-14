@@ -130,6 +130,48 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(r.stderr).toContain('未收口的 worktree');
   });
 
+  // stage-3 第 6 步「收口测试失败」给的那两条命令必须能在无人值守下跑完，并且跑完之后
+  // 机器门③④ 要过（修复被吸收进它所属的票、没有多出不归属任何票的 commit、历史线性）。
+  // 这条同时锁住 --autostash 的必要性：stage-3 期间主树一直有**已追踪且未暂存**的记账改动，
+  // 少了 --autostash 时 rebase 直接拒绝，而按它的报错去提交记账就会造出一笔 orphan commit。
+  it('文档给的非交互 squash 流程：收口修复被吸收进它所属的票，机器门通过', () => {
+    const { repo, flowDir } = makeRepo();
+    // 记账文件在 base 之前入库，之后对它的修改才是「已追踪、未暂存」
+    writeTickets(repo);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'docs: stage1-2 outputs');
+    const base = git(repo, 'rev-parse', 'HEAD').trim();
+
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    const t1 = git(repo, 'rev-parse', 'HEAD').trim();
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+
+    // 收口测试失败 → 在主树修 → 标成 fixup（不写票号，否则与该票争用配对）
+    writeFileSync(join(repo, 'one.txt'), 'impl one\nfixed by batch closeout\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', `--fixup=${t1}`);
+    // 记账：留工作树、不提交（这是 rebase 会拒绝的那种脏）。内容必须与已入库那份不同，
+    // 否则 git 认为无改动、工作树是干净的，这条用例就测不到 --autostash 了。
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '# tickets\n\n- [x] T1 — impl one\n  - qc:done\n  - lane: R1\n- [x] T2 — impl two\n  - qc:done\n  - lane: R1\n');
+    expect(git(repo, 'status', '--porcelain').startsWith(' M')).toBe(true);
+
+    // 文档给的第二条命令，原样
+    execFileSync('git', ['-C', repo, 'rebase', '-i', '--autosquash', '--autostash', base], {
+      env: { ...process.env, GIT_SEQUENCE_EDITOR: 'true' },
+      encoding: 'utf-8',
+    });
+
+    // 修复进了 T1 那笔；区间里只有两笔、都归属某票；记账改动还在
+    expect(git(repo, 'log', '--format=%s', `${base}..HEAD`).trim().split('\n')).toHaveLength(2);
+    expect(git(repo, 'show', '--format=', '--name-only', 'HEAD~1')).toContain('one.txt');
+    expect(git(repo, 'log', '--merges', '--format=%h', `${base}..HEAD`).trim()).toBe('');
+    expect(git(repo, 'status', '--porcelain')).toContain('tickets.md');
+
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
   // 落点自 0.50.0 起在仓库**同级**（嵌在仓库内会让 worktree 里的 TS 收进主树的
   // `node_modules/@types`、同一个包两份类型身份）。⑤ 只查旧落点就会漏掉现在真正用的那个，
   // 而漏的方向是 fail-open：残留工作树带着没合回来的改动，门却放行。

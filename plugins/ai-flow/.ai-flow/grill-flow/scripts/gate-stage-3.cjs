@@ -225,8 +225,11 @@ if (multi.length > 0) {
     + '\n    为什么卡这个：ticket↔commit 是一一配对的，一笔命中多票会让配对有多个合法解，'
     + '于是断言⑥⑦ 可能按「对调」的那一解去核写集——两票都被报成越界、且提示方向是反的，'
     + '照着改会陷入死循环。同样的状态换个提交顺序又会通过，门变得不确定。'
-    + '\n    怎么改：`git rebase -i` 改写这些 subject，每笔只留它自己那一个票号。'
-    + '要提及别的票就写进 body（门只读 subject 首行）。');
+    + '\n    怎么改：改写这些 subject，每笔只留它自己那一个票号；要提及别的票就写进 body'
+    + '（门只读 subject 首行）。**交互式 rebase 在本环境起不来（无 tty）**，用非交互形态：\n'
+    + '      GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>\n'
+    + '    只改 subject 时用 `git rebase --exec "git commit --amend -m ..."` 或逐笔 `--amend`；'
+    + '`--autostash` 不能省——stage-3 期间主树一直有未提交的记账改动，rebase 会因此直接拒绝。');
   process.exit(FAIL);
 }
 
@@ -295,9 +298,13 @@ if (orphans.length > 0) {
     + orphans.map((r) => '      ' + r.sha.slice(0, 8) + ' ' + r.subject).join('\n')
     + '\n    为什么卡这个：断言⑥⑦ 按"该票那笔 commit 改了哪些文件"核写集，不归属任何票的 commit'
     + '它们完全看不见——越界改动或同批相交写只要落在这种 commit 里就能整个逃过去。'
-    + '\n    怎么改：本 stage 的契约是每票一笔独立代码 commit。属于某票 → `git rebase -i` 把它 squash'
-    + '进该票那笔（或 `--fixup` + `--autosquash`）；是顺手提交的无关改动 → 它不该在本 flow 的'
-    + '区间里，摘出去或补一张 ticket 认领它。');
+    + '\n    怎么改：本 stage 的契约是每票一笔独立代码 commit。属于某票 → 两条命令 squash 进该票那笔：\n'
+    + '      git commit --fixup=<该票那笔的 sha>   # 若那笔还没提交则先这样提\n'
+    + '      GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>\n'
+    + '    两个都不能省：本环境没有 tty，交互式 rebase 起不来，`GIT_SEQUENCE_EDITOR=true` 让它'
+    + '直接接受自动生成的 todo；`--autostash` 保住主树那些未提交的记账改动（否则 rebase 直接拒绝，'
+    + '而按它的提示去提交记账又会造出一笔不归属任何票的 commit、被本条再次拦下）。\n'
+    + '    是顺手提交的无关改动 → 它不该在本 flow 的区间里，摘出去或补一张 ticket 认领它。');
   process.exit(FAIL);
 }
 
