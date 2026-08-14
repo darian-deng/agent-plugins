@@ -29,7 +29,7 @@ grill-flow help                       # 本文档
 |----|------|---------|---------|
 | stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
 | stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) + 每票声明 `Blocked by`(实施先后) 与 `Touches`(预计写集) |
-| stage-3 | implement | script（无 gate，fail-closed） | 主 session 调度：算批次（够格 ∧ `Touches` 不相交，上限 3）→ 落 `batch:` 再派发 → 每票一个 worktree（`scripts/worktree.cjs open`）→ 子代理按契约走完质量链并 commit → 回合前自己 `git rebase` 适配 → 主 session `--ff-only` 逐票回合（`close`）→ 批次收口测试一次 → 记账。**历史必须线性**（断言④ 是 `-X ours` 静默丢内容的唯一物理防线）。**执行单位可切换**：票多且组内高度串行、装依赖又贵时改「一组一车道」（长驻 worktree `R<n>`、`close --keep` 逐票回合、记 `lane:`），判据与代价见 stage-3「执行单位」节 |
+| stage-3 | implement | script（无 gate，fail-closed） | 主 session 调度：算批次（够格 ∧ `Touches` 不相交，上限 3）→ 落 `batch:` 再派发 → 每票一个 worktree（`scripts/worktree.cjs open`）→ 子代理按契约走完质量链并 commit → 回合前自己 `git rebase` 适配 → 主 session `--ff-only` 逐票回合（`close`）→ 批次收口测试一次 → 记账。**历史必须线性**（断言④ 是 `-X ours` 静默丢内容的唯一物理防线）。**执行单位可切换**：`scripts/schedule.cjs` 按主循环同一套准入算法模拟两种模式的轮数，谁少用谁——写集重叠多时「一组一车道」（长驻 worktree `R<n>`、`close --keep` 逐票回合、记 `lane:`）会明显更快。判据与三条代价见 stage-3「执行单位」节 |
 | stage-4 | code-review | **gate** | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环**（含真机验证清单收口 rm:pending，全流程唯一真机验证落点）** → squash 一笔 feat commit |
 | stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
 
@@ -66,7 +66,7 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 - **宿主须允许子代理再派子代理**：stage-3 的一票交付契约里，实施子代理自己并行派三个评审子代理、并调用 `comment` skill（后者自身也会 fan-out）。若宿主不给子代理 `Agent` 工具，这套质量链跑不起来。
 - **`.gitignore` 需含两条规则**，`/ai-flow:add` 会写入（写在 git 根，monorepo 子项目锚点同样覆盖）：
   - `.worktrees/` — 0.50.0 之前的隔离工作树位置。**新落点在仓库同级**（`../<repo 名>.ai-flow-worktrees/`），所以这条规则对新 flow 已经不起作用；保留它是为了兼容升级前开出去、还在跑的树，以及开发者手动在那儿建的工作树——落在仓库内又没被 ignore，stage-4 的 `git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，落地是个空的 gitlink 条目）。落点在仓库内时 `worktree.cjs open` 仍会先检查这条。
-  - ⚠️ **为什么把落点搬出仓库**：嵌在仓库内时，worktree 里的每个包都会继承主树所有祖先目录的 `node_modules/@types`，TypeScript 于是把同一个包的**两份**类型身份一起收进编译，worktree 里的 typecheck 必然报一批「同名但不兼容」——与被测改动无关，却会卡住 pre-commit hook、让碰到那些包的票全部提交不了。实测过：落点在 `apps/desktop/.worktrees/` 时车道里 71 个错、主树同一条命令 0 错。
+  - ⚠️ **为什么把落点搬出仓库**：模块解析（node 与 tsc 都逐级向上找 `node_modules`）在 worktree 嵌在主检出内部时会走出 worktree、落到主树的 `node_modules`，同一个包于是有两个物理路径 = 两份互不相关的同名类型，worktree 里的 typecheck 报一批「同名但不兼容」——与被测改动无关，却会卡住 pre-commit hook、让碰到那些包的票全部提交不了。实测（pnpm workspace）：落点在 `apps/desktop/.worktrees/` 时车道里 71 个错、`--listFilesOnly` 能看到两份 `@types/react`；搬到仓库同级后同一条命令 0 错。查证手段：`tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u`，出现两个不同前缀就是越界。
   - `**/.ai-flow/**/state/` — 这条是**并行的前提**，不只是卫生。少了它，`state/active.json` 会被提交进 worktree，于是 worktree 里的子代理解析到的是一份**陈旧的** flow 状态副本，而不是主仓的真状态。
 - **必需 skill**：`optimize-claude-context`（stage-5 沉淀）。
 - **内置命令**：`/simplify`（stage-3 per-ticket 机械型质量修，Claude Code 内置）。correctness 轴不用内置命令，改由子代理携未提交 diff 审 bug（通用、见 `references/per-ticket-review.md`）。

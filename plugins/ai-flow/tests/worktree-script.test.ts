@@ -156,6 +156,75 @@ describe('grill-flow worktree.cjs', () => {
     });
   });
 
+  // schedule.cjs 把「执行单位」从主观判据变成算出来的两个数字。它不碰 git，只读 tickets.md。
+  describe('schedule.cjs（执行单位判定）', () => {
+    function makeFlow(tickets: string, lanes = false): string {
+      const root = mkdtempSync(join(tmpdir(), 'ai-flow-sched-test-'));
+      tmpDirs.push(root);
+      const flowDir = join(root, '.ai-flow', 'grill-flow');
+      mkdirSync(join(flowDir, 'scripts'), { recursive: true });
+      mkdirSync(join(flowDir, 'state'), { recursive: true });
+      mkdirSync(join(root, 'docs', 'grill-flows', 'f1'), { recursive: true });
+      copyFileSync(
+        join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'scripts', 'schedule.cjs'),
+        join(flowDir, 'scripts', 'schedule.cjs')
+      );
+      writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
+      writeFileSync(join(root, 'docs', 'grill-flows', 'f1', 'tickets.md'), tickets);
+      void lanes;
+      return flowDir;
+    }
+    function runSched(flowDir: string): string {
+      const r = spawnSync(process.execPath, [join(flowDir, 'scripts', 'schedule.cjs')], {
+        cwd: flowDir,
+        encoding: 'utf-8',
+      });
+      return (r.stdout ?? '') + (r.stderr ?? '');
+    }
+
+    // 写集全部相交 → 一票一树每轮只能做一票，放开上限也一样。这正是车道模式该赢的形状。
+    it('写集全相交时，放开上限也不降轮数', () => {
+      const t = ['T1', 'T2', 'T3', 'T4']
+        .map((n) => `- [ ] ${n} x\n  - Blocked by: none\n  - Touches: src/shared.ts\n`)
+        .join('');
+      const out = runSched(makeFlow(t));
+      expect(out).toContain('最长依赖链 1 票');
+      expect(out).toMatch(/放开上限到 4（等于不限）→ 仍是 4 轮/);
+      expect(out).toContain('瓶颈是**写集相交**');
+    });
+
+    // 写集互不相交且无依赖 → 一票一树一轮做完，车道模式反而慢，脚本必须推荐一票一树。
+    it('写集互不相交时推荐一票一树', () => {
+      const t = ['T1', 'T2', 'T3', 'T4']
+        .map((n, i) => `- [ ] ${n} x\n  - Blocked by: none\n  - Touches: src/${i}/\n`)
+        .join('');
+      const out = runSched(makeFlow(t));
+      expect(out).toContain('**一票一树**');
+    });
+
+    // 已落盘的 lane: 优先于自动分组——重入时必须算出同一个分组，不能重算。
+    it('用票上已落盘的 lane: 算车道轮数', () => {
+      const t =
+        '- [ ] T1 a\n  - Blocked by: none\n  - Touches: src/a1.ts\n  - lane: R1\n' +
+        '- [ ] T2 b\n  - Blocked by: none\n  - Touches: src/a2.ts\n  - lane: R1\n' +
+        '- [ ] T3 c\n  - Blocked by: none\n  - Touches: src/b1.ts\n  - lane: R2\n';
+      const out = runSched(makeFlow(t));
+      expect(out).toContain('tickets.md 的 lane: 字段');
+      expect(out).toMatch(/R1\(2\)/);
+      // 两条车道里最长的是 2 票 → 2 轮；而这三票写集互不相交，一票一树 1 轮更快，
+      // 所以这一条同时锁住「同一并发预算下对比」这个前提（否则会推荐车道）。
+      expect(out).toMatch(/\*\*一票一树\*\*/);
+    });
+
+    it('Touches: none 的票只能独占一轮', () => {
+      const t =
+        '- [ ] T1 a\n  - Blocked by: none\n  - Touches: none\n' +
+        '- [ ] T2 b\n  - Blocked by: none\n  - Touches: src/b.ts\n';
+      const out = runSched(makeFlow(t));
+      expect(out).toMatch(/放开上限到 2（等于不限）→ 仍是 2 轮/);
+    });
+  });
+
   describe('落点', () => {
     // 落点必须在仓库**外**。嵌在仓库内时 worktree 里的每个包都继承主树所有祖先目录的
     // `node_modules/@types`，TypeScript 因此把同一个包的两份类型身份一起收进编译，

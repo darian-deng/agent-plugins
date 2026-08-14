@@ -343,8 +343,8 @@ try {
 // 的命名）：开发者可能常年挂着与本 flow 无关的工作目录，那种不该让这道门恒失败。
 // abort 那侧用的是同一判据。
 // **两个落点都要查**：0.50.0 起 worktree 开在仓库同级的 `<repo 名>.ai-flow-worktrees/`
-// （嵌在仓库内会让 worktree 里的 TS 收进主树的 `node_modules/@types`，同一个包两份类型
-// 身份、typecheck 必然报错），而升级前开出去的树还在 `<锚点>/.worktrees/` 下。只查一个
+// （嵌在仓库内时模块解析会越界到主检出的 `node_modules`，同一个包两个物理路径、
+// worktree 里 typecheck 必然报错），而升级前开出去的树还在 `<锚点>/.worktrees/` 下。只查一个
 // 就会漏掉另一个，而漏掉的方向是 fail-open——残留的工作树带着未合回来的改动，门却放行。
 const wtPrefixes = [join(projectRoot, '.worktrees') + '/' + flowId + '-'];
 try {

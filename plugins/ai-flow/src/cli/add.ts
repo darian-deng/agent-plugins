@@ -245,9 +245,9 @@ export function ensureGitignore(target: string): void {
   const giPath = join(root, '.gitignore');
   // `.worktrees/` was where a flow used to put the isolated checkout of a ticket it
   // runs in parallel. Those now live BESIDE the repo (`<repo>.ai-flow-worktrees/`),
-  // because a worktree nested in the repo inherits the main tree's ancestor
-  // `node_modules/@types` and TypeScript then compiles two identities of the same
-  // package — typecheck inside the worktree fails for reasons unrelated to the work.
+  // because module resolution escapes a nested worktree into the main checkout's
+  // `node_modules`, giving the same package two physical paths — TypeScript sees two
+  // unrelated types and typecheck inside the worktree fails for unrelated reasons.
   // The rule stays for worktrees opened before that change and for ones a developer
   // parks there by hand: unignored, the whole directory shows up as untracked and the
   // squash at the end of a flow (`git add -A`) swallows it as an embedded repository

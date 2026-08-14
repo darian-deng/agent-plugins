@@ -248,12 +248,13 @@ async function anchorFlow(
  * Inside a linked worktree, the same relative location in the MAIN checkout.
  *
  * Needed because walking further up only reaches the real anchor while the
- * worktree sits INSIDE the main checkout. It must not have to: a worktree nested
- * in the repo inherits every ancestor `node_modules/@types` of the main tree, so
- * TypeScript pulls a second identity of packages that are also installed in the
- * worktree and typecheck fails there for reasons unrelated to the change under
- * test. Once the worktree lives outside the repo, "keep walking" climbs to the
- * filesystem root and finds nothing — fail-OPEN for every subagent working in
+ * worktree sits INSIDE the main checkout. It must not have to: module resolution
+ * (both node's and tsc's) walks up looking for `node_modules`, so from inside a
+ * nested worktree it escapes into the MAIN checkout's `node_modules` — the same
+ * package then exists at two physical paths, which TypeScript treats as two
+ * unrelated types, and typecheck there fails for reasons unrelated to the change
+ * under test. Once the worktree lives outside the repo, "keep walking" climbs to
+ * the filesystem root and finds nothing — fail-OPEN for every subagent working in
  * one (handlePreTool bails before any guard runs).
  *
  * git already knows where the main checkout is: for a linked worktree

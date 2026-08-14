@@ -38,10 +38,10 @@ function flowWorktrees(repoRoot: string, flowId: string): { path: string; branch
   // prefix broke the promise.
   //
   // BOTH locations are checked. The script now creates worktrees as a SIBLING of
-  // the repo (`<repo>.ai-flow-worktrees/`), because one nested inside the repo
-  // inherits the main tree's ancestor `node_modules/@types` and TypeScript then
-  // sees two identities of the same package — typecheck inside the worktree fails
-  // for reasons unrelated to the work. Worktrees opened before that change still
+  // the repo (`<repo>.ai-flow-worktrees/`), because module resolution escapes a
+  // nested worktree into the main checkout's `node_modules`, giving the same
+  // package two physical paths — typecheck inside the worktree then fails for
+  // reasons unrelated to the work. Worktrees opened before that change still
   // live under `<repoRoot>/.worktrees/`. Missing either one fails OPEN in the
   // direction this guard exists to cover: the snapshot below runs `git add -A` at
   // repoRoot only, so work in an unlisted worktree is dropped silently.

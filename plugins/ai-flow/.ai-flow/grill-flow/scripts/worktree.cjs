@@ -20,12 +20,17 @@
 //   - 分支名带 flow_id：票号跨 flow 复用，`wt/T1` 会撞上上一个 flow 的残留分支
 //     （`fatal: a branch named 'wt/T1' already exists`）。
 //   - **位置必须在仓库之外**（这条是 0.50.0 改的，之前放在 `<锚点>/.worktrees/`）：
-//     嵌在仓库内时，worktree 里的每个包都会继承主树所有祖先目录的 `node_modules/@types`，
-//     于是 TypeScript 把同一个包的**两份**类型身份同时收进编译（worktree 自己装的那份
-//     + 主树那份），worktree 里的 typecheck 必然报一堆「同名但不兼容」——与被测改动
-//     毫无关系，却会卡住 pre-commit hook、让每张碰到那些包的票都提交不了。实测过：
-//     落点在 `apps/desktop/.worktrees/` 时，车道里的 web4 typecheck 报 71 个错，
-//     而主树同一条命令 0 错。这不是环境问题，是选址的必然后果。
+//     模块解析（node 与 tsc 都是从当前文件逐级向上找 `node_modules`）在 worktree 嵌在
+//     主检出内部时会**走出 worktree**、落到主检出的 `node_modules`，于是同一个包出现两个
+//     物理路径 —— 对 TypeScript 那就是两份互不相关的同名类型，报一堆「同名但不兼容」，
+//     与被测改动毫无关系，却会卡住 pre-commit hook、让碰到那些包的票全都提交不了。
+//     实测（pnpm workspace，落点在 `apps/desktop/.worktrees/`）：车道里 web4 typecheck
+//     71 个错、`tsc --listFilesOnly` 能看到主树与车道**两份** `@types/react`；把落点搬到
+//     仓库同级后，同一条命令 0 错、只剩车道自己那一份。这不是环境问题，是选址的必然后果。
+//     ⚠️ 别把它当成「TS 收集祖先 node_modules/@types」那种解释——那条路径（typeRoots
+//     自动引入）单独复现不出这个错，真正越界的是**import 解析**。查证手段：在 worktree 里
+//     `tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u`，出现两个不同
+//     前缀的路径就是越界了。
 //     原先放仓库内的理由（引擎 walk-up 靠继续上溯才能从 worktree 走到主仓锚点）已经
 //     不成立：引擎现在改成问 git 要主检出的对应目录（`mainCheckoutCounterpart`），
 //     与 worktree 放在哪无关。放仓库外顺带不再需要 gitignore（`git add -A` 碰不到它）。
@@ -176,9 +181,9 @@ if (cmd === 'open') {
         + '结果是一个空的 gitlink 条目、内容一个都没进去）。');
     }
   }
-  // 选址哨兵：落点的任一祖先目录有 node_modules，worktree 里的包就会继承它的
-  // `node_modules/@types`，TypeScript 于是收进同一个包的两份类型身份 —— 症状是一堆
-  // 「同名但不兼容」，与被测改动无关。落点选在仓库同级正是为了避开这个，但父目录本身
+  // 选址哨兵：模块解析会从 worktree 里逐级向上找 `node_modules`，所以落点**任一祖先**
+  // 目录有 node_modules，那一份就会被解析进来 —— 同一个包两个物理路径，TypeScript 报
+  // 「同名但不兼容」（实测形态见文件头）。落点选在仓库同级正是为了避开这个，但父目录本身
   // 若也是个 node 项目，问题会以同样的形态回来。只警告不阻断：它取决于开发者的目录布局。
   const polluted = [];
   for (let d = dirname(wtPath); ; d = dirname(d)) {
@@ -187,8 +192,10 @@ if (cmd === 'open') {
   }
   if (polluted.length > 0) {
     say(`⚠️  落点的祖先目录里有 node_modules：${polluted.join(' ')}\n`
-      + `    worktree 里的 typecheck 可能报出一批「同名但不兼容」的类型错（同一个包被收进两份身份），\n`
-      + `    与被测改动无关。把那些 node_modules 移走，或把仓库挪到一个干净的父目录下。`);
+      + `    模块解析会向上走到它们，于是同一个包出现两个物理路径，worktree 里的 typecheck 会报\n`
+      + `    一批「同名但不兼容」，与被测改动无关。查证：在 worktree 里跑\n`
+      + `    \`tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u\`，两个前缀就是越界。\n`
+      + `    处置：把那些 node_modules 移走，或把仓库挪到一个干净的父目录下。`);
   }
   if (existsSync(wtPath)) die(`${wtPath} 已存在。若是上一轮残留：先 close，或 \`git worktree remove ${wtPath}\`。`);
 
