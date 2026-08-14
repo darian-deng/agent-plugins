@@ -126,7 +126,7 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 
 **截断自保护**（无法静态预估的大 task 的运行时兜底；可预估的已由 Stage 3 `output_size: large` 拆分避免）：子代理近上限、或发现 task 比预期大时**别硬撑到被截断**——先 `git commit` 已完成部分（message 标 `[partial]`）+ 在 task-reports.md 写「剩余工作」清单（差哪些、做到哪、从哪继续）+ 报 `完成但有顾虑` / `受阻`。
 
-主 session 续跑：**读清单，不做 git 考古**；续跑 prompt = 原 task decisions/verify + 剩余清单 + 「前半已 commit 在 `<sha>`，接着做」。续跑子代理完成后**不新建 commit**，用 `git add -A && git commit --amend` 折回那个 `[partial]` commit（串行下它必是 HEAD）并去掉 `[partial]` 标记——保住「一 task 一 commit」不变量（下游 `git show <sha>`、Stage 5 diff 全依赖它），最终 SHA 记进 task report 的 `**Commit**`。
+主 session 续跑：**读清单，不做 git 考古**；续跑 prompt = 原 task decisions/verify + 剩余清单 + 「前半已 commit 在 `<sha>`，接着做」。续跑子代理完成后**不新建 commit**，用 `git add -A && git commit --amend` 折回那个 `[partial]` commit（串行下它必是 HEAD）并去掉 `[partial]` 标记——`-A` 之前先照 helper.md 铁律「`git add -A` 前先核范围」核一遍 `git status --porcelain`，别把主树上与本 task 无关的改动一起 amend 进这笔 commit（下游 `git show <sha>` 与 Stage 5 的 diff 都以它为准）——保住「一 task 一 commit」不变量（下游 `git show <sha>`、Stage 5 diff 全依赖它），最终 SHA 记进 task report 的 `**Commit**`。
 
 **耦合簇执行（单元含多个 task 时）**：
 
