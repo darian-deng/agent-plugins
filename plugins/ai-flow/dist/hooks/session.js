@@ -24,11 +24,12 @@ import {
   openSync,
   closeSync,
   unlinkSync as unlinkSync2,
-  statSync
+  statSync,
+  realpathSync
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join2, dirname, resolve } from "path";
+import { join as join2, dirname, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -181,17 +182,52 @@ function isInsideLinkedWorktree(dir) {
     return false;
   }
 }
+function realPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+async function anchorFlow(dir) {
+  const aiFlowDir = join2(dir, ".ai-flow");
+  if (!existsSync2(aiFlowDir)) return null;
+  for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const state = await readActiveState(dir, entry.name);
+    if (state) return { flowName: entry.name, state, repoRoot: dir };
+  }
+  return null;
+}
+function mainCheckoutCounterpart(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [commonDir, wtRoot] = out.trim().split("\n");
+    if (!commonDir || !wtRoot) return null;
+    const mainRoot = dirname(resolve(commonDir));
+    const rel = relative(resolve(wtRoot), realPath(dir));
+    if (rel.startsWith("..")) return null;
+    const counterpart = rel ? join2(mainRoot, rel) : mainRoot;
+    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+  } catch {
+    return null;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join2(dir, ".ai-flow");
-    if (existsSync2(aiFlowDir)) {
-      for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const state = await readActiveState(dir, entry.name);
-        if (state) return { flowName: entry.name, state, repoRoot: dir };
-      }
+    if (existsSync2(join2(dir, ".ai-flow"))) {
+      const here = await anchorFlow(dir);
+      if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
+      const counterpart = mainCheckoutCounterpart(dir);
+      if (counterpart && existsSync2(join2(counterpart, ".ai-flow"))) {
+        return await anchorFlow(counterpart);
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) return null;

@@ -4200,11 +4200,12 @@ import {
   openSync,
   closeSync,
   unlinkSync as unlinkSync2,
-  statSync
+  statSync,
+  realpathSync
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join3, dirname, resolve } from "path";
+import { join as join3, dirname, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync as existsSync2, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
@@ -4336,17 +4337,52 @@ function isInsideLinkedWorktree(dir) {
     return false;
   }
 }
+function realPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+async function anchorFlow(dir) {
+  const aiFlowDir = join3(dir, ".ai-flow");
+  if (!existsSync3(aiFlowDir)) return null;
+  for (const entry of readdirSync3(aiFlowDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const state = await readActiveState(dir, entry.name);
+    if (state) return { flowName: entry.name, state, repoRoot: dir };
+  }
+  return null;
+}
+function mainCheckoutCounterpart(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [commonDir, wtRoot] = out.trim().split("\n");
+    if (!commonDir || !wtRoot) return null;
+    const mainRoot = dirname(resolve(commonDir));
+    const rel = relative(resolve(wtRoot), realPath(dir));
+    if (rel.startsWith("..")) return null;
+    const counterpart = rel ? join3(mainRoot, rel) : mainRoot;
+    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+  } catch {
+    return null;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join3(dir, ".ai-flow");
-    if (existsSync3(aiFlowDir)) {
-      for (const entry of readdirSync3(aiFlowDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const state = await readActiveState(dir, entry.name);
-        if (state) return { flowName: entry.name, state, repoRoot: dir };
-      }
+    if (existsSync3(join3(dir, ".ai-flow"))) {
+      const here = await anchorFlow(dir);
+      if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
+      const counterpart = mainCheckoutCounterpart(dir);
+      if (counterpart && existsSync3(join3(counterpart, ".ai-flow"))) {
+        return await anchorFlow(counterpart);
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
@@ -4737,8 +4773,8 @@ gate-pending \u671F\u95F4\u4EA7\u7269\u88AB\u6539\u52A8\u5230\u4E0D\u5408\u89C4\
 
 // src/lib/commands/abort.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, realpathSync } from "fs";
-import { join as join10 } from "path";
+import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, realpathSync as realpathSync2 } from "fs";
+import { join as join10, dirname as dirname2, basename } from "path";
 function git(args, cwd) {
   return execFileSync2("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
 }
@@ -4751,16 +4787,19 @@ function flowWorktrees(repoRoot, flowId) {
   }
   let base = repoRoot;
   try {
-    base = realpathSync(repoRoot);
+    base = realpathSync2(repoRoot);
   } catch {
   }
-  const prefix = join10(base, ".worktrees") + "/" + flowId + "-";
+  const prefixes = [
+    join10(base, ".worktrees") + "/" + flowId + "-",
+    join10(dirname2(base), basename(base) + ".ai-flow-worktrees") + "/" + flowId + "-"
+  ];
   const found = [];
   let cur = null;
   for (const line of out.split("\n")) {
     if (line.startsWith("worktree ")) {
       const p = line.slice("worktree ".length).trim();
-      cur = p.startsWith(prefix) ? { path: p, branch: "(detached)" } : null;
+      cur = prefixes.some((pre) => p.startsWith(pre)) ? { path: p, branch: "(detached)" } : null;
       if (cur) found.push(cur);
     } else if (cur && line.startsWith("branch ")) {
       cur.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");

@@ -9,7 +9,7 @@ var __export = (target, all) => {
 import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
-import { join as join4, relative, resolve as resolve2 } from "path";
+import { join as join4, relative as relative2, resolve as resolve2 } from "path";
 
 // src/lib/state.ts
 import {
@@ -23,10 +23,11 @@ import {
   openSync,
   closeSync,
   unlinkSync as unlinkSync2,
-  statSync
+  statSync,
+  realpathSync
 } from "fs";
 import { execFileSync } from "child_process";
-import { join as join2, dirname, resolve } from "path";
+import { join as join2, dirname, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -83,17 +84,52 @@ function isInsideLinkedWorktree(dir) {
     return false;
   }
 }
+function realPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+async function anchorFlow(dir) {
+  const aiFlowDir = join2(dir, ".ai-flow");
+  if (!existsSync2(aiFlowDir)) return null;
+  for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const state = await readActiveState(dir, entry.name);
+    if (state) return { flowName: entry.name, state, repoRoot: dir };
+  }
+  return null;
+}
+function mainCheckoutCounterpart(dir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const [commonDir, wtRoot] = out.trim().split("\n");
+    if (!commonDir || !wtRoot) return null;
+    const mainRoot = dirname(resolve(commonDir));
+    const rel = relative(resolve(wtRoot), realPath(dir));
+    if (rel.startsWith("..")) return null;
+    const counterpart = rel ? join2(mainRoot, rel) : mainRoot;
+    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+  } catch {
+    return null;
+  }
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    const aiFlowDir = join2(dir, ".ai-flow");
-    if (existsSync2(aiFlowDir)) {
-      for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const state = await readActiveState(dir, entry.name);
-        if (state) return { flowName: entry.name, state, repoRoot: dir };
-      }
+    if (existsSync2(join2(dir, ".ai-flow"))) {
+      const here = await anchorFlow(dir);
+      if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
+      const counterpart = mainCheckoutCounterpart(dir);
+      if (counterpart && existsSync2(join2(counterpart, ".ai-flow"))) {
+        return await anchorFlow(counterpart);
+      }
     }
     const parent = dirname(dir);
     if (parent === dir) return null;
@@ -4309,6 +4345,15 @@ function resolvePath(repoRoot, filePath) {
   if (filePath.startsWith("/")) return filePath;
   return join4(repoRoot, filePath);
 }
+function isFlowScriptExecution(segment, scriptFragments, stateFragments) {
+  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(segment);
+  if (!m) return false;
+  const script = m[2] ?? m[3] ?? m[4] ?? "";
+  if (!/\.(cjs|mjs|js)$/.test(script)) return false;
+  if (!scriptFragments.some((f) => script.includes(f))) return false;
+  const rest = (m[1] ?? "") + (m[5] ?? "");
+  return ![...scriptFragments, ...stateFragments].some((f) => rest.includes(f));
+}
 function controlPlaneRole(repoRoot, flowName, absPath) {
   const norm = absPath.replace(/\\/g, "/");
   const marker = `/.ai-flow/${flowName}/`;
@@ -4316,12 +4361,13 @@ function controlPlaneRole(repoRoot, flowName, absPath) {
   if (idx === -1) return null;
   const anchor = norm.slice(0, idx) || "/";
   const rest = norm.slice(idx + marker.length);
-  if (resolve2(anchor) !== resolve2(repoRoot) && !isInsideLinkedWorktree(anchor)) return null;
+  const sameAnchor = realPath(anchor) === realPath(repoRoot);
+  if (!sameAnchor && !isInsideLinkedWorktree(anchor)) return null;
   if (rest === "state/active.json") return "active.json";
   if (rest === "config.json") return "config.json";
   if (rest.startsWith("stages/")) return "stages";
   if (rest.startsWith("scripts/")) return "scripts";
-  if (rest === "state/signal" && resolve2(anchor) !== resolve2(repoRoot)) return "signal";
+  if (rest === "state/signal" && !sameAnchor) return "signal";
   return null;
 }
 async function handlePreTool(input2) {
@@ -4350,17 +4396,21 @@ async function handlePreTool(input2) {
     if (tool_name === "Bash") {
       const command = String(tool_input["command"] ?? "");
       const flowRel = join4(".ai-flow", activeFlowName);
-      const cpFragments = [
+      const stateFragments = [
         signalPath(repoRoot, activeFlowName),
         join4(repoRoot, flowRel, "state", "active.json"),
-        join4(repoRoot, flowRel, "scripts"),
         join4(flowRel, "state", "signal"),
-        join4(flowRel, "state", "active.json"),
+        join4(flowRel, "state", "active.json")
+      ];
+      const scriptFragments = [
+        join4(repoRoot, flowRel, "scripts"),
         join4(flowRel, "scripts")
       ];
-      if (cpFragments.some((f) => command.includes(f))) {
+      const cpFragments = [...stateFragments, ...scriptFragments];
+      const offending = command.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter((seg) => cpFragments.some((f) => seg.includes(f))).filter((seg) => !isFlowScriptExecution(seg, scriptFragments, stateFragments));
+      if (offending.length > 0) {
         return deny(
-          "Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually."
+          "Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually. RUNNING a flow script is allowed, but only as a whole command on its own: `node <flow>/scripts/<name>.cjs [args]`."
         );
       }
       return null;
@@ -4445,7 +4495,7 @@ signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${si
 \u82E5\u4F60\u662F\u5728 worktree \u5185\u6267\u884C\u67D0\u4E00\u7968\u7684\u5B50\u4EE3\u7406\uFF1A\u4EA4\u4ED8\u65B9\u5F0F\u662F\u56DE\u62A5\u7ED9\u7F16\u6392\u5668\uFF0C\u4E0D\u8981\u5199 signal\u3002`
         );
     }
-    const rel = relative(repoRoot, absPath);
+    const rel = relative2(repoRoot, absPath);
     const stageCfg = getStageConfig(config, state.current_stage);
     if (stageCfg.write_scope === "docs_only") {
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
