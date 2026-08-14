@@ -12,6 +12,22 @@
 - **单一读者原则**：`stages/stage-3.md` 是**调度页**（主 session 读：算批次、开收 worktree、回合、记账、拍板）；`references/per-ticket-review.md` 是**一票交付契约**（子代理读：质量链、自适配、机器门格式）。两者不互相复述——细节复述必漂移。
 - **质量把控齐**：per-ticket simplify + Standards/Spec/correctness 三轴评审子代理并行 + 注释清理 + 客观地板（假绿检测/枚举负空间/回归）；stage-2 对抗性方案审查；收尾组装双轴 + 安全专项（对抗立场 + 阻塞项独立复核）；集中沉淀。
 
+## 两种并行形态（选错会白付一整轮成本）
+
+worktree 并行有两种截然不同的用法，本 flow **都支持**，判据是「拆出来的几块之间要不要共享决策」：
+
+**形态 A · 一个 flow，一个主 session，N 条车道 / N 棵票树**（stage-3 写的就是这个）。主 session 当调度器，实施与评审都在子代理里跑，worktree 由 `scripts/worktree.cjs` 开收。
+- 适用：几块**共享同一份 spec 与决策台账**，有跨块依赖或会撞同一批文件。
+- 拿到的：`Blocked by` 全局有序、机器门逐票核对（commit ↔ 票 ↔ 写集）、决策只在一处拍、/clear 可恢复。
+- 代价：**主 session 是并发瓶颈**——它要读每一份回报、做每一次裁决，并行度再高也过不了这个漏斗；子代理是一次性的（返回即销毁），所以跨票长驻的资源（车道）只能由主 session 持有。
+
+**形态 B · 几个独立 flow，各自一个顶层 session，各占一个 worktree**（业界主流的「多终端并行」，本 flow 同样跑得起来）。在每个 worktree 里各跑一次 `grill-flow start <那一块的需求>`，各走完整 5 stage，最后把各自 stage-4 那笔 squash commit 合回来。
+- 机制依据（有测试锁着）：`state/` 被 gitignore，所以每个 worktree 里的 `active.json` 只可能是它自己起的那个 flow；引擎解析 flow 时**先看当前锚点自己有没有 active flow**，有就用它，只有没有时才映射回主检出。两种形态因此不会互相抢。
+- 拿到的：**没有单一调度瓶颈**——N 个顶层 session 各有完整 context 预算、各自还能派子代理，人在环的粒度也更细（每块自己拍板）。
+- 代价：每块都要重走 stage-1/2（grilling + 方案审查 + 切票）；**跨块的决策一致性没有任何机器保证**（N 份 spec 各自演化）；合并冲突要人解；要同时盯 N 个终端。
+
+**怎么判**：几块之间有跨块 `Blocked by`、共用一份术语表/契约、或会改同一批文件 → **A**。几块各自能独立说清需求、独立验收、合并只是文件层面的事 → **B**。拿不准就按 A：它的机器保护更强，而 B 的每一处代价都要人补。
+
 ## 命令速查
 
 ```sh
@@ -63,7 +79,11 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 
 - **系统**：Node.js ≥ 18、**git ≥ 2.31**、claude CLI、mermaid-cli（`mmdc`，stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
   - git 版本下限是 stage-3 并行带来的：引擎判断「某个目录是否位于隔离工作树内」用的是 `git rev-parse --path-format=absolute`（2.31，2021-03 起）。更低的版本上该判断会安全降级为「否」，后果是 worktree 内的写入不再受控制面保护、signal 拦截与 context 统计约束——**并行路径在那种环境下不能用**（串行路径不受影响）。用 `git --version` 确认。
-- **宿主须允许子代理再派子代理**：stage-3 的一票交付契约里，实施子代理自己并行派三个评审子代理、并调用 `comment` skill（后者自身也会 fan-out）。若宿主不给子代理 `Agent` 工具，这套质量链跑不起来。
+- **宿主须允许子代理再派子代理**：stage-3 的一票交付契约里，实施子代理自己并行派三个评审子代理、并调用 `comment` skill（后者自身也会 fan-out）。若宿主不给子代理 `Agent` 工具，这套质量链跑不起来。以下四条是这条依赖的**真实边界**，派发前按它们兜底：
+  - **嵌套本身是宿主能力，不是必然可用**。Claude Code 在 2026-06 之前明确禁止子代理派子代理，之后开放并给了深度上限（公开说法在 3~5 之间反复过）。所以 dispatch prompt 里**必须带一条降级路径**：派不出嵌套子代理时，就自己按三个轴各审一遍、并在回报里说明是自审。
+  - **并发有上限**（默认 20 上下，可由 `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 覆盖）。每票 = 1 实施 + 3 评审 + `comment` 自己的 fan-out，所以**能同时跑的票数受这个上限压制**，往往比 `schedule.cjs` 算出的最优并发更小。
+  - **重复角色的 spawn 会被宿主的分类器直接拦掉**（比对子代理的角色和父代理正在做的事）。三评审之所以派得出去，是因为 Standards / Spec / correctness 三个轴的职责明确不同；把它们写成三个措辞相近的「审一下代码」就会被判重复。
+  - **嵌套子代理拿不到 `AskUserQuestion`**。契约里「人在环只在主 session 那侧」这条因此不只是分工，而是宿主约束——子代理遇到要拍板的事只能回报，不能自己问。
 - **`.gitignore` 需含两条规则**，`/ai-flow:add` 会写入（写在 git 根，monorepo 子项目锚点同样覆盖）：
   - `.worktrees/` — 0.50.0 之前的隔离工作树位置。**新落点在仓库同级**（`../<repo 名>.ai-flow-worktrees/`），所以这条规则对新 flow 已经不起作用；保留它是为了兼容升级前开出去、还在跑的树，以及开发者手动在那儿建的工作树——落在仓库内又没被 ignore，stage-4 的 `git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，落地是个空的 gitlink 条目）。落点在仓库内时 `worktree.cjs open` 仍会先检查这条。
   - ⚠️ **为什么把落点搬出仓库**：模块解析（node 与 tsc 都逐级向上找 `node_modules`）在 worktree 嵌在主检出内部时会走出 worktree、落到主树的 `node_modules`，同一个包于是有两个物理路径 = 两份互不相关的同名类型，worktree 里的 typecheck 报一批「同名但不兼容」——与被测改动无关，却会卡住 pre-commit hook、让碰到那些包的票全部提交不了。实测（pnpm workspace）：落点在 `apps/desktop/.worktrees/` 时车道里 71 个错、`--listFilesOnly` 能看到两份 `@types/react`；搬到仓库同级后同一条命令 0 错。查证手段：`tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u`，出现两个不同前缀就是越界。

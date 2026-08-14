@@ -318,6 +318,36 @@ describe('hasActiveFlow', () => {
       execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
     });
 
+    // worktree 里**自己**起了一个 flow 时，必须解析到它自己那份，不能被「映射回主检出」
+    // 抢走。这是另一种并行形态的前提：把一个大需求拆成几块几乎无关联的需求，每块在自己的
+    // worktree 里跑一个独立 flow（各有顶层 session），而不是一个 flow 分几条车道。
+    // `state/` 被 gitignore，所以 worktree 里的 active.json 天然是它自己的、不会来自主检出。
+    it('worktree 里有自己的 active flow → 用它自己那份，不映射回主检出', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);                       // 主检出：parent-flow 在跑
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      const outside = join(makeTmp(), 'lanes', 'own-flow');
+      execFileSync('git', ['worktree', 'add', '-q', outside, '-b', 'wt/own'], { cwd: gitRoot });
+      // `state/` 被 gitignore，所以 checkout 根本不会带它过来——这里要自己建，而这正是
+      // 「worktree 里那份 active.json 只可能是它自己起的」的证明。
+      expect(existsSync(join(outside, '.ai-flow', 'parent-flow', 'state'))).toBe(false);
+      mkdirSync(join(outside, '.ai-flow', 'parent-flow', 'state'), { recursive: true });
+      writeFileSync(
+        join(outside, '.ai-flow', 'parent-flow', 'state', 'active.json'),
+        JSON.stringify(makeActiveState({ flow_name: 'parent-flow', flow_id: 'own-slice' }))
+      );
+
+      const result = await hasActiveFlow(outside);
+      expect(result).not.toBeNull();
+      expect(result!.state.flow_id).toBe('own-slice');                    // 不是主检出那份
+      expect(realpathSync(result!.repoRoot)).toBe(realpathSync(outside)); // 锚点就是它自己
+      execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
+    });
+
     // 同一条路径的 fail-closed 边界：worktree 外、主仓那侧锚点是**空闲**的（没有
     // active.json）时必须仍然返回 null，别因为「在 worktree 里」就放宽成解析父项目的 flow。
     it('worktree 落在仓库外、主仓对应锚点空闲 → null', async () => {
