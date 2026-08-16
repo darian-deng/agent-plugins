@@ -49,6 +49,7 @@
 ## 完成条件
 
 - 全量测试全过；双轴 + 安全已跑、阻塞项已修。
+- **tickets.md 末尾的「已知会撞的文件」清单已逐行点名**，每行在 review.md 有独立结论（清单不存在 → 明写「无已知碰撞面」）。这是车道模式下机器门⑦ 失效之后唯一的替代保护，做法见 `assembly-review.md`。
 - **环节 C 走完**：开发者确认无更多问题、人审改动全过回归、最终 CR 干净（或条件跳过）；**tickets.md `## 待真机验证` 无 `rm:pending` 残留（全 `rm:done` 或开发者明确豁免）**。
 - **全部改动已 squash 成单个 `feat` commit**（body 带 `flow-squash: <flow_id>` 锚点），working tree 干净。
 - **stage-3 留下的票分支已清理**（`git branch --list "wt/<flow_id>-*"` 为空）——它们在 stage-3 被刻意保留供重入判相位，squash 之后再无用途，不删会跨 flow 累积。

@@ -26,8 +26,8 @@ function deny(reason: string, systemMessage?: string): PreToolResult {
   return { permissionDecision: 'deny', permissionDecisionReason: reason, ...(systemMessage && { systemMessage }) };
 }
 
-function allow(): PreToolResult {
-  return { permissionDecision: 'allow' };
+function allow(systemMessage?: string): PreToolResult {
+  return { permissionDecision: 'allow', ...(systemMessage && { systemMessage }) };
 }
 
 
@@ -52,7 +52,39 @@ function isFlowScriptExecution(
   scriptFragments: string[],
   stateFragments: string[]
 ): boolean {
-  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(segment);
+  // Nothing that names a state fragment (signal / active.json) ever qualifies — not
+  // as an invocation, not as an assignment. That rule predates this function and is
+  // what keeps `node <script> > <flow>/state/signal` denied; the shapes admitted
+  // below must not become a way around it.
+  if (stateFragments.some((f) => segment.includes(f))) return false;
+
+  // Shell keywords that legitimately precede a command inside a compound statement,
+  // plus any leading `VAR=value` assignments. Without stripping these, the exemption
+  // only fired for a bare one-liner and the flow's OWN documented usage got refused
+  // three times in a single run: `for L in R1 R2 R3; do node …/worktree.cjs sync …;
+  // done` (the segment starts with `do `) and `S=…/worktree.cjs; node $S sync …`
+  // (the assignment segment names a script path but invokes nothing). The refusal
+  // message talks about reads and writes, which is not what happened — so the agent
+  // rewrites the command instead of the shape, and hits it again.
+  //
+  // ⚠️ The assignment VALUE must not contain a command substitution. "An assignment
+  // executes nothing" is false in shell: `X="$(cp evil.cjs <flow>/scripts/gate.cjs)"`
+  // runs the `cp`, and so does the leading-assignment form `A="$(rm -rf …)" node …`.
+  // Admitting those shapes without this restriction re-opened Bash writes to the gate
+  // scripts and stage prompts — i.e. it made this guard weaker than before the
+  // widening. `$(`, backticks and process substitution `<(`/`>(` are therefore all
+  // excluded from the value; a plain literal path (the shape the flow actually uses)
+  // still matches.
+  const VALUE = String.raw`(?:"(?:[^"\`$]|\$(?![({]))*"|'[^']*'|(?:[^\s;|&\`"']|\$(?![({]))*)`;
+  const ASSIGNMENTS = new RegExp(String.raw`^(?:[A-Za-z_][A-Za-z0-9_]*=${VALUE}\s*)+$`);
+  const LEADING_ASSIGNMENTS = new RegExp(String.raw`^(?:[A-Za-z_][A-Za-z0-9_]*=${VALUE}\s+)+`);
+  const trimmed = segment.trim();
+  // A segment that is ONLY substitution-free assignments executes nothing.
+  if (ASSIGNMENTS.test(trimmed)) return true;
+  const bare = trimmed
+    .replace(/^(?:do|then|else)\s+/, '')
+    .replace(LEADING_ASSIGNMENTS, '');
+  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(bare);
   if (!m) return false;
   const script = m[2] ?? m[3] ?? m[4] ?? '';
   if (!/\.(cjs|mjs|js)$/.test(script)) return false;
@@ -155,12 +187,45 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   const config = await loadFlowConfig(repoRoot, activeFlowName);
 
   // ─── Context block enforcement ────────────────────────────────────────────────
+  //
+  // The block exists to stop the session PRODUCING more work on a degraded context.
+  // It must not also block the safe exit. Denying every write made the prescribed
+  // remedy unsafe: the flow's whole design is "everything a later session needs is on
+  // disk", and the act that puts it there — writing the handoff / bookkeeping into the
+  // flow's own docs — is a write. Observed: a session crossed the threshold with a
+  // subagent still in flight, could no longer record anything, and `/clear` then lost
+  // that subagent's report (its findings, its real-machine items, its security
+  // self-check) — none of which is recoverable from the commit it left behind.
+  //
+  // So: still refuse writes to the codebase, but let the flow's own docs through, and
+  // say plainly what /clear does and does not cost. The claim it used to make —
+  // "progress won't be lost" — is false while a subagent is running.
   if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
-    const blockedPct = state.context_warning.warned_at_pct;
-    const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : '';
-    return deny(
-      `Context blocked${pctInfo}. Run /clear to continue — state is persisted and progress won't be lost.`
-    );
+    const stageCfgForBlock = getStageConfig(config, state.current_stage);
+    const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
+    // Resolve the target here rather than reusing the one computed further down —
+    // this check has to run before the write-tool path handling begins.
+    const blockAbs = resolvePath(repoRoot, String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? ''));
+    const relForBlock = relative(repoRoot, blockAbs);
+    const isFlowDocs = docsPaths.some((p) => {
+      const norm = p.endsWith('/') ? p : p + '/';
+      return relForBlock.startsWith(norm) || blockAbs.startsWith(join(repoRoot, norm));
+    });
+    if (!isFlowDocs) {
+      const blockedPct = state.context_warning.warned_at_pct;
+      const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : '';
+      return deny(
+        `Context blocked${pctInfo}. Writes to the codebase are refused; writes to this flow's own docs `
+        + `(${docsPaths.join(', ') || 'none configured'}) are still allowed so you can land a handoff.\n\n`
+        + `Before /clear: write whatever a later session cannot reconstruct into those docs — which lane is `
+        + `where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any `
+        + `decision you have made but not recorded.\n`
+        + `What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report `
+        + `does not** — its findings, real-machine items and security self-check cannot be reconstructed from `
+        + `the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree `
+        + `state into the docs first.`
+      );
+    }
   }
 
   // ─── Bash interception ────────────────────────────────────────────────────────
@@ -186,7 +251,22 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       join(repoRoot, flowRel, 'scripts'),
       join(flowRel, 'scripts'),
     ];
-    const cpFragments = [...stateFragments, ...scriptFragments];
+    // `stages/` and `config.json` are control-plane too — `controlPlaneRole` has
+    // recognised both since the Write path was written, and Write/Edit refuse them.
+    // Bash did not, so the same change went through unopposed via `cp`, `sed -i`,
+    // or `git checkout <ref> -- <flow>/stages/`. "Stage prompts and machine gates
+    // are read-only while a flow runs" held on exactly one of the two routes.
+    // They join the `scripts` group so they share its execution carve-out, which
+    // costs nothing: `isFlowScriptExecution` requires a `.cjs`/`.mjs`/`.js` suffix,
+    // and neither of these can ever match it.
+    const docFragments = [
+      join(repoRoot, flowRel, 'stages'),
+      join(flowRel, 'stages'),
+      join(repoRoot, flowRel, 'config.json'),
+      join(flowRel, 'config.json'),
+    ];
+    const exemptFragments = [...scriptFragments, ...docFragments];
+    const cpFragments = [...stateFragments, ...exemptFragments];
     // RUNNING a flow's own helper script must be allowed: stage prompts hand out
     // commands like `node {{flow_root}}/scripts/worktree.cjs open <flow_id> <name>`
     // (one per ticket at least), and a fragment match refuses the very command the
@@ -201,12 +281,12 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       .split(/&&|\|\||[;|\n]/)
       .map((s) => s.trim())
       .filter((seg) => cpFragments.some((f) => seg.includes(f)))
-      .filter((seg) => !isFlowScriptExecution(seg, scriptFragments, stateFragments));
+      .filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
     if (offending.length > 0) {
       return deny(
-        'Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked — matching is by path fragment, so this covers reads too. ' +
-        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually. ' +
-        'RUNNING a flow script is allowed, but only as a whole command on its own: `node <flow>/scripts/<name>.cjs [args]`.'
+        'Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked — matching is by path fragment, so this covers reads too. ' +
+        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. ' +
+        'RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json.'
       );
     }
 
@@ -285,6 +365,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     }
 
     // Script validation (if configured)
+    let gateNotes: string | undefined;
     if (stageCfg.completion.script) {
       const flowDir = join(repoRoot, '.ai-flow', activeFlowName);
       const scriptOpts = stageCfg.completion.script.timeout_ms !== undefined
@@ -295,17 +376,20 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
         await appendLog(repoRoot, activeFlowName, session_id, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
         return deny(`Script validation failed:\n${scriptResult.reason}\n\nFix the issues and try again.`);
       }
+      // A passing gate can still have something to say (assertions it had to
+      // skip). Surface it; `allow()` alone would swallow it.
+      if (scriptResult.notes) gateNotes = scriptResult.notes;
     }
 
     // Gate type: ALLOW (PostToolUse will detect gate via signal content and handle pending state)
     if (stageCfg.completion.gate) {
       await appendLog(repoRoot, activeFlowName, session_id, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
-      return allow();
+      return allow(gateNotes);
     }
 
     // None/script type (non-gate): ALLOW — PostToolUse will advance stage and inject next prompt
     await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_ALLOW stage=${state.current_stage}`);
-    return allow();
+    return allow(gateNotes);
   }
 
   // ─── Control plane protection ─────────────────────────────────────────────────

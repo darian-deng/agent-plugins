@@ -5,11 +5,21 @@
 // 收口前的干净断言），它们是动作不是判断。写进提示词就是让编排器每批次记 5 条纪律；
 // 放这里，提示词只需要「开票用 `open`、收票用 `close`」。
 //
-//   node scripts/worktree.cjs open  <flow_id> <T<n>|R<n>> [--install "<cmd>"]
-//   node scripts/worktree.cjs sync  <flow_id> <T<n>|R<n>>
-//   node scripts/worktree.cjs close <flow_id> <T<n>|R<n>> [--keep]
+//   node scripts/worktree.cjs open   <flow_id> <T<n>|R<n>> [--install "<cmd>"]   ← open 不认 --no-install
+//   node scripts/worktree.cjs sync   <flow_id> <T<n>|R<n>> [--no-install]
+//   node scripts/worktree.cjs close  <flow_id> <T<n>|R<n>> [--keep] [--no-install]
+//   node scripts/worktree.cjs status <flow_id>
 //
-// 名字收两种形态，选哪种由 stage-3「执行单位」那一节判定，本脚本对两者一视同仁：
+// status：一屏看全四条车道（ahead / dirty / 是否 HEAD 后继 / 待补依赖）。存在理由是这张表
+//   原先只活在主 session 的上下文里，靠记忆维护它的代价实测是漏 sync 的往返、六次依赖陈旧
+//   假红、以及一次「把验证和 close 串成一条命令链」导致地板红的票被 ff 进主分支。
+//   /clear 重入时的「逐票判相位」也从读一堆文件变成读这一条命令。
+//
+// 依赖漂移（sync / close 都做）：树是长驻的而别的票会改依赖清单，改动经 rebase / ff 进来
+//   之后 `node_modules` 就陈旧了。默认自动补装；`--no-install` 只报不装。理由见 `installIn`。
+//
+// 名字收两种形态，选哪种由 references/execution-unit.md 判定（车道模式的动作差异在
+//   references/lane-mode.md），本脚本对两者一视同仁：
 //   - `T<n>` 一票一树：树的生命周期 = 一票，close 即拆。
 //   - `R<n>` 一组一车道：树长驻，组内每票各自 commit、各自 `close --keep` 回合，末票才真拆。
 //     存在理由是装依赖的成本随**开树次数**走而不是随票数走——票多时一票一树要付 N 次
@@ -66,7 +76,8 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { existsSync } = require('fs');
+const { existsSync, lstatSync, unlinkSync, readFileSync, writeFileSync, statSync } = require('fs');
+const { createHash } = require('crypto');
 const { join, dirname, basename, relative } = require('path');
 
 const flowDir = join(__dirname, '..');
@@ -84,12 +95,58 @@ const say = (m) => process.stdout.write(m + '\n');
 // 结果是 stage-3 明文声明为正常的「主树只有 docs/grill-flows/ 下的记账改动」被判成
 // 「子代理把代码写进了主树」，从第二票起每次回合都被拒，而报错说的是没发生过的事。
 // （第一票躲得过：那时记账文件还是未追踪的 `?? `，没有前导空格。）
+// `core.quotePath=false`：默认 git 会把非 ASCII 路径转义成 `"docs/\347\234\237…"`（连引号一起），
+// 于是 `slice(3)` 取到的是 `"docs/…` 而不是 `docs/…`，记账豁免前缀匹配不上——与已修掉的
+// `trim()` off-by-one 是同一形态、同一受害者：主树只有记账改动却被判成「子代理写错了地方」，
+// 从那一票起每次回合都被拒。本 flow 的记账文件迟早会出现中文名（`真机验证清单.md` 之类）。
+// `maxBuffer`：默认 1MB，大仓的 `status -uall` / `log` 可能溢出，而溢出后 `gitQuiet` 只会
+// 返回 ok:false，下面几条断言就静默变成空操作。gate-stage-3 早就设了 4MB，这里对齐。
 function git(args, opts = {}) {
-  return execFileSync('git', args, { cwd: opts.cwd || repoRoot, encoding: 'utf-8', stdio: 'pipe' }).trimEnd();
+  return execFileSync('git', ['-c', 'core.quotePath=false', ...args], {
+    cwd: opts.cwd || repoRoot,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+    maxBuffer: 4 * 1024 * 1024,
+  }).trimEnd();
 }
 function gitQuiet(args, opts = {}) {
   try { return { ok: true, out: git(args, opts) }; }
   catch (e) { return { ok: false, out: String((e.stderr || e.stdout || e.message || '')).trim() }; }
+}
+
+// porcelain 一行 = 2 位状态 + 1 空格 + 路径；重命名/复制条目的路径部分是 `old -> new`，
+// 前缀匹配必须落在 **new** 上（改名的去向才决定它算不算记账文件）。
+function porcelainPath(line) {
+  const p = line.slice(3);
+  const arrow = p.indexOf(' -> ');
+  return arrow === -1 ? p : p.slice(arrow + 4);
+}
+
+// ── 跑错脚本副本的防线 ──
+// `.ai-flow/` 是被 git 追踪的，所以**每一棵 worktree 里都有一份完整的脚本副本**，而
+// `repoRoot` 是从 `__dirname` 推的——跑车道里那份，所有 git 操作就都作用在那棵树上。
+// 另外两个脚本天然 fail-closed（它们 require `state/active.json`，而 `state/` 被 gitignore、
+// 副本里根本没有），本脚本的 flowId 来自 argv、不读 state，于是缺这道保险。实测跑副本：
+// `sync`/`close` 死在「<路径> 不存在」——响亮但**方向指反**（真实原因是脚本副本选错，
+// 报错却在说票号写错）；`open` 更糟，静默在车道目录旁边再建一层 worktree 并占掉分支名。
+if (!existsSync(join(flowDir, 'state', 'active.json'))) {
+  const probe = gitQuiet(['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel']);
+  let hint = '';
+  if (probe.ok) {
+    const [commonDir, wtRoot] = probe.out.split('\n');
+    if (commonDir && wtRoot) {
+      const mainRoot = dirname(commonDir);
+      const rel = relative(wtRoot, repoRoot);
+      if (!rel.startsWith('..')) {
+        hint = '\n    应该跑的是主检出那一份：'
+          + join(mainRoot, rel, '.ai-flow', basename(flowDir), 'scripts', basename(__filename));
+      }
+    }
+  }
+  die('这份脚本副本没有 `state/active.json`，说明它不是主检出里那一份（每棵 worktree 都有一份'
+    + '被 git 追踪的同名副本，而本脚本的所有 git 操作都作用在它自己所在的那棵树上）。'
+    + '\n    继续跑下去：`open` 会静默在错误位置建树并占掉分支名，`sync`/`close` 会报'
+    + '「<路径> 不存在」——那个报错的方向是反的，真实原因就是这一条。' + hint);
 }
 
 // 锚点相对 git 根的前缀（`plugins/ai-flow/`，锚点就是 git 根时为空串）。
@@ -136,13 +193,128 @@ function detectInstall(dirs) {
   return null;
 }
 
-const [, , cmd, flowId, ticket, ...rest] = process.argv;
-if (!cmd || !flowId || !ticket) {
-  die('用法：node scripts/worktree.cjs open|sync|close <flow_id> <T<n>|R<n>> [--install "<cmd>"] [--keep]');
+// ── 依赖漂移 ──
+// 存在理由：`open` 装一次依赖之后树是长驻的，而**别的**票会改依赖清单。那些改动经 `sync`
+// （rebase 进车道）或 `close`（ff 进主树）进来时，`node_modules` 就相对锁文件陈旧了。
+// 失效形态不是「报缺依赖」而是**伪装成大规模回归**：vitest 把「文件加载失败」计成「文件
+// 失败」，于是失败文件数远大于失败用例数、总用例数明显变少，看着像天塌了。实测一次在主树上
+// 报出 231 个文件失败（补装后 1619 文件全绿），另一次让一张实际正常的票被判成有缺陷。
+// 这条纪律原先只写在 stage-3 提示词里，实测在同一次运行里失效 6 次——最后一次是刚把这条
+// 判据整段讲给开发者听的那个 agent，10 分钟后自己踩的。所以它必须在脚本里，不在提示词里。
+const DEP_MANIFESTS = ['pnpm-lock.yaml', 'yarn.lock', 'package-lock.json', 'package.json'];
+function depsChanged(fromSha, toSha, cwd) {
+  const d = gitQuiet(['diff', '--name-only', fromSha, toSha], { cwd });
+  if (!d.ok) return null; // 说不清 → 由调用处报出来，不静默当成「没变」
+  return d.out.split('\n').map((s) => s.trim()).filter((f) => f && DEP_MANIFESTS.includes(basename(f)));
 }
+// 该工作树「最后一次有动静」距今多少分钟。存在理由：子代理停没停，**不能问它自己**——
+// 它停住时给主 session 发的通知与正常交付一样是 `completed`，正文才是差别，而正文会被读错
+// （实测主 session 把「Waiting for the full web4 test suite」读成了「它还在跑」，然后等了
+// 一小时零七分钟）。工作树的物理变化是唯一不依赖自我报告的信号：一条声称在飞的车道，
+// 若它的 HEAD 和全部改动文件都几十分钟没动过，那它就是停了。
+function idleMinutes(wtRoot) {
+  let newest = 0;
+  const st = gitQuiet(['status', '--porcelain', '-uall'], { cwd: wtRoot });
+  if (st.ok) {
+    for (const line of st.out.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const m = statSync(join(wtRoot, porcelainPath(line))).mtimeMs;
+        if (m > newest) newest = m;
+      } catch { /* 已删除的条目 stat 不到，跳过 */ }
+    }
+  }
+  const head = gitQuiet(['log', '-1', '--format=%ct'], { cwd: wtRoot });
+  if (head.ok && head.out) newest = Math.max(newest, Number(head.out) * 1000);
+  if (newest === 0) return null;
+  return Math.max(0, Math.round((Date.now() - newest) / 60000));
+}
+
+// 装依赖的持久标记：记录「上次装成功时，各依赖清单的内容 sha」。判据用它而不是「本次
+// rebase 带进了什么」，是因为后者对「上一次装失败、这次重跑」不成立——那种情况下本次
+// rebase 什么也没带进来，可树里的 node_modules 依然是错的。文件落在 worktree 根、
+// 名字带点前缀，`git status --porcelain` 会把它算成未追踪 → close 的干净断言会拒。
+// 所以写进 `.git/`（worktree 的私有 git 目录，永远不被 checkout、不被 status 看见）。
+function depsStampPath(root) {
+  const d = gitQuiet(['rev-parse', '--path-format=absolute', '--git-dir'], { cwd: root });
+  return d.ok && d.out ? join(d.out, 'ai-flow-deps-stamp') : null;
+}
+function depsFingerprint(root, prefix) {
+  const detected = detectInstall(installCandidates(root, prefix));
+  if (!detected) return null;
+  const files = DEP_MANIFESTS.map((f) => join(detected.cwd, f)).filter((f) => existsSync(f));
+  if (files.length === 0) return null;
+  return files.map((f) => `${basename(f)}:${createHash('sha1').update(readFileSync(f)).digest('hex')}`).join(' ');
+}
+// 装成功之后记下当前指纹。
+function stampDeps(root) {
+  const stampFile = depsStampPath(root);
+  const now = depsFingerprint(root, anchorPrefix());
+  if (!stampFile || now === null) return;
+  try { writeFileSync(stampFile, now); } catch { /* 写不了只是下次多装一次，不是错误 */ }
+}
+
+// 唯一该被调用的入口：比对指纹，不一致才装，装成功才更新标记。
+function ensureDeps(root, label, noInstall) {
+  const prefix = anchorPrefix();
+  const stampFile = depsStampPath(root);
+  const now = depsFingerprint(root, prefix);
+  if (now === null) return;                       // 探不到依赖清单，无从判断
+  let prev = null;
+  try { if (stampFile && existsSync(stampFile)) prev = readFileSync(stampFile, 'utf-8').trim(); } catch { /* 读不到当没装过 */ }
+  if (prev === now) return;
+  installIn(root, prefix, label, noInstall);
+  if (!noInstall && !installFailed) stampDeps(root);
+}
+
+// `root` = 那棵树的仓库根（worktree 根 / git 根），`prefix` = 锚点相对仓库根的位置。
+let installFailed = false;
+function installIn(root, prefix, label, noInstall) {
+  const detected = detectInstall(installCandidates(root, prefix));
+  if (!detected) {
+    say(`⚠️  ${label}的依赖清单变了，但探测不到装依赖命令——手动补装后再跑测试。`);
+    return;
+  }
+  if (noInstall) {
+    say(`⚠️  ${label}的依赖清单变了，按 --no-install 跳过。**跑任何测试前先手动补装**：`
+      + `\n      cd ${detected.cwd} && ${detected.cmd}`
+      + `\n    不补装的症状是大批「文件加载失败」，看起来像大规模回归而不是缺依赖。`);
+    return;
+  }
+  say(`${label}的依赖清单变了，补装: ${detected.cmd}\n  cwd:  ${detected.cwd}`);
+  try {
+    execFileSync(detected.cmd, { cwd: detected.cwd, shell: true, stdio: 'inherit' });
+  } catch (e) {
+    // 不回退 rebase / ff（回退比手动补装贵得多），但**退出码要如实**：装依赖失败之后这棵树
+    // 跑任何测试都会得到一批「文件加载失败」的假红，而 `close && npm test` 这种链子只看
+    // 退出码。exit 0 等于亲手制造本脚本自己在警告的那类陷阱。
+    process.stderr.write(`⚠️  补装失败，**跑测试前必须手动补上**（否则会看到一批假红）：`
+      + `\n      cd ${detected.cwd} && ${detected.cmd}\n    ${String(e.message || e)}\n`);
+    process.stderr.write('    ⚠️ 本脚本会以非零退出——**回合本身已经完成且不可逆**，非零只是为了'
+      + '打断 `close && <跑测试>` 这类命令链（在没装好依赖的树上跑测试会得到一批假红）。'
+      + '⛔ 不要因此重跑 close：那时票已在需求分支上，会报「这票没有交付物」。\n');
+    installFailed = true;
+  }
+}
+
+const [, , cmd, flowId, ticket, ...rest] = process.argv;
+const noInstall = process.argv.includes('--no-install');
+const USAGE = '用法：node scripts/worktree.cjs open  <flow_id> <T<n>|R<n>> [--install "<cmd>"]\n'
+  + '      node scripts/worktree.cjs sync  <flow_id> <T<n>|R<n>> [--no-install]\n'
+  + '      node scripts/worktree.cjs close <flow_id> <T<n>|R<n>> [--keep] [--no-install]\n'
+  + '      node scripts/worktree.cjs status <flow_id>';
+if (!cmd || !flowId) die(USAGE);
+if (cmd !== 'status' && !ticket) die(USAGE);
 // `R<n>` = 一组一条长驻车道。⛔ 不要放宽成任意字符串：这个名字进 worktree 路径与分支名，
 // 而机器门⑤ 是按 `.worktrees/<flow_id>-` 前缀查残留的，形态失控会让残留查不出来。
-if (!/^[TR]\d+$/.test(ticket)) die('名字应形如 T3（一票一树）或 R1（一组一车道），收到: ' + ticket);
+if (cmd !== 'status' && !/^[TR]\d+$/.test(ticket)) {
+  die('名字应形如 T3（一票一树）或 R1（一组一车道），收到: ' + ticket);
+}
+// flowId 同样进路径拼接与分支名。含 `/` 或 `..` 会让落点跑出 lanesRoot，并让机器门⑤ 与
+// abort 的「按 `<lanesRoot>/<flow_id>-` 前缀查残留」失效——那两处失效是静默的。
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(flowId)) {
+  die('flow_id 只允许字母数字与 . _ -（它进路径与分支名，含 / 或 .. 会让机器门⑤ 查不出残留），收到: ' + flowId);
+}
 
 const name = `${flowId}-${ticket}`;
 const branch = `wt/${name}`;
@@ -161,6 +333,51 @@ const wtPath =
   : existsSync(wtPathLegacy) ? wtPathLegacy
   : wtPathCurrent;
 const isLegacyPath = wtPath === wtPathLegacy;
+
+if (cmd === 'status') {
+  // 存在理由：这张表原先只活在主 session 的上下文里——四条车道 × 当前票 × 是否脏 ×
+  // 是否还是 HEAD 的直接后继 × 依赖新不新。靠记忆维护它的代价实测是：漏 sync 后 close
+  // 报「不是直接后继」的往返、把验证和 close 串成一条命令链导致地板红的票被 ff 进主分支、
+  // 以及六次依赖陈旧假红。/clear 重入时的「逐票判相位」也从读一堆文件变成读这一条命令。
+  const target = gitQuiet(['branch', '--show-current']);
+  if (!target.ok || !target.out) die('无法确定需求分支（主仓处于 detached HEAD？）。');
+  // ⛔ 这里不 prune：`status` 的名字承诺只读，而 `git worktree prune` 会**删掉登记**。
+  // 目录只是临时不可达（外挂盘没挂、被人移走）时，prune 之后连 `worktree repair` 都救不回来。
+  const listed = gitQuiet(['worktree', 'list', '--porcelain']);
+  if (!listed.ok) die('git worktree list 失败:\n' + listed.out);
+  const prefixes = [join(lanesRoot, flowId + '-'), join(repoRoot, '.worktrees', flowId + '-')];
+  const paths = listed.out.split('\n')
+    .filter((l) => l.startsWith('worktree '))
+    .map((l) => l.slice('worktree '.length).trim())
+    .filter((p) => prefixes.some((pre) => p.startsWith(pre)));
+  if (paths.length === 0) {
+    say(`需求分支 ${target.out}：本 flow（${flowId}）名下没有 worktree。`);
+    process.exit(0);
+  }
+  say(`需求分支 ${target.out}`);
+  for (const p of paths.sort()) {
+    const nm = basename(p);
+    const br = `wt/${nm}`;
+    const ahead = gitQuiet(['rev-list', '--count', `HEAD..${br}`]);
+    const st = gitQuiet(['status', '--porcelain', '-uall'], { cwd: p });
+    const desc = gitQuiet(['merge-base', '--is-ancestor', 'HEAD', br]).ok;
+    // 「待补依赖」= 该树还没 rebase 进来的那些 commit 里动过的依赖清单。已经是 HEAD 后继
+    // 的树没有待补部分；不是后继的树，sync 之后就会把这些带进来、`node_modules` 随即陈旧。
+    const missing = desc ? [] : (depsChanged(br, 'HEAD') || []);
+    say(`  ${nm.slice(flowId.length + 1) || nm}  ${br}`
+      + `  ahead:${ahead.ok ? ahead.out : '?'}`
+      + `  dirty:${st.ok ? (st.out ? 'YES' : 'no') : '?'}`
+      + `  是否HEAD后继:${desc ? 'yes' : 'NO(先 sync)'}`
+      + `  待补依赖:${missing.length > 0 ? [...new Set(missing.map((f) => basename(f)))].join(',') : 'no'}`
+      + `  静默:${(() => { const i = idleMinutes(p); return i === null ? '?' : i + '分钟'; })()}`);
+  }
+  say(`\n  静默 → 该树最近一次变化（HEAD 时间与全部改动文件 mtime 取最新）距今多久。`
+    + `**声称在飞、却静默 ≥30 分钟 = 那个子代理已经停了**，不是在思考——去唤醒它，别继续等。`
+    + `\n  dirty:YES → 该树有未提交/未追踪的东西，close 会拒；先 amend 进本票那笔或删掉。`
+    + `\n  是否HEAD后继:NO → 别的车道回合过了，本车道 sync 之后才能 close。`
+    + `\n  待补依赖 非 no → sync 会把这些锁文件带进来，之后必须重装（脚本会自动装，除非 --no-install）。`);
+  process.exit(0);
+}
 
 if (cmd === 'open') {
   // gitignore 检查：漏了它，worktree 目录会被 stage-4 的 `git add -A` 吞成 gitlink
@@ -222,6 +439,10 @@ if (cmd === 'open') {
     say(`装依赖: ${installCmd}\n  cwd:  ${installCwd}`);
     try {
       execFileSync(installCmd, { cwd: installCwd, shell: true, stdio: 'inherit' });
+      // 落指纹：`sync` / `close` 靠它判「这棵树的 node_modules 还对不对」。不落的话首次
+      // sync 会把「从没装过」误判成「清单变了」而重装一次（慢但无害），更要紧的是
+      // 「上次装失败」与「装过且是新的」在指纹上分不开。
+      stampDeps(wtPath);
     } catch (e) {
       die(`装依赖失败（worktree 已创建、可手动补）: ${installCmd}\n    cwd: ${installCwd}\n    ${String(e.message || e)}`);
     }
@@ -251,7 +472,11 @@ if (cmd === 'sync') {
   if (target.out === branch) die(`主仓当前就在 ${branch} 上——需求分支被切走了，先切回需求分支。`);
   if (gitQuiet(['merge-base', '--is-ancestor', target.out, branch], { cwd: wtPath }).ok) {
     say(`${target.out} 已经是 ${branch} 的祖先，无需 rebase。`);
-    process.exit(0);
+    // 依赖检查不能跟着早退：上一次 sync 的自动补装可能失败了（那时只警告、退出码非零由
+    // close 承担），人重跑 sync 想再试一次，走到这里就什么都不做了——而 `status` 对
+    // 「已是 HEAD 后继」的树恒报「待补依赖:no」，两条提示渠道同时说干净。
+    ensureDeps(wtPath, '这棵车道树', noInstall);
+    process.exit(installFailed ? 1 : 0);
   }
   // 先断言干净：rebase 遇到未暂存改动时报的是 "cannot rebase: You have unstaged
   // changes"，而下面的失败分支会把它当成冲突、让人去跑 `rebase --continue`——那时根本
@@ -262,6 +487,9 @@ if (cmd === 'sync') {
       + wtSt.out.split('\n').map((l) => '      ' + l).join('\n')
       + `\n    先处置它们（属于本票 → \`git -C ${wtPath} add\` 并 amend 进本票那笔；是垃圾 → 删掉），再 sync。`);
   }
+  // rebase 之前记下这棵树的 HEAD：rebase 之后 `ORIG_HEAD` 也指它，但 `--autostash`
+  // 与冲突续跑都会动 `ORIG_HEAD`，自己记下来才稳。
+  const beforeSha = gitQuiet(['rev-parse', 'HEAD'], { cwd: wtPath });
   const rb = gitQuiet(['rebase', target.out], { cwd: wtPath });
   if (!rb.ok) {
     die(`rebase 到 ${target.out} 有冲突，需要你在 worktree 里解决：\n      ${rb.out}\n`
@@ -269,14 +497,37 @@ if (cmd === 'sync') {
       + `    → \`git -C ${wtPath} commit --amend\` 把适配折回本票那笔（保持一票一 commit）→ 再 close。\n`
       + `    别用 \`git merge\`（含 -X ours）适配：内容会被静默丢弃，且机器门 ④ 会在 stage 末尾拦下整轮。`);
   }
-  say(`已 rebase 到 ${target.out}。适配后记得重跑客观地板并 \`--amend\` 折回本票那笔。`);
-  process.exit(0);
+  say(`已 rebase 到 ${target.out}。适配后记得重跑客观地板并 \`--amend\` 折回本票那笔`
+    + `（⚠️ 宿主会对 \`--amend\` 报一条 [Git Destructive] 安全告警——那是准确判定不是误报，`
+    + `因为被改写的那笔通常不是本 agent 创建的。回报里给出「被 amend 的 sha / 它的父提交 / `
+    + `本次新增暂存的文件数」三元组，主 session 才能一眼核完而不用重查一遍）。`);
+  if (beforeSha.ok) {
+    const changed = depsChanged(beforeSha.out, 'HEAD', wtPath);
+    if (changed && changed.length > 0) say(`本次 rebase 带进: ${[...new Set(changed)].join(' ')}`);
+  }
+  // 判据以「装完时的锁文件指纹」为准，不以「本次 rebase 带进了什么」为准——后者对
+  // 「上一次装失败、这次重跑 sync」不成立（那时 rebase 什么也没带进来，树却仍然是错的）。
+  ensureDeps(wtPath, '这棵车道树', noInstall);
+  process.exit(installFailed ? 1 : 0);
 }
 
 if (cmd === 'close') {
   if (!existsSync(wtPath)) die(`${wtPath} 不存在（已收口过？或 flow_id/票号写错）。`);
 
-  const st = gitQuiet(['status', '--porcelain'], { cwd: wtPath });
+  // 主仓在哪条分支上：`sync` 查了，`close` 原先没查——而 `close` 才是不可逆的那个。
+  // stage-3 期间主 session 确实会临时切分支（认领无主 commit 之类），此时误跑一次 close，
+  // `--ff-only` 在拓扑上照样成立、照样打印「已 fast-forward」、照样把树拆掉，改动却进了
+  // 那条临时分支，需求分支上什么都没有。之后机器门③ 会报「已勾 ticket 没有自己的 commit」，
+  // 方向对但要人回溯半天才能想到是分支切错。
+  const cur = gitQuiet(['branch', '--show-current']);
+  if (!cur.ok || !cur.out) die('主仓处于 detached HEAD，拒绝回合——先切回需求分支。');
+  if (cur.out === branch) die(`主仓当前就在 ${branch} 上——需求分支被切走了，先切回需求分支再 close。`);
+  if (cur.out.startsWith('wt/')) {
+    die(`主仓当前在 ${cur.out} 上，这看起来是另一票的车道分支而不是需求分支。`
+      + `\n    ff 会把本票合进它、然后把树拆掉，而需求分支上什么都不会有。先切回需求分支。`);
+  }
+
+  const st = gitQuiet(['status', '--porcelain', '-uall'], { cwd: wtPath });
   if (!st.ok) die('无法读取 worktree 状态:\n' + st.out);
   if (st.out.length > 0) {
     die(`worktree 里还有未提交/未追踪的东西，先处置再收口：\n`
@@ -288,7 +539,11 @@ if (cmd === 'close') {
 
   // ff 只保证主树这一侧不做合并，不保证内容不丢：丢内容的 merge 可以发生在票分支上。
   const wtMerges = gitQuiet(['log', '--format=%h %s', '--merges', `HEAD..${branch}`]);
-  if (wtMerges.ok && wtMerges.out.length > 0) {
+  // fail-closed：这三条断言原先都写成「git 成功了才检查」，git 因任何理由失败（子进程被
+  // 信号打断、输出溢出 maxBuffer）时它们静默变成空操作，然后照常 ff。而本脚本的自我定位
+  // 就是「四条前置断言」——断言查不了就不能放行。
+  if (!wtMerges.ok) die('无法检查票分支上有没有 merge commit，拒绝回合:\n' + wtMerges.out);
+  if (wtMerges.out.length > 0) {
     die(`${branch} 上有 merge commit，拒绝回合：\n`
       + wtMerges.out.split('\n').map((l) => '      ' + l).join('\n')
       + `\n    子代理是用 \`git merge\` 而不是 \`rebase\` 做适配的。\`-X ours\` 这类策略在无文本冲突时`
@@ -310,11 +565,10 @@ if (cmd === 'close') {
   const prefix = anchorPrefix();
   const bookkeeping = (prefix ? prefix + '/' : '') + 'docs/grill-flows/';
   const mainSt = gitQuiet(['status', '--porcelain', '-uall']);
-  const stray = mainSt.ok
-    ? mainSt.out.split('\n')
-        .filter((l) => l.trim().length > 0)
-        .filter((l) => !l.slice(3).startsWith(bookkeeping))
-    : [];
+  if (!mainSt.ok) die('无法读取主工作树状态，拒绝回合:\n' + mainSt.out);
+  const stray = mainSt.out.split('\n')
+    .filter((l) => l.trim().length > 0)
+    .filter((l) => !porcelainPath(l).startsWith(bookkeeping));
   if (stray.length > 0) {
     die(`主工作树有非记账改动，拒绝回合：\n`
       + stray.map((l) => '      ' + l).join('\n')
@@ -326,7 +580,8 @@ if (cmd === 'close') {
   }
 
   const ahead = gitQuiet(['rev-list', '--count', `HEAD..${branch}`]);
-  if (ahead.ok && ahead.out === '0') {
+  if (!ahead.ok) die('无法确认本票分支相对 HEAD 有没有 commit，拒绝回合:\n' + ahead.out);
+  if (ahead.out === '0') {
     die(`${branch} 相对当前 HEAD 没有任何 commit——这票没有交付物。\n`
       + `    ff 对零 commit 分支会返回 "Already up to date" 并成功拆除，看起来像"交付了"，实则一行代码没有。\n`
       + `    怎么改：确实还没做 → 派发子代理实施；确定要放弃 → \`git worktree remove ${wtPath} && git branch -D ${branch}\`。`);
@@ -342,6 +597,8 @@ if (cmd === 'close') {
       + `确实无需改动 → 这张票本身该撤掉，别用空提交充数。`);
   }
 
+  // ff 之前的主树 HEAD，用来问「这次回合带进了哪些文件」（见下方依赖漂移检查）。
+  const ffBase = gitQuiet(['rev-parse', 'HEAD']);
   const ff = gitQuiet(['merge', '--ff-only', branch]);
   if (!ff.ok) {
     // 分因：ff 在拓扑上成立却失败，说明是被本地改动挡住，不是需要 rebase——
@@ -359,6 +616,37 @@ if (cmd === 'close') {
       + `\`git -C ${wtPath} commit --amend\` 折回本票那笔 → 再 close。`);
   }
   say(ff.out || `已 fast-forward 到 ${branch}`);
+  say(`\n✅ ${ticket} 已进入需求分支 ${cur.out}。**这一步不可逆**——退回要 reset 主分支，`
+    + `而那时本票 worktree 可能已经拆掉。所以 close 要单独发一条命令、在看过验证输出之后再发，`
+    + `别串在 \`测试 && close\` 里：shell 的 && 只看退出码，而假红/假绿下退出码不代表结论。`);
+
+  // ff 把别的票的依赖清单改动带进了主树 —— 收口测试跑在主树上，它一样会陈旧。
+  // 实测这一侧比车道那侧还高频（主树 231 个测试文件失败那次就是）。
+  if (ffBase.ok) {
+    const changed = depsChanged(ffBase.out, 'HEAD');
+    if (changed && changed.length > 0) say(`本次回合带进: ${[...new Set(changed)].join(' ')}`);
+  }
+  ensureDeps(gitRoot, '主工作树', noInstall);
+
+  // 兄弟车道在这一刻全部过期了。原先只提示本车道要 sync，于是「别的车道也得 sync」这件事
+  // 靠主 session 记——实测它有时提前批量 sync、有时等到下次 close 报「不是直接后继」才回头补。
+  // 更隐蔽的是在陈旧基线上跑地板：绿了，但验的不是将要合入的那个状态。
+  const sibList = gitQuiet(['worktree', 'list', '--porcelain']);
+  if (sibList.ok) {
+    const sibPrefixes = [join(lanesRoot, flowId + '-'), join(repoRoot, '.worktrees', flowId + '-')];
+    const stale = sibList.out.split('\n')
+      .filter((l) => l.startsWith('worktree '))
+      .map((l) => l.slice('worktree '.length).trim())
+      .filter((p) => sibPrefixes.some((pre) => p.startsWith(pre)) && p !== wtPath)
+      .map((p) => basename(p))
+      .filter((nm) => !gitQuiet(['merge-base', '--is-ancestor', 'HEAD', `wt/${nm}`]).ok);
+    if (stale.length > 0) {
+      say(`\n以下车道已不再是 HEAD 的直接后继，**下一票开工前必须先 sync**：`
+        + stale.map((nm) => nm.slice(flowId.length + 1) || nm).join(' ')
+        + `\n    不 sync 的两种后果：下次 close 报「不是直接后继」（响亮），或者在陈旧基线上跑地板`
+        + `——地板绿了，但它验的不是将要合入的那个状态（静默）。`);
+    }
+  }
 
   // 车道模式：合了但不拆，同一棵树继续做本组下一票。断言已经在上面全跑过了——这正是
   // 走这个开关、而不是在主树手敲 `git merge --ff-only` 的理由。
@@ -367,14 +655,37 @@ if (cmd === 'close') {
       + `\n    下一票开工前先 \`node scripts/worktree.cjs sync ${flowId} ${ticket}\`：别的车道回合过之后，`
       + `本车道不 rebase 就会在下次 close 时报「不是直接后继」。`
       + `\n    ⚠️ 本组末票收口时去掉 --keep，否则机器门⑤ 会拦「未收口的 worktree」。`);
-    process.exit(0);
+    process.exit(installFailed ? 1 : 0);
   }
 
   const rm = gitQuiet(['worktree', 'remove', wtPath]);
   if (!rm.ok) die('回合成功，但 `git worktree remove` 失败（分支已合，工作未丢）:\n' + rm.out);
+
+  // 旧落点的兼容软链接：0.50.0 把落点搬出仓库后，手工搬迁的人往往会在旧路径留一个指向新
+  // 落点的符号链接（怕还有什么东西按旧路径找车道）。它比看上去贵得多——`.gitignore` 只挡
+  // git，挡不住任何遍历文件系统的工具：仓内的扫描器（文档链接检查、导出面比对、路径存在性
+  // 校验）会跟着它走进整棵车道树，把同一批文件重扫一遍并因路径基准错位报出一批假失败，而
+  // 这些目录在 CI 的干净检出里根本不存在 —— 于是那道闸「在每台开发机恒红、在 CI 恒绿」。
+  // 实测真的发生过一次，为它单开了一张票才修掉。只删符号链接本身，绝不碰真目录。
+  // ⚠️ 不能用 `existsSync` 前置判断：它**跟随**符号链接，而上一行刚把新落点 remove 掉，
+  // 此刻旧路径那个软链接已经悬挂 —— `existsSync` 返回 false，整段被跳过，等于没写。
+  // 直接 `lstatSync`（不跟随），不存在时抛异常由 catch 吞掉。
+  if (!isLegacyPath) {
+    try {
+      if (lstatSync(wtPathLegacy).isSymbolicLink()) {
+        unlinkSync(wtPathLegacy);
+        say(`顺带删掉旧落点的悬挂软链接 ${wtPathLegacy}`
+          + `（它被 gitignore、CI 里不存在，但仓内的全树扫描工具会跟着它走进车道树，`
+          + `报出一批只在开发机上出现的假失败）。`);
+      } else {
+        say(`⚠️  旧落点 ${wtPathLegacy} 还存在且**不是**软链接，本脚本不动它。`
+          + `\n    若它是真目录：确认里面没有未提交的东西后自行删除——仓内的全树扫描工具会扫进去。`);
+      }
+    } catch { /* 读不到就算了，这是清理不是断言 */ }
+  }
   say(`已拆除 ${wtPath}（分支 ${branch} 保留——stage-3 的重入相位表要靠它区分「已交付未回合」；`
     + `stage-4 收尾 squash 后统一删）`);
-  process.exit(0);
+  process.exit(installFailed ? 1 : 0);
 }
 
-die('未知子命令: ' + cmd + '（只支持 open / sync / close）');
+die('未知子命令: ' + cmd + '（只支持 open / sync / close / status）');

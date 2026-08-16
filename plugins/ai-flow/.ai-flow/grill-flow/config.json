@@ -29,6 +29,7 @@
       "id": "stage-3",
       "prompt": "stages/stage-3.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/grill-flows/"],
       "completion": {
         "script": { "command": "node scripts/gate-stage-3.cjs" }
       }
@@ -37,12 +38,14 @@
       "id": "stage-4",
       "prompt": "stages/stage-4.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/grill-flows/"],
       "completion": { "gate": true }
     },
     {
       "id": "stage-5",
       "prompt": "stages/stage-5.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/grill-flows/"],
       "completion": { "gate": true }
     }
   ]

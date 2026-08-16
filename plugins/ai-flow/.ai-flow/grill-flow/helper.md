@@ -9,7 +9,13 @@
 ## 核心内核（"轻"在哪、质量在哪）
 
 - **轻 = mattpocock 内核**：散文 spec 不搞接口枚举、tracer-bullet 不搞字段矩阵、提示词薄（细节在 references/）。执行沿用子代理派发（主 session 只调度、context 干净），差异化落在上游散文 spec + tracer-bullet 竖切。
-- **单一读者原则**：`stages/stage-3.md` 是**调度页**（主 session 读：算批次、开收 worktree、回合、记账、拍板）；`references/per-ticket-review.md` 是**一票交付契约**（子代理读：质量链、自适配、机器门格式）。两者不互相复述——细节复述必漂移。
+- **单一读者原则**：`stages/stage-3.md` 是**调度页**（主 session 读：算批次、开收 worktree、回合、记账、拍板）；一票的交付契约分两段给子代理读——`references/per-ticket-review.md`（实施段）与 `references/quality-chain.md`（质量链段）。三者不互相复述——细节复述必漂移。
+- **一票走两段，是成本决定的不是分工决定的**：实测（`2026-08-14-kuer`，7 段 session、396 个子代理、按 `message.id` 去重后 17,663 回合 / 4,007M 缓存读）——宿主按「每回合重读全部上下文」计费，而子代理上下文随回合线性累积（质量链阶段实测 0.84K/回合）。于是一个从头做到尾的实施代理走到质量链时上下文已堆到 40 万，那一段占掉整票 **43% 的成本**（每回合均价 438K）；同样的活在新开上下文里起步只有 11K。拆开后（回合数按 ×1.2 保守估）省全流程约 **12%**。顺带消掉「主 session 在实施代理仍跑质量链时提交 → 三评审对着空 diff 全绿」这个静默故障。
+  - ⚠️ **算这类账时必须按 `message.id` 去重**：一次模型响应在 transcript 里被拆成多行（thinking 一行、每个 tool_use 一行），**每行都重复携带同一份 usage**。逐行累加会把回合数夸大约 1.9 倍、成本夸大约 1.7 倍。
+- **派子代理一律 `run_in_background: false`**：子代理没有「挂起」态，丢后台的父代理只能靠一轮轮 `Bash: true` 空烧着等，而每个空转回合都要为当时的全部上下文付一次全额。实测 157/311 次派发跑在后台 → 422 个纯空转回合，约占全流程 5%。
+- **别把大文件的路径发给子代理**：给了路径它就整篇读，读进去之后**此后每一轮都重新计费**。实测 `tickets.md` 218,173 字符 ≈ 68K token 被整篇读 14 次、`gate-stage-3.cjs` ≈10K token 被读 15 次，而其中绝大部分内容那个子代理一次都用不上。票面整段内联、spec 只切相关段、机器门规格取契约里那四条。
+- **stage 提示词有硬预算：渲染后 ≤ 10,000 字符**（宿主的内联注入上限，按字符不按字节；实测夹逼出来的，见 `src/lib/prompt-render.ts` 的 `INLINE_INJECTION_BUDGET`）。超了宿主就落盘、只回注约 2,000 字符预览，而**没有任何东西告诉模型「还有 90% 没给你」**——掉在边缘之外的恰好是那些「违反了也不会有东西变红」的规则。引擎对超限的兜底是**不注入截断正文**、改发一条「立刻 Read 真实文件」的指令；预算本身由 `tests/stage-prompt-budget.test.ts` 执行。
+- **stage-3 的分页原则（拆分后的常驻/按需边界）**：调度页只留**主循环** + **违反了不会有任何东西变红的红线**；其余按**可观察的触发事件**拆进 references，页首「岔路 → 先读哪份」路由表负责指路，且该表必须整个落在前 2,000 字符内（那样即便这页将来又被写胖到溢出，预览里仍带着完整路由）。⛔ **红线不许往 references 搬**——搬下去就等于把一条静默失效的规则藏到「撞上岔路才读」的位置。这两条由 `tests/flow-doc-integrity.test.ts` 机器执行（红线清单 + 路由可达性 + 路由表位置 + 全 flow 文档的断链检查）。
 - **质量把控齐**：per-ticket simplify + Standards/Spec/correctness 三轴评审子代理并行 + 注释清理 + 客观地板（假绿检测/枚举负空间/回归）；stage-2 对抗性方案审查；收尾组装双轴 + 安全专项（对抗立场 + 阻塞项独立复核）；集中沉淀。
 
 ## 两种并行形态（选错会白付一整轮成本）
@@ -45,7 +51,7 @@ grill-flow help                       # 本文档
 |----|------|---------|---------|
 | stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
 | stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) + 每票声明 `Blocked by`(实施先后) 与 `Touches`(预计写集) |
-| stage-3 | implement | script（无 gate，fail-closed） | 主 session 调度：算批次（够格 ∧ `Touches` 不相交，上限 3）→ 落 `batch:` 再派发 → 每票一个 worktree（`scripts/worktree.cjs open`）→ 子代理按契约走完质量链并 commit → 回合前自己 `git rebase` 适配 → 主 session `--ff-only` 逐票回合（`close`）→ 批次收口测试一次 → 记账。**历史必须线性**（断言④ 是 `-X ours` 静默丢内容的唯一物理防线）。**执行单位可切换**：`scripts/schedule.cjs` 按主循环同一套准入算法模拟两种模式的轮数，谁少用谁——写集重叠多时「一组一车道」（长驻 worktree `R<n>`、`close --keep` 逐票回合、记 `lane:`）会明显更快。判据与三条代价见 stage-3「执行单位」节 |
+| stage-3 | implement | script（无 gate，fail-closed） | 主 session 调度：算批次（够格 ∧ `Touches` 不相交，上限 3）→ 落 `batch:` 再派发 → 每票一个 worktree（`scripts/worktree.cjs open`）→ 实施子代理留改动不提交 → 质量链子代理（新上下文）走完质量链并 commit → 回合前自己 `git rebase` 适配 → 主 session `--ff-only` 逐票回合（`close`）→ 批次收口测试一次 → 记账。**历史必须线性**（断言④ 是 `-X ours` 静默丢内容的唯一物理防线）。**执行单位可切换**：`scripts/schedule.cjs` 按主循环同一套准入算法模拟两种模式的轮数，谁少用谁——写集重叠多时「一组一车道」（长驻 worktree `R<n>`、`close --keep` 逐票回合、记 `lane:`）会明显更快。分组来自 `lane:` 字段时它还会校验该分组自己的前提（跨车道写集相交 = 会停等，轮数被低估）并点名「跨车道票」。判据见 `references/execution-unit.md`，车道模式的三条代价与全部动作差异见 `references/lane-mode.md`。`worktree.cjs status <flow_id>` 一屏看全各车道的 `ahead / dirty / 是否 HEAD 后继 / 待补依赖 / 静默时长`（纯读，不 prune；**静默 ≥30 分钟的在飞车道 = 那个子代理已经停了**，这是唯一不依赖自我报告的判据）；**只有主 session 能等待**——子代理结束回合即终止，所以整仓全量回归归收口、纯验证任务不外包（见 `references/subagent-lifecycle.md`）；`sync` / `close` 按「装完时的锁文件指纹」自己检测并补装依赖（`--no-install` 只报不装；补装失败会以非零退出打断命令链，但回合本身已完成、别重跑 close）。记账按票（close 成功即记）、收口测试按轮且有硬上限，两者的落盘锚点分别是 `qc:done` 与 tickets.md 的 `## 收口记录` 段 |
 | stage-4 | code-review | **gate** | A 全量测试 + B 组装双轴+安全 + C 开发者 IDE 未暂存 diff 亲审闭环**（含真机验证清单收口 rm:pending，全流程唯一真机验证落点）** → squash 一笔 feat commit |
 | stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
 
@@ -60,7 +66,7 @@ docs/grill-flows/<flow_id>/
 ├── spec.md              # 散文规格：Problem/Solution/User Stories/Decisions/Testing Decisions/Out of scope/方案审查/跨端跨仓行为契约(涉及时,stage-2)
 ├── tech-design.html     # 方案视图：gate 主审面（stage-2，从 spec 生成的单向视图）
 ├── diagram/*.svg        # 配图（mermaid→mmdc）
-├── tickets.md           # tracer-bullet 切片 + 依赖/写集声明（Blocked by / Touches，stage-2 建）+ 进度（stage-3 维护 batch:（车道模式 lane:）+ qc:done + [x] + 真机票 rm:pending/rm:done + ## 待真机验证段）
+├── tickets.md           # tracer-bullet 切片 + 依赖/写集声明（Blocked by / Touches，stage-2 建）+ 进度（stage-3 维护 batch:（车道模式 lane: + 在飞标记 wip:）+ qc:done + [x] + 真机票 rm:pending/rm:done + ## 待真机验证段 + ## 已知碰撞面段（车道模式下机器门⑦ 失效后的替代保护，stage-4 逐行点名）+ ## 收口记录段（收口测试硬上限的计数依据））
 ├── candidates.md        # 沉淀候选（stage-3 累积）
 └── review.md            # 收尾审 findings + 原始测试输出（stage-4）
 
@@ -84,9 +90,15 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
   - **并发有上限**（默认 20 上下，可由 `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 覆盖）。每票 = 1 实施 + 3 评审 + `comment` 自己的 fan-out，所以**能同时跑的票数受这个上限压制**，往往比 `schedule.cjs` 算出的最优并发更小。
   - **重复角色的 spawn 会被宿主的分类器直接拦掉**（比对子代理的角色和父代理正在做的事）。三评审之所以派得出去，是因为 Standards / Spec / correctness 三个轴的职责明确不同；把它们写成三个措辞相近的「审一下代码」就会被判重复。
   - **嵌套子代理拿不到 `AskUserQuestion`**。契约里「人在环只在主 session 那侧」这条因此不只是分工，而是宿主约束——子代理遇到要拍板的事只能回报，不能自己问。
+- **context 阈值（`config.json` 的 `context` 段）**：`warn_at_pct: 50` / `block_at_pct: 60`。越过 block 之后 `context_blocked` 会**锁进 flow 状态**，此后主 session 对**代码**的写入一律被拒，只有本 flow 自己的 `docs_paths`（`docs/grill-flows/`）仍可写——这是刻意留的，**block 的目的是不让你在退化的 context 上继续产出，不是堵死安全退出**。所以每个 stage（包括 `write_scope: unrestricted` 的）都要配 `docs_paths`，否则触发 block 之后连交接块都写不下去。
+  - **交接块只写「算不出来的」。** 车道 HEAD、各车道是否干净、进度计数、剩余票清单、票↔commit 配对、下一票是哪张——这些**一条 `worktree.cjs status <flow_id>` 加两条 grep 就能算出来**，写下来只会过期。实测那份手写现场段有四处失准，**全部落在可探测字段上**：进度计数写成「61 张完成 51」而实际是 60/49（同一句里的剩余清单却是对的）；记下的车道 sha 在文件被写下的那一分钟就已经被 amend 掉了；同一段里两份互相矛盾的剩余清单；散文写的车道归属与票面 `lane:` 字段冲突。
+    **必须写的只有 git 里没有的那几样**：①「在飞但还没 commit 的票是哪张」——子代理从派发到 commit 之间车道分支毫无变化，git 只看得到「树脏」，看不到脏的是哪一票（这一项用票面的 `wip: R<n>` 字段落盘，比写进散文更不会过期，而且它是在**派发之前**写的，那时 context 还健康）；② 在飞子代理的越界发现与待问清项；③ 已裁决但还没写进票面的结论；④ 三端测试基线数字（要跑一遍才知道）。
+    **触发时机是「每票 close 后的那次记账」，不是「clear 之前」。** 记账本来就在写 tickets.md，顺手把这几行刷新一次即可；押在 clear 前那一刻会让它跟着那一刻的意外一起丢——实测有一次主 session 在阈值触发后才想起要写，而那时最要紧的三件事只能说进聊天里，`/clear` 销毁的正是聊天。
+  - ⛔ **`/clear` 的真实代价不是零**：flow 状态与 commit 都在磁盘上、都活得下来，但**在飞子代理的回报活不下来**——它的判断型发现、真机验证项、安全红线自查结论无法从它留下的那笔 commit 反推。实测撞过一次：session 在有子代理在飞时越过阈值，那份回报就此丢失。所以越过阈值的第一件事是**把在飞状态写进 tickets.md**（哪条车道在做哪票、哪些子代理**还在跑**、三端测试基线、已经做出但还没落盘的裁决），然后再 `/clear`。
 - **`.gitignore` 需含两条规则**，`/ai-flow:add` 会写入（写在 git 根，monorepo 子项目锚点同样覆盖）：
   - `.worktrees/` — 0.50.0 之前的隔离工作树位置。**新落点在仓库同级**（`../<repo 名>.ai-flow-worktrees/`），所以这条规则对新 flow 已经不起作用；保留它是为了兼容升级前开出去、还在跑的树，以及开发者手动在那儿建的工作树——落在仓库内又没被 ignore，stage-4 的 `git add -A` 会把整个 worktree 目录当嵌套仓库吞进 squash commit（只 warning 不报错，落地是个空的 gitlink 条目）。落点在仓库内时 `worktree.cjs open` 仍会先检查这条。
   - ⚠️ **为什么把落点搬出仓库**：模块解析（node 与 tsc 都逐级向上找 `node_modules`）在 worktree 嵌在主检出内部时会走出 worktree、落到主树的 `node_modules`，同一个包于是有两个物理路径 = 两份互不相关的同名类型，worktree 里的 typecheck 报一批「同名但不兼容」——与被测改动无关，却会卡住 pre-commit hook、让碰到那些包的票全部提交不了。实测（pnpm workspace）：落点在 `apps/desktop/.worktrees/` 时车道里 71 个错、`--listFilesOnly` 能看到两份 `@types/react`；搬到仓库同级后同一条命令 0 错。查证手段：`tsc -p <config> --noEmit --listFilesOnly | grep <包名> | sort -u`，出现两个不同前缀就是越界。
+  - ⚠️ **从旧落点搬迁时不要在旧路径留软链接**（`0.50.0` 之前落点在 `<锚点>/.worktrees/`，搬迁的人常留一个指向新落点的软链接兜底）。`.gitignore` 只挡 git，**挡不住任何遍历文件系统的工具**：仓内的扫描器（文档链接检查、导出面比对、路径存在性校验）会跟着软链走进整棵车道树，把同一批文件重扫一遍、并因路径基准错位报出一批假失败——而这些目录在 CI 的干净检出里根本不存在，于是那道闸「**在每台开发机恒红、在 CI 里恒绿**」，这是最坏的一种门禁，会训练人忽略它。实测发生过，只能单开一张票去修那个扫描器。`worktree.cjs` 的 `sync` / `close` 本来就认旧落点，软链接并不必要；末票 `close`（不带 `--keep`）现在会顺手删掉旧路径上的悬挂软链接。
   - `**/.ai-flow/**/state/` — 这条是**并行的前提**，不只是卫生。少了它，`state/active.json` 会被提交进 worktree，于是 worktree 里的子代理解析到的是一份**陈旧的** flow 状态副本，而不是主仓的真状态。
 - **交互式命令在本环境起不来**（无 tty）：`git rebase -i`、`git add -i`、`git add -p` 会挂住或被宿主直接拒。所以凡是要改写历史的地方，文档给的都是非交互形态——`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base>`。⚠️ 另有一条容易连带踩的：stage-3 期间主树**一直有未提交的记账改动**，`--autostash` 因此不是可选项；漏了它 rebase 直接拒绝，而按报错去提交记账会造出一笔不归属任何票的 commit、被机器门③ 拦下。
 - **`git reset` / `git cherry-pick` / `git merge --ff-only` 都是非交互的**，stage-4 环节 C 的摊平与 squash 全用它们——那一段不需要开发者代跑命令。

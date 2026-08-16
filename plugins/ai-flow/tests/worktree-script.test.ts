@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync, symlinkSync, lstatSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -39,10 +39,21 @@ describe('grill-flow worktree.cjs', () => {
     tmpDirs.push(repo + '.ai-flow-worktrees');
     const anchor = opts.anchorRel ? join(repo, opts.anchorRel) : repo;
     mkdirSync(join(anchor, '.ai-flow', 'grill-flow', 'scripts'), { recursive: true });
+    mkdirSync(join(anchor, '.ai-flow', 'grill-flow', 'state'), { recursive: true });
     mkdirSync(join(anchor, 'src'), { recursive: true });
     copyFileSync(SCRIPT, join(anchor, '.ai-flow', 'grill-flow', 'scripts', 'worktree.cjs'));
+    // 脚本拿「自己旁边有没有 state/active.json」判断它是不是主检出那一份（worktree 里有
+    // 一份被 git 追踪的同名副本，跑错了会静默作用在错误的树上）。`state/` 被 gitignore，
+    // 所以真实形态就是「主检出有、副本没有」——夹具照这个建。
+    writeFileSync(
+      join(anchor, '.ai-flow', 'grill-flow', 'state', 'active.json'),
+      JSON.stringify({ flow_id: 'f1', stage: 'stage-3' })
+    );
     // open 拒绝在 `.worktrees/` 没被忽略时开树，所以这条是所有用例的前提。
-    writeFileSync(join(repo, '.gitignore'), '.worktrees/\nnode_modules/\n');
+    // `**/.ai-flow/**/state/` 是引擎建 flow 时写进去的真实规则——它决定了「车道副本里没有
+    // active.json」，而脚本正是靠这一点分辨自己是不是主检出那一份。忽略它就等于让夹具偏离
+    // 真实形态、把那条断言测成恒真。
+    writeFileSync(join(repo, '.gitignore'), '.worktrees/\nnode_modules/\n**/.ai-flow/**/state/\n');
     if (opts.rootLock) writeLockPair(repo, 'root');
     if (opts.anchorLock) writeLockPair(anchor, 'anchor');
     writeFileSync(join(anchor, 'src', 'a.txt'), 'a\n');
@@ -69,6 +80,11 @@ describe('grill-flow worktree.cjs', () => {
       encoding: 'utf-8',
     });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+
+  // `lstatSync` 不跟随软链接；不存在时抛异常，这里收成 null 便于断言。
+  function lstatSyncSafe(p: string): unknown | null {
+    try { return lstatSync(p); } catch { return null; }
   }
 
   // 断言路径时只比后缀：macOS 的 tmpdir 会被 git 解成 /private/var/…，全路径比不了。
@@ -254,6 +270,204 @@ describe('grill-flow worktree.cjs', () => {
       expect(out.code).toBe(0);
       expect(git(repo, 'log', '-1', '--format=%s')).toContain('T9');
       expect(existsSync(legacy)).toBe(false);
+    });
+  });
+
+  describe('跑错脚本副本', () => {
+    it('副本旁边没有 state/active.json → 拒绝运行，并指出正确那一份', () => {
+      const { anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      // worktree 是整仓 checkout，`.ai-flow/` 被追踪 → 车道里有一份同名脚本副本，
+      // 而 `state/` 被 gitignore、副本里没有。跑副本必须响亮拒绝而不是作用在错误的树上。
+      const copy = join(lanes, 'f1-R1', '.ai-flow', 'grill-flow', 'scripts', 'worktree.cjs');
+      expect(existsSync(copy)).toBe(true);
+      const r = spawnSync(process.execPath, [copy, 'open', 'f1', 'R2'], {
+        cwd: join(lanes, 'f1-R1'),
+        encoding: 'utf-8',
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('不是主检出里那一份');
+      // 静默建错树是这条断言要防的主要后果
+      expect(existsSync(join(lanes, 'f1-R1') + '.ai-flow-worktrees')).toBe(false);
+    });
+  });
+
+  describe('依赖漂移', () => {
+    it('sync 把别的票改过的锁文件 rebase 进来 → 报出来并补装', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      // 主分支上另一票改了锁文件（本 flow 实测最常见的形态：某票新增依赖）
+      writeFileSync(join(repo, 'package-lock.json'), JSON.stringify({ name: 'anchor', lockfileVersion: 3, packages: { '': { name: 'anchor' }, 'node_modules/x': {} } }) + '\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'feat(T9): add dep');
+      const r = run(anchor, 'sync', 'f1', 'R1', '--no-install');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('package-lock.json');
+      expect(r.stdout).toContain('--no-install');
+      expect(existsSync(join(lanes, 'f1-R1'))).toBe(true);
+    });
+
+    it('rebase 没带进依赖清单改动时不提装依赖', () => {
+      const { repo, anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      writeFileSync(join(repo, 'src', 'other.txt'), 'other\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'feat(T9): code only');
+      const r = run(anchor, 'sync', 'f1', 'R1');
+      expect(r.code).toBe(0);
+      expect(r.stdout).not.toContain('依赖清单变了');
+    });
+
+    it('close 把锁文件 ff 进主树 → 报出来（收口测试跑在主树上，它一样会陈旧）', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-R1');
+      writeFileSync(join(wt, 'package-lock.json'), JSON.stringify({ name: 'anchor', lockfileVersion: 3, packages: { '': { name: 'anchor' }, 'node_modules/y': {} } }) + '\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): add dep');
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep', '--no-install');
+      expect(r.code).toBe(0);
+      // ⚠️ 别断言 `package-lock.json`：`say(ff.out)` 会把 ff 的 diffstat 原样打出来，
+      // 里面本来就有这个文件名——把依赖漂移整段删掉，那样的断言照样绿（实测过）。
+      // 只断言产品代码独有的串。
+      expect(r.stdout).toContain('本次回合带进');
+      expect(r.stdout).toContain('依赖清单变了');
+    });
+  });
+
+  describe('旧落点的兼容软链接', () => {
+    // 它让仓内的全树扫描工具「在开发机恒红、在 CI 恒绿」（CI 的干净检出里没有它）。
+    // ⚠️ 清理代码不能用 `existsSync` 前置判断：它**跟随**符号链接，而这一步跑在
+    // `git worktree remove` 之后，此刻软链接已经悬挂 → existsSync 为 false，整段被跳过。
+    it('末票 close 拆树后删掉旧路径上的悬挂软链接', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-R1');
+      const legacy = join(repo, '.worktrees', 'f1-R1');
+      mkdirSync(join(repo, '.worktrees'), { recursive: true });
+      symlinkSync(wt, legacy);
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+
+      const r = run(anchor, 'close', 'f1', 'R1');   // 不带 --keep = 末票，真拆
+      expect(r.code).toBe(0);
+      expect(existsSync(wt)).toBe(false);
+      expect(lstatSyncSafe(legacy)).toBeNull();     // 软链接本身也没了
+      expect(r.stdout).toContain('软链接');
+    });
+
+    it('旧路径是真目录时只警告、不删', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const legacy = join(repo, '.worktrees', 'f1-R1');
+      mkdirSync(legacy, { recursive: true });
+      writeFileSync(join(legacy, 'keep.txt'), 'x\n');
+      const wt = join(lanes, 'f1-R1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+
+      const r = run(anchor, 'close', 'f1', 'R1');
+      expect(r.code).toBe(0);
+      expect(existsSync(join(legacy, 'keep.txt'))).toBe(true);
+      expect(r.stdout).toContain('还存在且');
+      expect(r.stdout).toContain('本脚本不动它');
+    });
+  });
+
+  describe('close 的 fail-closed 断言', () => {
+    // 这三条原先写成「git 成功了才检查」，git 因任何理由失败（信号打断、输出溢出）时
+    // 断言静默变成空操作、然后照常 ff。本脚本的自我定位是「前置断言」，查不了就不能放行。
+    it('票分支不存在（rev-list 失败）→ 拒绝回合，不 ff', () => {
+      const { repo, anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const before = git(repo, 'rev-parse', 'HEAD').trim();
+      git(repo, 'branch', '-M', 'wt/f1-R1', 'wt/renamed-away');
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(r.code).not.toBe(0);
+      expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(before);   // 没有 ff
+      // 断言的是**文案**而不只是退出码：fail-open 版本同样不会 ff（它会一路走到 ff 那步
+      // 才失败），两者退出码一样。真正的差别是「哪一条断言在说话」——查不了就该就地拒绝，
+      // 而不是让后面某一步碰巧兜住。
+      expect(r.stderr).toContain('无法检查票分支上有没有 merge commit');
+    });
+  });
+
+  describe('非 ASCII 记账文件名', () => {
+    // 与已修掉的 `trim()` off-by-one 同形态：git 默认把非 ASCII 路径转义成 "docs/\347…"
+    //（连引号一起），记账豁免前缀匹配不上 → 主树只有记账改动却被判成「子代理写错了地方」，
+    // 从那一票起每次回合都被拒。
+    it('主树只有中文名记账文件时照常回合', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-R1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      mkdirSync(join(repo, 'docs', 'grill-flows', 'f1'), { recursive: true });
+      writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', '真机验证清单.md'), '- T1\n');
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(r.code).toBe(0);
+      expect(git(repo, 'log', '-1', '--format=%s')).toContain('T1');
+    });
+  });
+
+  describe('close 的分支与不可逆保护', () => {
+    it('主仓不在需求分支（切到了某条车道分支）→ 拒绝回合', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-R1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      git(repo, 'switch', '-q', '-c', 'wt/tmp-elsewhere');
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('车道分支');
+    });
+
+    it('ff 成功后打出不可逆横幅（close 不该串在验证命令后面）', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-R1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('不可逆');
+      expect(git(repo, 'log', '-1', '--format=%s')).toContain('T1');
+    });
+  });
+
+  describe('status', () => {
+    it('列出本 flow 的车道并标出「不是 HEAD 后继」', () => {
+      const { repo, anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      expect(run(anchor, 'open', 'f1', 'R2', '--install', 'true').code).toBe(0);
+      // 主分支前进一步（模拟别的车道已回合）→ 两条车道都不再是 HEAD 的直接后继
+      writeFileSync(join(repo, 'src', 'moved.txt'), 'moved\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'feat(T9): moved');
+      const r = run(anchor, 'status', 'f1');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('R1');
+      expect(r.stdout).toContain('R2');
+      expect(r.stdout).toContain('NO(先 sync)');
+    });
+
+    // 「子代理停没停」不能问它自己：它停住时给主 session 发的通知与正常交付同样是
+    // `completed`，只有正文有差别，而正文被读反过（实测「Waiting for the full web4 test
+    // suite」被读成「它还在跑」，等了 1 小时 07 分）。工作树的物理变化是唯一的客观信号。
+    it('报出每条车道的静默时长（停滞判据，不依赖子代理自我报告）', () => {
+      const { anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      writeFileSync(join(lanes, 'f1-R1', 'src', 'wip.txt'), 'in progress\n');
+      const r = run(anchor, 'status', 'f1');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/静默:\d+分钟/);
+      expect(r.stdout).toContain('静默 ≥30 分钟');   // 判据本身要印在输出里
     });
   });
 

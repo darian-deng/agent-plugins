@@ -266,7 +266,7 @@ async function anchorFlow(
  * tree, `dir` outside the toplevel). Callers fall back to the upward walk, so a
  * null here costs nothing that was working before.
  */
-function mainCheckoutCounterpart(dir: string): string | null {
+function siblingCheckoutAnchors(dir: string): string[] {
   try {
     const out = execFileSync(
       'git',
@@ -274,18 +274,68 @@ function mainCheckoutCounterpart(dir: string): string | null {
       { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }
     );
     const [commonDir, wtRoot] = out.trim().split('\n');
-    if (!commonDir || !wtRoot) return null;
-    const mainRoot = dirname(resolve(commonDir));
+    if (!commonDir || !wtRoot) return [];
     // `realPath`, not `resolve`: git prints real paths, and on macOS every path
     // under `/tmp` or `/var` reaches its target through a symlink. Comparing the
     // raw spellings makes `relative()` answer with a stack of `..` for a directory
     // that is plainly inside the worktree, and the guard below then rejects it.
-    const rel = relative(resolve(wtRoot), realPath(dir));
-    if (rel.startsWith('..')) return null;
-    const counterpart = rel ? join(mainRoot, rel) : mainRoot;
-    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+    const self = realPath(dir);
+    const rel = relative(resolve(wtRoot), self);
+    if (rel.startsWith('..')) return [];
+
+    // Every checkout of this repository, not just the main one. Jumping straight to
+    // `dirname(commonDir)` was wrong whenever the flow's own checkout is ITSELF a
+    // linked worktree (`main` → `W` → ticket tree `T`, the shape you get by running a
+    // flow inside a worktree): `--git-common-dir` names the OUTERMOST checkout, so the
+    // counterpart resolved to `main`, which has a tracked `.ai-flow` but no active
+    // flow — and the caller took that idle verdict as final, returning null. null
+    // fails OPEN (handlePreTool bails before any guard runs), so every subagent in a
+    // ticket tree lost control-plane protection, signal interception and accounting.
+    //
+    // Listing the checkouts finds `W` too. Candidates keep the SAME anchor-relative
+    // path, so this can never resolve a different project's flow — that over-reach is
+    // what the caller's "idle means idle" rule exists to prevent, and it still holds.
+    const roots = execFileSync('git', ['-C', dir, 'worktree', 'list', '--porcelain'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+      .map((l) => l.slice('worktree '.length).trim())
+      .filter(Boolean);
+    // Order by PROXIMITY to `dir`, not "main checkout first". With nested worktrees
+    // (`main` → `W` running the flow → ticket tree `T`) both `main` and `W` hold this
+    // anchor, and both may hold an ACTIVE flow — the repo's own tests cover "each slice
+    // runs its own flow in its own worktree", so that is a supported shape, not a
+    // hypothetical. Taking `main` first would hand `T`'s subagents the wrong flow:
+    // repoRoot, signal path and docs_paths all point at `main`'s flow, and its
+    // `last_session_id` then trips the non-owner read-only guard, refusing every write
+    // with "another session controls flow X" — a fail-CLOSED wrong answer, loud but
+    // pointing the wrong way. `worktree.cjs` puts ticket trees in
+    // `dirname(<W root>)/<repo>.ai-flow-worktrees/`, so `W` wins on shared prefix.
+    // `main` is still included (and wins ties) — it is the overwhelmingly common answer.
+    const mainRoot = dirname(resolve(commonDir));
+    const sharedPrefix = (a: string, b: string): number => {
+      const x = a.split('/'), y = b.split('/');
+      let n = 0;
+      while (n < x.length && n < y.length && x[n] === y[n]) n++;
+      return n;
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)]
+      .sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+
+    const seen = new Set<string>();
+    const out2: string[] = [];
+    for (const root of ordered) {
+      const cand = rel ? join(root, rel) : root;
+      const key = resolve(cand);
+      if (key === self || seen.has(key)) continue;
+      seen.add(key);
+      out2.push(cand);
+    }
+    return out2;
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -306,13 +356,21 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
       // disabling control-plane protection, signal interception and context
       // accounting.
       if (!isInsideLinkedWorktree(dir)) return null;
-      // Ask git for the main checkout's copy of THIS anchor (works wherever the
-      // worktree lives). Its verdict is final in both directions: an idle anchor
-      // over there means idle — resolving the parent project's flow instead is
+      // Ask git for THIS anchor's copy in every other checkout of the repository
+      // (works wherever the worktree lives, and finds an intermediate checkout when
+      // worktrees are nested — see `siblingCheckoutAnchors`). Candidates all share
+      // this anchor's repo-relative path, so none of them can be a different
+      // project's flow. The verdict is final in both directions: no active flow on
+      // any of them means idle, and resolving the PARENT project's flow instead is
       // the very over-reach the check above exists to prevent.
-      const counterpart = mainCheckoutCounterpart(dir);
-      if (counterpart && existsSync(join(counterpart, '.ai-flow'))) {
-        return await anchorFlow(counterpart);
+      const candidates = siblingCheckoutAnchors(dir);
+      if (candidates.length > 0) {
+        for (const cand of candidates) {
+          if (!existsSync(join(cand, '.ai-flow'))) continue;
+          const over = await anchorFlow(cand);
+          if (over) return over;
+        }
+        return null;
       }
       // Could not map back (see `mainCheckoutCounterpart`) — keep walking, which
       // still reaches the anchor for a worktree nested inside the main checkout.

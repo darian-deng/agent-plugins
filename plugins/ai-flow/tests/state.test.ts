@@ -318,6 +318,66 @@ describe('hasActiveFlow', () => {
       execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
     });
 
+    // flow 自己的检出**本身就是一条 linked worktree** 时（main → W 里跑 flow → 从 W 再给
+    // 票开树 T）。`--git-common-dir` 报的是**最外层**的 main，所以原先「映射回主检出」
+    // 一步跳到 main —— 那里有一份被追踪的 `.ai-flow` 却没有 active.json，而空闲判决被当成
+    // 终局，于是返回 null。null 是 fail-OPEN：handlePreTool 直接 bail，票树里子代理的控制面
+    // 保护 / signal 拦截 / context 统计全部消失。开发者真实仓库正是这个拓扑。
+    it('flow 所在检出本身是 linked worktree → 票树里仍解析到它（不被最外层主检出的空闲判决截断）', async () => {
+      const main = makeTmp();
+      gitInit(main);
+      writeFlowAt(main, false);                         // `.ai-flow/<flow>/config.json` 是被追踪的
+      writeFileSync(join(main, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: main });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: main });
+
+      // W：flow 真正跑在这里。active.json 落在被 gitignore 的 state/ 里，所以它只属于 W。
+      const w = join(makeTmp(), 'checkouts', 'w');
+      execFileSync('git', ['worktree', 'add', '-q', w, '-b', 'branch-w'], { cwd: main });
+      // `state/` 被 gitignore → checkout 不会带过来，要自己建。这正是「W 里那份 active.json
+      // 只可能是 W 自己起的」的证明。
+      mkdirSync(join(w, '.ai-flow', 'parent-flow', 'state'), { recursive: true });
+      writeFileSync(
+        join(w, '.ai-flow', 'parent-flow', 'state', 'active.json'),
+        JSON.stringify(makeActiveState({ flow_name: 'parent-flow' }))
+      );
+      expect(existsSync(join(main, '.ai-flow', 'parent-flow', 'state', 'active.json'))).toBe(false);
+
+      // T：从 W 给某票开的树。git 把它登记在 main 的 common dir 下，所以从 T 问
+      // `--git-common-dir` 得到的是 main 而不是 W —— 这正是原先解错的地方。
+      const t = join(makeTmp(), 'lanes', 'f1-R1');
+      execFileSync('git', ['worktree', 'add', '-q', t, '-b', 'wt/f1-R1'], { cwd: w });
+
+      const result = await hasActiveFlow(t);
+      expect(result).not.toBeNull();
+      expect(result!.flowName).toBe('parent-flow');
+      expect(realpathSync(result!.repoRoot)).toBe(realpathSync(w));
+
+      execFileSync('git', ['worktree', 'remove', '--force', t], { cwd: main });
+      execFileSync('git', ['worktree', 'remove', '--force', w], { cwd: main });
+    });
+
+    // 反向：所有检出的同名锚点都空闲时，判决仍是 null。放宽成「继续上溯」会让子项目锚点
+    // 解析到仓库根那个无关的 flow —— 那正是「空闲就是空闲」这条规则要防的越权。
+    it('所有检出的同名锚点都空闲 → 仍返回 null，不上溯到父项目的 flow', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);                       // 仓库根：有 active flow
+      const anchor = join(gitRoot, 'packages', 'app');
+      mkdirSync(anchor, { recursive: true });
+      writeFlowAt(anchor, false);                       // 子项目锚点：空闲
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      const outside = join(makeTmp(), 'lanes', 'f1-R1');
+      execFileSync('git', ['worktree', 'add', '-q', outside, '-b', 'wt/f1-R1'], { cwd: gitRoot });
+      const wtAnchor = join(outside, 'packages', 'app');
+
+      expect(await hasActiveFlow(wtAnchor)).toBeNull();
+      execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
+    });
+
     // worktree 里**自己**起了一个 flow 时，必须解析到它自己那份，不能被「映射回主检出」
     // 抢走。这是另一种并行形态的前提：把一个大需求拆成几块几乎无关联的需求，每块在自己的
     // worktree 里跑一个独立 flow（各有顶层 session），而不是一个 flow 分几条车道。

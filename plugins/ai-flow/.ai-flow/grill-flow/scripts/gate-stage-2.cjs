@@ -5,7 +5,8 @@
 // 只做结构检查（文件存在 + 查看器锚点已注入 + 段落非空 + ticket 格式），不跑测试、不做语义判断。
 'use strict';
 
-const { existsSync, readFileSync } = require('fs');
+const { existsSync, readFileSync, statSync } = require('fs');
+const { execFileSync } = require('child_process');
 const { join } = require('path');
 
 const PASS = 0;
@@ -208,9 +209,30 @@ for (let k = 0; k < idxs.length; k++) {
     // `src/lib`（漏斜杠）会被编译成 `^src/lib$`、匹配零个文件 → 该票所有改动判越界。
     // 判据是「不以 / 结尾、没有通配符、也没有扩展名」——只查「不含 / 」抓不到 `src/lib`
     // 这种真实的漏斜杠写法（它有斜杠），而那正是最常见的一种。
-    const looksLikeDir = items.filter(
-      (s) => !s.endsWith('/') && !/[*?]/.test(s) && !/\.[A-Za-z0-9]+$/.test(s)
-    );
+    // 先问磁盘，问不到才用启发式。只看扩展名会把 `.github/CODEOWNERS`、`Makefile`、
+    // `LICENSE` 这类**无扩展名的真实文件**判成漏斜杠的目录（实测在本仓真实 tickets.md 上
+    // 触发过），而它给的修法是写成 `./CODEOWNERS`——一个为了绕过检查而存在的丑写法。
+    // 反过来，存在且确实是目录的（`src/lib`）现在从「猜」变成「确定」，判得更准。
+    // `Touches` 的基准可能是 flow 锚点也可能是 git 根（跨包票），两个都试。
+    const gitRoot = (() => {
+      try {
+        return execFileSync('git', ['-C', projectRoot, 'rev-parse', '--show-toplevel'], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch { return projectRoot; }
+    })();
+    const onDisk = (rel) => {
+      for (const base of [projectRoot, gitRoot]) {
+        try { return statSync(join(base, rel)); } catch { /* 换下一个基准 */ }
+      }
+      return null;
+    };
+    const looksLikeDir = items.filter((s) => {
+      if (s.endsWith('/') || /[*?]/.test(s)) return false;
+      const st = onDisk(s);
+      if (st) return st.isDirectory();          // 磁盘说了算
+      return !/\.[A-Za-z0-9]+$/.test(s);         // 还不存在（本票将新建）→ 退回启发式
+    });
     if (looksLikeDir.length > 0) {
       err(self + ' 的 "Touches" 有看起来是目录但没有以 `/` 结尾的项: ' + looksLikeDir.join(' ')
         + '\n    怎么改：目录一律写成 `src/hooks/`。漏尾斜杠会被当成一个叫这个名字的文件，'

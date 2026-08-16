@@ -16,6 +16,16 @@ const StageConfigSchema = z.object({
   id: StageIdSchema,
   prompt: z.string().min(1),
   write_scope: z.enum(['unrestricted', 'docs_only']),
+  /**
+   * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
+   *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
+   *  2. Whatever the write scope, these paths stay writable while the session is
+   *     context-blocked — the block stops new work, it must not also block the safe
+   *     exit. A flow whose contract is "everything a later session needs is on disk"
+   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
+   *     leaves this unset gets no such escape and the handoff cannot be written.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   */
   docs_paths: z.array(z.string()).optional(),
   completion: CompletionSchema,
   task_gates: z.array(z.string()).optional(),

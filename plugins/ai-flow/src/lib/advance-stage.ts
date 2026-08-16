@@ -9,7 +9,7 @@ import {
   signalPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
-import { renderPrompt, gateProtocolNote } from './prompt-render.js';
+import { renderPrompt, injectableStagePrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
 
 export interface AdvanceResult {
   additionalContext: string;
@@ -64,21 +64,28 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} → ${next}`);
 
   const nextStageCfg = getStageConfig(config, next);
+  // The host's inline limit applies to the whole `additionalContext`, not to the prompt
+  // alone — so the framing has to exist before the size check, and the check has to know
+  // how much of the budget the framing already spent.
+  const assemble = (body: string) =>
+    `[ai-flow] Stage '${current}' 已完成，进入 '${next}'。\n\n` +
+    `════════════════════════════════\n` +
+    `${body}\n` +
+    `════════════════════════════════\n\n` +
+    `用 1-2 句自然语言告知用户已进入新阶段，然后直接开始工作，不要等待用户回复。`;
   const promptPath = join(repoRoot, '.ai-flow', flowName, nextStageCfg.prompt);
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
-      promptContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
+      // Oversize prompts are NOT injected in truncated form — see `injectableStagePrompt`.
+      promptContent = injectableStagePrompt(
+        renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+        promptPath,
+        assembledOverhead(assemble)
+      );
     } catch { /* non-fatal */ }
   }
   if (nextStageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
 
-  return {
-    additionalContext:
-      `[ai-flow] Stage '${current}' 已完成，进入 '${next}'。\n\n` +
-      `════════════════════════════════\n` +
-      `${promptContent}\n` +
-      `════════════════════════════════\n\n` +
-      `用 1-2 句自然语言告知用户已进入新阶段，然后直接开始工作，不要等待用户回复。`,
-  };
+  return { additionalContext: assemble(promptContent) };
 }

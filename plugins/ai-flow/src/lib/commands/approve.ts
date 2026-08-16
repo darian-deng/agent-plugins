@@ -49,6 +49,7 @@ export async function handleApprove(
   // time in pretool-handler; on failure, refuse approve and hand back the
   // script's own stderr so the developer/AI can fix and re-approve. Stages with
   // no script gate (pure gate / no gate) keep their prior approve behavior.
+  let gateNotes: string | undefined;
   if (stageCfg.completion.script) {
     const flowDir = join(repoRoot, '.ai-flow', flowName);
     const scriptOpts = stageCfg.completion.script.timeout_ms !== undefined
@@ -67,6 +68,8 @@ export async function handleApprove(
       };
     }
     await appendLog(repoRoot, flowName, sessionId, `APPROVE_SCRIPT_OK stage=${state.current_stage}`);
+    // A passing gate can still report assertions it had to skip — carry them out.
+    if (scriptResult.notes) gateNotes = scriptResult.notes;
   }
 
   await appendLog(repoRoot, flowName, sessionId, `APPROVED stage=${state.current_stage}`);
@@ -80,5 +83,9 @@ export async function handleApprove(
     ? `[${flowName}] ✅ 流程已结束`
     : `[${flowName}] ✅ 已进入 ${enteredStage} · 正在读取阶段文档…`;
   const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
-  return { action: 'allow', systemMessage, additionalContext: pathsPreamble + result.additionalContext };
+  return {
+    action: 'allow',
+    systemMessage: gateNotes ? `${gateNotes}\n\n${systemMessage}` : systemMessage,
+    additionalContext: pathsPreamble + result.additionalContext,
+  };
 }

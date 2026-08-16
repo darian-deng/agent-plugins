@@ -129,6 +129,43 @@ describe('handlePreTool — signal interception (done protocol)', () => {
     expect(out?.permissionDecisionReason).toContain('done');
   });
 
+  // 通过的机器门也可能有话要说（它跳过了哪条断言）。runScript 原先在 status===0 时把
+  // stdout/stderr 整段丢弃，于是那些 `⚠` 只在门**因为别的原因失败**时才可见——也就是
+  // 它们最没用的时候。「门看着在把关、实际对这票是空操作」比不设门更危险。
+  it('script passes but writes warnings → ALLOW，告警经 systemMessage 带出', async () => {
+    const repo = createFlowTestRepo('test-flow', SCRIPTED_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'work', base_sha: 'abc',
+    });
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts'), { recursive: true });
+    const sh = join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh');
+    writeFileSync(sh, '#!/bin/sh\necho "⚠ 断言⑦ 整体未生效" >&2\nexit 0\n');
+    chmodSync(sh, 0o755);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+    expect(out?.systemMessage).toContain('断言⑦ 整体未生效');
+  });
+
+  it('script passes 且无输出 → 不制造空的 systemMessage', async () => {
+    const repo = createFlowTestRepo('test-flow', SCRIPTED_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'work', base_sha: 'abc',
+    });
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts'), { recursive: true });
+    const sh = join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'check.sh');
+    writeFileSync(sh, '#!/bin/sh\nexit 0\n');
+    chmodSync(sh, 0o755);
+    const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: 'done' }));
+    expect(out?.permissionDecision).toBe('allow');
+    expect(out?.systemMessage).toBeUndefined();
+  });
+
   it('script passes + gate configured → ALLOW, no gate-token created', async () => {
     const config = {
       schema_version: '1.0' as const,
@@ -590,6 +627,119 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
       expect(out?.permissionDecision ?? 'allow').toBe('allow');
     });
 
+    // 下面三条是实测被拒过的真实调度命令（一次运行里拒了三回）：豁免原先只认「整段就是一条
+    // node 调用」，循环体、变量赋值这些正常 shell 形态一律落空，而拒绝文案讲的是读写控制面，
+    // 与真实原因（命令形状）无关——于是重写命令而不是重写形状，再撞一次。
+    it('for 循环体里执行（`do node …`）→ 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(
+          repo.repoRoot,
+          `for L in R1 R2 R3; do node ${script(repo.repoRoot)} sync f1 $L; done`
+        )
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('把脚本路径先赋给变量再执行 → 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `S=${script(repo.repoRoot)}; node $S sync f1 R2; node $S sync f1 R3`)
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('前置环境变量 + 执行 → 放行', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `CI=1 node ${script(repo.repoRoot)} status f1`)
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    // 放宽形状不能变成绕过 signal 的路子——state 片段永远不参与豁免。
+    it('把 signal 路径赋给变量 → 仍 DENY（否则后续 `> $S` 那段不含片段、会整条溜过去）', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `S=${join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal')}; echo done > $S`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('循环体里写 signal → 仍 DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(
+          repo.repoRoot,
+          `for f in a; do echo done > ${join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal')}; done`
+        )
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    // 放宽形状时最容易开出的洞：shell 里「赋值不执行任何东西」是**假的**——
+    // `X="$(cmd)"` 会跑 cmd，前置赋值 `A="$(cmd)" node …` 同样会。
+    it('赋值值里藏命令替换改脚本 → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `X="$(cp /tmp/evil.cjs ${script(repo.repoRoot)})"`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('反引号形式的命令替换 → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, 'X=`cp /tmp/evil.cjs ' + script(repo.repoRoot) + '`')
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('前置赋值里藏命令替换 + 合法执行 → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `A="$(rm -rf ${join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages')})" node ${script(repo.repoRoot)} run`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    // stage 提示词与 config.json：Write/Edit 早就拦，Bash 这一路原先完全没防，于是
+    // 「flow 期间 stage 与机器门只读」只在两条路径里的一条上成立。
+    it('用 Bash 覆盖 stage 文件 → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `cp /tmp/new.md ${join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'work.md')}`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('用 Bash sed 改 config.json → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `sed -i '' 's/a/b/' ${join(repo.repoRoot, '.ai-flow', 'test-flow', 'config.json')}`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('git checkout 覆盖整个 stages 目录 → DENY', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `git checkout HEAD~1 -- .ai-flow/test-flow/stages/`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
     // 以下每一条都必须仍然 DENY —— 豁免只开「执行」这一个形态。
     it('读脚本内容 → 仍 DENY', async () => {
       const repo = makeRepo();
@@ -770,6 +920,44 @@ describe('handlePreTool — context block enforcement', () => {
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', { file_path: '/tmp/foo.ts', old_string: 'a', new_string: 'b' }));
     expect(out?.permissionDecision).toBe('deny');
+  });
+
+  // The block stops the session producing new work; it must not also block the safe
+  // exit. Observed: a session crossed the threshold with a subagent in flight, could no
+  // longer record anything, and `/clear` then lost that subagent's report.
+  it('context_blocked=true + write to the flow\'s own docs → 不被 block 拦（交接必须写得下去）', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'review', base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
+      file_path: join(repo.repoRoot, 'docs', 'test-flow', 'test-flow-abc', 'tickets.md'),
+      content: '交接块',
+    }));
+    expect(out?.permissionDecisionReason ?? '').not.toMatch(/Context blocked/);
+  });
+
+  it('context_blocked=true + write to codebase（同一 stage）→ 仍 DENY，且文案讲清 /clear 的真实代价', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow',
+      requirement: 'test', current_stage: 'review', base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
+      file_path: join(repo.repoRoot, 'src', 'foo.ts'), content: 'x',
+    }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toContain('Context blocked');
+    // 旧文案说 "progress won't be lost" —— 在有在飞子代理时那是假的。
+    expect(out?.permissionDecisionReason).not.toMatch(/won't be lost/);
+    expect(out?.permissionDecisionReason).toMatch(/in-flight subagent/i);
   });
 
   it('context_blocked=true + Read tool → ALLOW (read tools not blocked)', async () => {

@@ -19,6 +19,67 @@ import { join } from 'path';
  * render itself is NOT a pure pass-through: every rendered prompt also gets
  * `writtenDocLengthNote()` appended (see that function for why it lives here).
  */
+/**
+ * How many CHARACTERS a hook's `additionalContext` may carry before the host
+ * stops inlining it, writes it to a file, and hands the model a ~2,000-character
+ * preview plus a path to that file.
+ *
+ * Measured, not guessed: across 887 injections in this machine's transcripts the
+ * largest that stayed inline was 9,893 characters and the smallest that spilled
+ * was 10,003 — so the line is 10,000, and it counts CHARACTERS, not bytes. That
+ * distinction matters for Chinese prompts: one character is three bytes, so a
+ * byte-based budget understates the overflow by ~1.9x and would set the wrong
+ * target size.
+ *
+ * Why we care: spilling is silent. The model gets the first ~10% of the stage
+ * prompt and nothing tells it the rest exists — the path inside the preview
+ * points at the HOST's copy of the injection, not at the stage file, and the
+ * engine never says "there is more". Observed: a stage prompt at 2.1x this limit
+ * delivered 3 of its 23 sections, and the ones that fell off the edge carried the
+ * rules whose violation is silent.
+ */
+export const INLINE_INJECTION_BUDGET = 10_000;
+
+/**
+ * Decide what actually gets injected for a stage prompt.
+ *
+ * Under budget -> the rendered prompt, as before.
+ * Over budget -> NOT a truncated prompt. A partial prompt is worse than none: the
+ * model cannot tell it is partial and will act on it, which is exactly the failure
+ * this replaces. It gets the reason and an order to read the real file instead.
+ * Reading the CURRENT stage's own prompt is allowed by the stage-ordering guard
+ * (that guard only denies stages AHEAD of the current one), so this is executable.
+ */
+/**
+ * `overhead` is everything the caller will wrap around this prompt before handing it
+ * to the host: the `[ai-flow:paths]` preamble plus the framing lines. It is NOT
+ * optional bookkeeping — the host's limit applies to the ASSEMBLED `additionalContext`,
+ * so checking `rendered` alone under-measures by ~400 characters and lets a prompt
+ * that will actually spill sail through as "inline". Callers must pass what they add;
+ * `assembledOverhead()` computes it from the caller's own template so the two cannot
+ * drift apart.
+ */
+export function injectableStagePrompt(rendered: string, promptPath: string, overhead = 0): string {
+  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  return (
+    `⛔ 本 stage 的提示词是 ${rendered.length} 字符，超过宿主注入能内联携带的上限（${INLINE_INJECTION_BUDGET} 字符），` +
+    `**因此它没有随这次注入送到你手上**。\n\n` +
+    `**现在立刻用 Read 工具读完整提示词，读完再开始任何动作：**\n${promptPath}\n\n` +
+    `⚠️ 不要凭这段话推测流程该怎么走——你手上现在没有流程，只有这条指路。` +
+    `（宿主可能另外给你一段预览和一个 \`tool-results/…\` 路径，那是它自己落盘的副本；读上面那个路径。）`
+  );
+}
+
+/**
+ * Length of everything a caller wraps around the stage prompt, measured by running the
+ * caller's own assembly with an empty body. Deriving it instead of hardcoding a number
+ * is the point: the preamble grows with the project's path depth, and the framing text
+ * changes whenever someone edits these messages.
+ */
+export function assembledOverhead(assemble: (body: string) => string): number {
+  return assemble('').length;
+}
+
 export function renderPrompt(content: string, repoRoot: string, flowName: string): string {
   const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const substituted = content

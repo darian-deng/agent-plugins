@@ -58,6 +58,94 @@ interface FlowInfo {
   description: string;
 }
 
+/**
+ * Entries inside an installed flow directory that the ENGINE owns, not the template.
+ *
+ * The template ships none of these — they only exist once a flow has run. They are
+ * also gitignored (`**‍/.ai-flow/**‍/state/`), so deleting one is unrecoverable: it
+ * takes `active.json` (the whole control plane: which stage the flow is on, the diff
+ * bases, the owning session), plus `signal`, `mark-base` and `transitions.log`. A
+ * reinstall that removes them does not "reset" a running flow, it destroys it.
+ */
+const ENGINE_OWNED_ENTRIES = new Set(['state']);
+
+/**
+ * Delete the template-owned contents of `dest`, leaving engine-owned entries alone.
+ *
+ * `--force` needs a wipe because `cpSync` merges over the tree: files that the
+ * template dropped (renamed stages, deleted scripts, `preflight.sh`→`.cjs`) would
+ * otherwise linger and keep being read. That reason only ever applied to files the
+ * template owns, so the wipe is scoped to those.
+ */
+export function wipeTemplateEntries(dest: string): void {
+  for (const entry of readdirSync(dest)) {
+    if (ENGINE_OWNED_ENTRIES.has(entry)) continue;
+    rmSync(join(dest, entry), { recursive: true, force: true });
+  }
+}
+
+interface LiveFlow {
+  flow_id: string;
+  current_stage: string;
+}
+
+/** The flow instance currently running out of `dest`, if any. */
+function liveFlowAt(dest: string): LiveFlow | null {
+  const p = join(dest, 'state', 'active.json');
+  if (!existsSync(p)) return null;
+  try {
+    const s = JSON.parse(readFileSync(p, 'utf-8')) as Partial<LiveFlow>;
+    if (!s.current_stage) return null;
+    return { flow_id: String(s.flow_id ?? '(未知)'), current_stage: s.current_stage };
+  } catch {
+    return null;
+  }
+}
+
+/** Stage ids declared by a flow template's config.json. */
+function stageIdsOf(flowDir: string): string[] {
+  try {
+    const cfg = JSON.parse(readFileSync(join(flowDir, 'config.json'), 'utf-8')) as { stages?: Array<{ id?: string }> };
+    return (cfg.stages ?? []).map((s) => String(s.id ?? '')).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export type ForceReinstallCheck =
+  | { ok: true; live: LiveFlow | null }
+  | { ok: false; reason: string };
+
+/**
+ * Decide whether reinstalling template `src` over an existing install at `dest` is safe.
+ * Pure — reads only, writes nothing, so it can run before the wipe.
+ *
+ * Reinstalling over a LIVE flow is a supported operation: it is how a fix to a stage
+ * prompt reaches a flow that is already days into a run. The one case it must refuse is
+ * an incoming config that no longer declares the stage the flow is sitting on —
+ * `getStageConfig` throws on an unknown stage id and sits on the PreTool/PostTool path,
+ * so proceeding does not degrade the flow, it bricks it on the flow's very next tool
+ * call. That has to be caught before the wipe, because `state/` is gitignored: once
+ * `active.json` is gone there is nothing left to point at the right stage.
+ */
+export function checkForceReinstall(src: string, dest: string, flowName: string): ForceReinstallCheck {
+  const live = liveFlowAt(dest);
+  if (!live) return { ok: true, live: null };
+  const incoming = stageIdsOf(src);
+  // An unreadable/stage-less incoming config is a separate problem (install() already
+  // requires config.json to exist); don't turn it into a bogus stage-mismatch refusal.
+  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { ok: true, live };
+  return {
+    ok: false,
+    reason:
+      `拒绝覆盖:这里有一个正在跑的 flow（${live.flow_id}），它停在 stage '${live.current_stage}'，\n` +
+      `而新模板的 config.json 里没有这个 stage（新的是:${incoming.join(', ')}）。\n` +
+      `直接覆盖会让它在下一次工具调用时抛异常、无法继续,而且 state/ 不在 git 里、救不回来。\n` +
+      `先选一条:① 等它跑完再升级;② \`${flowName} abort\` 存快照后再升级;` +
+      `③ 手工把 state/active.json 的 current_stage 改成新配置里的对应 stage id,再重跑本命令。`,
+  };
+}
+
 export function builtinFlows(): FlowInfo[] {
   if (!existsSync(PLUGIN_FLOWS_DIR)) return [];
   const out: FlowInfo[] = [];
@@ -195,10 +283,21 @@ function install(flow: string, dir: string, force: boolean) {
     lines.push('');
   }
 
-  // Copy template. On --force, wipe the existing dest first so files removed
-  // from the template (renamed stages, deleted scripts, preflight.sh→.cjs) don't
-  // linger — cpSync merges over the tree and would otherwise leave stale files.
-  if (force && existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+  // Copy template. On --force, clear the template-owned entries first so files
+  // removed from the template (renamed stages, deleted scripts, preflight.sh→.cjs)
+  // don't linger — cpSync merges over the tree and would otherwise leave stale files.
+  // `state/` is deliberately NOT cleared: see ENGINE_OWNED_ENTRIES.
+  if (force && existsSync(dest)) {
+    const check = checkForceReinstall(src, dest, flow);
+    if (!check.ok) fail(`${check.reason}\n位置:${dest}`);
+    if (check.live) {
+      lines.push(`⚠️  ${dest} 有一个正在跑的 flow:${check.live.flow_id}（当前 stage:${check.live.current_stage}）`);
+      lines.push(`    覆盖会**立即换掉它后续要用的 stage 提示词 / references / scripts**;`);
+      lines.push(`    运行状态(state/)原样保留,flow 不会中断。若该 session 还开着,\`/reload-plugins\` 后继续即可。`);
+      lines.push('');
+    }
+    wipeTemplateEntries(dest);
+  }
   mkdirSync(dest, { recursive: true });
   cpSync(src, dest, { recursive: true });
 

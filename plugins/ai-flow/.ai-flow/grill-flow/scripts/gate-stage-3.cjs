@@ -134,7 +134,7 @@ if (done.length === 0) {
 // 不用全文 `text.match(/qc:done/g)` 计数：tickets.md 是 AI 写的，
 // 「每票完成后加 qc:done」这类图例/说明文字会把计数灌水，让门被样板文字满足。
 // 块 = 该 ticket 级行本身 + 其后到「下一个 ticket 级行 / 下一个 markdown 标题」之间的
-// **缩进行**（per-ticket-review 步骤 9：marker 写在该条的行上或其子标记里）。
+// **缩进行**（stage-3 第 6 步的逐票记账：marker 写在该条的行上或其子标记里）。
 // 顶格的非 ticket 行（散文说明、`- 说明：…` 列表）不算进任何 ticket 的块。
 // 同一趟顺便收集该票的 `Touches:` 与 `batch:`（块边界定义与 qc:done 完全一致，
 // 单独再走一遍只会让两处边界逻辑漂移）。两者都可缺省：
@@ -172,7 +172,7 @@ if (missingQc.length > 0) {
 // 只读 subject（`%s` 首行），不读 body。理由：per-ticket-review「pre-commit hook 冲突」
 // 协议要求把跳过原因写进 message，字面例子就是「consumer 修复落在 T<n>」——这是系统性地
 // 往 message 里种前向引用；若整段 message 都算数，T5 的一句提及就能替尚未存在的 T7 顶包。
-// 协议已同步收紧到 subject（per-ticket-review 步骤 7 / stage-3 第 5 步），本门与之一致：
+// 协议已同步收紧到 subject（quality-chain.md 第 5 步 / stage-3 第 5 步），本门与之一致：
 // 宁可让漏写 subject 的 commit 被拦下（AI 可 `git commit --amend` 秒修），
 // 也不放行"根本没这笔 commit"——stage-3 无人工 gate，这道门是唯一兜底。
 // `--no-merges`：merge commit 不算证据。分支名带票号时（`wt/T2`），git 自动生成的
@@ -448,7 +448,16 @@ for (const d of done) {
     process.stderr.write('⚠  ' + d.num + ' 没有可解析的 Touches 声明（该票行内或其缩进子项），已跳过断言⑥\n');
     continue;
   }
-  if (d.touches.some((t) => /^(none|无|-)$/i.test(t))) continue;
+  // `Touches: none` 按 gate-stage-2 的定义是「预估不了写集，该票只能串行执行」——不是
+  // 「不碰任何文件」，所以跳过⑥ 是设计如此，不能按空集核（那会把设计如此的票判成越界）。
+  // 但跳过必须可见：车道模式下⑦ 整体不生效，⑥ 是唯一的写集防线，而一张 `none` 票在这条
+  // 防线上就是个洞。与下面 `touches === null` 那条同一个原则——门看着在把关、实际对这票
+  // 是空操作，是比不设门更危险的状态。
+  if (d.touches.some((t) => /^(none|无|-|—)$/i.test(t))) {   // 全角破折号：与 schedule.cjs 的判据对齐，否则 `Touches: —` 会被当成真 glob、该票全部文件判越界
+    process.stderr.write('⚠  ' + d.num + ' 的 Touches 是 none（预估不了写集、只能串行），'
+      + '断言⑥ 对它是空操作——它改了什么没有任何机器检查\n');
+    continue;
+  }
   const res = d.touches.map(globToRe);
   const stray = files.filter((f) => !res.some((r) => r.test(f)));
   if (stray.length > 0) touchViolations.push({ num: d.num, stray, declared: d.touches });
@@ -474,6 +483,19 @@ for (const d of done) {
   if (!batches.has(d.batch)) batches.set(d.batch, []);
   batches.get(d.batch).push(d.num);
 }
+// 不静默（与⑥ 跳过时同一个原则）：车道模式记的是 `lane:` 不是 `batch:`，于是**全部**票
+// 都不参与⑦，而门照样全绿——实测一次 51 票的 flow 里 `batch:` 只出现 1 次，⑦ 从头到尾
+// 等于没开。stage-3 的文档承认了这条代价并指定了替代保护（tickets.md 末尾那份「已知会撞
+// 的文件」清单交给 stage-4 逐行人查），但门自己不说，读输出的人无从知道保护换成了人工。
+// 按「没参与⑦ 的票数」判，不按 batch 数——`batches.size === 0` 漏掉最常见的形态：
+// 混合跑法下只要有一张票带了 `batch:`，size 就是 1，而单成员 batch 一对都比不出来，
+// ⑦ 对其余 N-1 张仍然等于没开。实测一次 51 票的 flow 里 `batch:` 只出现 1 次。
+const noBatch = done.filter((d) => !d.batch).length;
+if (noBatch > 0) {
+  process.stderr.write('⚠  ' + done.length + ' 张已勾票中有 ' + noBatch + ' 张没有 batch: 标记'
+    + '（车道模式记的是 lane:），断言⑦ 对它们不生效——这些票之间「改同一文件的不同区段」'
+    + '没有任何机器保护，须按 tickets.md 的「已知碰撞面」清单在 stage-4 组装审逐行人工复核\n');
+}
 const overlaps = [];
 for (const [b, nums] of batches) {
   for (let i = 0; i < nums.length; i++) {
@@ -489,7 +511,9 @@ if (overlaps.length > 0) {
     err('batch ' + o.b + ' 内 ' + o.a + ' 与 ' + o.c + ' 改了相同文件（并行准入条件是写集不相交）:\n'
       + '      ' + o.shared.join(' ')
       + '\n    怎么改：这两票本就该串行（给后者加 `Blocked by: ' + o.a + '`）或合并成一票；'
-      + '若已经这样跑完了，本轮把它们的 batch 标记去掉并在 stage-4 组装审时重点看这几个文件的交界面，'
+      + '⛔ 若已经这样跑完了：**不要为了过门而删掉 `batch:` 标记**——`batch:` 是本条检查唯一的触发条件，'
+      + '删掉等于把并行安全的唯一机器依据关掉、门直接变绿。正确做法是给后归并那票补 `Blocked by`、把它移出本批（改成单独一批），'
+      + '并在 stage-4 组装审时重点看这几个文件的交界面，'
       + '下轮切片时把耦合切进同一票。');
   }
   process.exit(FAIL);

@@ -3,6 +3,15 @@ import { spawnSync } from 'child_process';
 export interface ScriptResult {
   ok: boolean;
   reason: string;
+  /**
+   * Output a PASSING script still wants a human to see. Gate scripts write
+   * `⚠ …` lines for assertions they had to skip — "the gate looks like it is
+   * checking, but for this ticket it is a no-op" is more dangerous than having
+   * no gate at all, so those lines must survive a green run. Dropping every
+   * byte on `status === 0` (the previous behaviour) made them visible only when
+   * the gate failed for some OTHER reason, i.e. exactly when they don't matter.
+   */
+  notes?: string;
 }
 
 export interface RunScriptOptions {
@@ -40,5 +49,6 @@ export async function runScript(
     return { ok: false, reason: output || `Script exited with code ${result.status ?? 'unknown'}` };
   }
 
-  return { ok: true, reason: '' };
+  const notes = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return { ok: true, reason: '', ...(notes && { notes }) };
 }

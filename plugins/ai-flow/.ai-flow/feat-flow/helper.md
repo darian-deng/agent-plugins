@@ -22,6 +22,7 @@
 | **知识 context 归置** | 命中以下 4 类才升 context 层：缘由类（非显然选择或绕过更自然做法）、否定类（验证某方案不可行）、约定类（不确定是否已记录的命名/架构惯例）、边界类（依赖外部条件、条件变化会静默失效）——各类按 ADR / rules / CLAUDE.md / skill 路由，同时命中时多者均记 |
 | **持久产物自包含** | 代码注释 / 对外 commit message / 写入 context 层的知识（CLAUDE.md / rules / ADR）面向没有本次 session、也不翻 docs/feat-flows/ 的未来读者，**不得引用 flow 内部临时指代**（`Task N` / `U<k>` / `Phase X` / 「见上文」/ `design.md D-xx` / ADR 编号裸引用 等）——要表达就展开成实质内容。flow 内归档（task-reports.md / 开发者汇总表）不受限。判据与清理统一在 ai-flow 内置 `comment` skill（stage-4 写时守 + stage-5 收尾专职清理 pass；机制见 skill、取最新） |
 | **从零自建基建** | 首次跑就建知识基础设施（docs/adr/、CLAUDE.md），不等开发者手动建 |
+| **stage 提示词有硬预算：渲染后 ≤ 10,000 字符** | 宿主内联注入的上限（按**字符**不按字节，实测夹逼出来的，见 `src/lib/prompt-render.ts` 的 `INLINE_INJECTION_BUDGET`）。超了宿主就落盘、只回注约 2,000 字符预览，而**没有任何东西告诉模型「还有 90% 没给你」**——掉在边缘之外的恰好是那些「违反了也不会有东西变红」的规则。feat-flow 的 stage-3/4/5 曾长期超限（1.3×–1.6×，实测溢出 59 次），现已拆成「常驻页 + 按触发事件分的 references」。**分页原则**：常驻页只留主循环 + 静默红线，其余按**可观察的触发事件**下放，页首「岔路 → 先读哪份」路由表必须整个落在前 2,000 字符内。⛔ **红线不许往 references 搬**。预算、路由可达性、路由表位置、红线清单、全 flow 文档与脚本的断链，全部由 `tests/stage-prompt-budget.test.ts` + `tests/flow-doc-integrity.test.ts` 机器执行 |
 | **缺陷右移到最早可捕获点** | 每类缺陷在信息最早齐备的 stage 抓：需求理解→stage-1，架构/复用→stage-2，局部 bug→stage-4 每 task，组装级（跨 task 一致/集成/需求闭环/整体安全）→stage-5。同一缺陷不在多 stage 重复地毯审 |
 | **3 轮验证** | 派发+综合处理记为轮 1，阻塞项修复后由独立 reviewer 复核轮 2、轮 3（硬上限 3 轮），分歧上报开发者——既防模型幻觉（独立复核把失败率 5% 压到 5%×5%）也避免无限循环 |
 | **前置产物修订** | 中后期 stage 发现「前面已对齐的东西要改」时（开发者异议 或 AI 自查），按 L1（abort）/ L2（回改 + 下游兜底）/ L3（inline）分级，并评估对**全部**上游产物的影响，禁止 AI 自判 L3 后默默改；回改一律覆盖为当前态，产物正文不留「原本…改成…」演化叙事（审计交给 git，详见 `references/revision-protocol.md`） |

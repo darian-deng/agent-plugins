@@ -17,7 +17,7 @@ import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from './prompt-render.js';
+import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote } from './prompt-render.js';
 
 
 export async function handleSessionStart(
@@ -163,10 +163,26 @@ export async function handleSessionStart(
   await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
 
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+  // Same reason as in advance-stage: the host's inline limit applies to the assembled
+  // `additionalContext` (preamble + framing + prompt), so the size check must see all of it.
+  const assemble = (body: string) => pathsPreamble + [
+    `[ai-flow] 流程 '${flowName}' 恢复中，当前处于 '${state.current_stage}'。`,
+    ``,
+    `════════════════════════════════`,
+    body,
+    `════════════════════════════════`,
+    ``,
+    `阶段完成后，将 'done' 写入 signal 文件触发推进（引擎自动计算下一步）。`,
+  ].join('\n');
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
-      promptContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
+      // Oversize prompts are NOT injected in truncated form — see `injectableStagePrompt`.
+      promptContent = injectableStagePrompt(
+        renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+        promptPath,
+        assembledOverhead(assemble)
+      );
     } catch { /* non-fatal */ }
   }
   if (stageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
@@ -179,17 +195,7 @@ export async function handleSessionStart(
     recovered: true,
   });
 
-  const lines: string[] = [
-    `[ai-flow] 流程 '${flowName}' 恢复中，当前处于 '${state.current_stage}'。`,
-    ``,
-    `════════════════════════════════`,
-    promptContent,
-    `════════════════════════════════`,
-    ``,
-    `阶段完成后，将 'done' 写入 signal 文件触发推进（引擎自动计算下一步）。`,
-  ];
-
-  return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
+  return { additionalContext: assemble(promptContent), systemMessage: statusLine };
   } catch (e) {
     try {
       await appendLog(repoRoot, flowName, session_id, `ERROR session: ${truncateError(e)}`);

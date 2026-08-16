@@ -129,6 +129,52 @@ function groups() {
 }
 
 const { source, groups: gs } = groups();
+
+// ── 走 `lane:` 分支时校验它自己的前提 ──
+// `roundsLanes` 在分量 ≤ K 时直接返回「最大车道的票数」，隐含「每轮每条车道各推进一票、
+// 零停等」。这个前提只有分组是**连通分量**时才由构造成立（跨分量按定义写集不相交）。
+// `lane:` 来自 stage-2 的模块划分，跨车道写集相交是常态——那些票不能同批，于是车道会
+// 停等，而脚本把停等当零。实测一次 51 票的 flow：4 组跨车道相交、造成约 173 分钟停等，
+// 而脚本报的是「4 条车道 15 轮」。不静默：报不出准确轮数没关系，但不能假装那部分不存在。
+if (source.startsWith('tickets.md')) {
+  const laneOf = new Map();
+  for (const [t, v] of tk) laneOf.set(t, v.lane);
+  const pairs = [];
+  const all = [...tk.keys()];
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j];
+      if (laneOf.get(a) === laneOf.get(b)) continue;          // 同车道串行做，相交是正常的
+      if (overlap(tk.get(a).touches, tk.get(b).touches)) pairs.push([a, b]);
+    }
+  }
+  // 没有 `Touches` 的票 `overlap([], x)` 恒 false，会被当成与谁都不相交而静默漏过。
+  // stage-2 的门强制每票有 Touches，但**执行期插的票不过那道门**——而本 flow 的背景正是
+  // 一次 47→52 张票的运行。
+  const noTouches = [...tk.entries()].filter(([, v]) => !v.touches || v.touches.length === 0).map(([t]) => t);
+  if (noTouches.length > 0) {
+    say(`\n⚠  这些票没有可解析的 Touches，下面的相交计算对它们是盲的（当成与谁都不相交）：`);
+    say('   ' + noTouches.join(' ') + '  ← 执行期插的票容易漏，补上再重跑');
+  }
+  if (pairs.length > 0) {
+    // 「跨车道票」：与最多条别的车道相交的那些。它们一开工就挡住别的车道，应当排在
+    // 各车道同时空闲的时刻单独跑，而不是在别的车道正跑时插进来。
+    const spread = new Map();
+    for (const [a, b] of pairs) {
+      if (!spread.has(a)) spread.set(a, new Set());
+      if (!spread.has(b)) spread.set(b, new Set());
+      spread.get(a).add(laneOf.get(b));
+      spread.get(b).add(laneOf.get(a));
+    }
+    const ranked = [...spread.entries()].sort((x, y) => y[1].size - x[1].size).slice(0, 5);
+    say(`\n⚠  分组来自 tickets.md 的 lane: 字段，但**跨车道写集相交 ${pairs.length} 对**——`);
+    say(`   下面的「一组一车道 N 轮」建立在「每轮各车道各推进一票、零停等」之上，这个前提`);
+    say(`   对相交的那些票不成立：它们不能同批，实际轮数会更高。相交对（最多列 8 对）：`);
+    say('   ' + pairs.slice(0, 8).map(([a, b]) => `${a}×${b}`).join(' ') + (pairs.length > 8 ? ' …' : ''));
+    say(`   跨车道票（开工即挡住别的车道，应排在各车道同时空闲时单独跑）：`);
+    for (const [t, lanes] of ranked) say(`     ${t}（${laneOf.get(t)}）与 ${[...lanes].sort().join('、')} 相交`);
+  }
+}
 const parts = [...gs.entries()].map(([k, v]) => ({ name: k, n: v.length })).sort((a, b) => b.n - a.n);
 
 // 车道模式在「K 条车道」下的轮数。两种模式必须在**同一并发预算**下比：一票一树同时跑
@@ -174,8 +220,8 @@ if (a === null) {
   say('结论：一票一树算不出轮数（依赖可能成环），先修 tickets.md 的 Blocked by。');
 } else if (b !== null && b < a) {
   say(`结论：**一组一车道**，${cap} 条车道 ${b} 轮 < 一票一树 ${a} 轮。`);
-  say(`分组照上面那 ${parts.length} 个分量走（多于车道数时按「大分量优先进最空车道」合并），落进每票的 \`lane:\`。`);
-  say(`代价照 stage-3「执行单位」那节的三条：机器门⑦ 不生效、必须按轮推进、车道里依赖会漂移。`);
+  say(`分组照上面那 ${parts.length} 个分量走（多于车道数时按「大分量优先进最空车道」装箱，与本脚本算轮数用的是同一套），落进每票的 \`lane:\`。`);
+  say(`⛔ 开跑前先读 references/lane-mode.md：三条代价（机器门⑦ 不生效 → 必须自己记 \`## 已知碰撞面\`；收口测试按轮且有硬上限 → 必须落 \`## 收口记录\`；长驻树的两类假红）里有两条漏做不会有任何东西变红。`);
 } else if (b !== null && b > a) {
   say(`结论：**一票一树**（${a} 轮 < 一组一车道 ${b} 轮），而且机器保护更强（多一条机器门⑦）。`);
 } else {

@@ -33,18 +33,21 @@
       "id": "stage-4",
       "prompt": "stages/stage-4.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/feat-flows/"],
       "completion": {}
     },
     {
       "id": "stage-5",
       "prompt": "stages/stage-5.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/feat-flows/"],
       "completion": { "gate": true }
     },
     {
       "id": "stage-6",
       "prompt": "stages/stage-6.md",
       "write_scope": "unrestricted",
+      "docs_paths": ["docs/feat-flows/"],
       "completion": { "gate": true }
     }
   ]
