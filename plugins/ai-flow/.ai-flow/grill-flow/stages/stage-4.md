@@ -36,7 +36,7 @@
 
 **squash 前工作树 scope 核对**（`git add -A` 之前必做，防 monorepo 里把跨子项目 stray 改动一并吞进 squash）：逐条核对 `git status --porcelain`，只有落在**本 flow 范围**内的改动才纳入 squash。
 
-**万一 /clear 落在「reset 已跑、范围还没写进 review.md」的窗口里**：别凭工作区现状硬划范围——那等于把 stray 也算进来。本 flow 范围可以从 tickets.md **重新算出来**：已勾票的 `Touches` 并集（机器门⑥ 已逐票验过「实际改动 ⊆ 声明」，所以这个并集必然覆盖全部真实改动；它偏宽，只会少抓几个边缘 stray，不会误伤本 flow 的改动）。要更精确就 `git reflog` 找回 reset 前的那个 HEAD，再 `git diff --name-only <base>..<那个 sha>`。本 flow 范围 = reset 前记下的代码改动范围 ∪ `docs/grill-flows/**`（记账 tracking：candidates.md、tickets.md 的 `qc:done` / `[x]`——属本 flow、**必须纳入** squash，别把它们排除掉，收尾吸收记账靠的就是它们）。落在范围外的**跨子项目 stray 代码改动**（本 flow 未触及、其他子项目的改动）→ **不 `git add` 进 squash**，停下问开发者如何处理，别一把 `git add -A` 吞进去。
+**万一 /clear 落在「reset 已跑、范围还没写进 review.md」的窗口里**：别凭工作区现状硬划范围——那等于把 stray 也算进来。本 flow 范围可以从 tickets.md **重新算出来**：已勾票的 `Touches` 并集（机器门⑥ 已逐票验过「实际改动 ⊆ 声明」，所以这个并集必然覆盖全部真实改动；它偏宽，只会少抓几个边缘 stray，不会误伤本 flow 的改动）。要更精确就 `git reflog` 找回 reset 前的那个 HEAD，再 `git diff --name-only <base>..<那个 sha>`。本 flow 范围 = reset 前记下的代码改动范围 ∪ `docs/grill-flows/**`（记账 tracking：candidates.md、tickets.md 的 `qc:done` / `[x]`——属本 flow、**必须纳入** squash，别把它们排除掉，收尾吸收记账靠的就是它们）∪ `.ai-flow/**`（flow 定义；**运行中升级过插件就会有它**，`close` 在 stage-3 已按同一口径豁免过，它不能单独 commit——机器门③ 要求每笔 commit 都归属某一票——所以只能在这里被吸收，**同样必须纳入**）。落在范围外的**跨子项目 stray 代码改动**（本 flow 未触及、其他子项目的改动）→ **不 `git add` 进 squash**，停下问开发者如何处理，别一把 `git add -A` 吞进去。
 
 **squash commit 撞 pre-commit hook**：按 `per-ticket-review.md` 的「领域事实：预期的中间不可编译态」处理——不默认 `--no-verify` 裸奔。squash 是环节 A/B/人审均已过后的**最终态、应干净**：失败落在上面 scope 核对判定的本 flow 范围内 → 修代码、不跳过；失败落在 flow 范围外的其他子项目 stray 上（依据即 scope 核对结论）→ 才用 `--no-verify` 并在 message 注明跳过的 hook 及原因。
 

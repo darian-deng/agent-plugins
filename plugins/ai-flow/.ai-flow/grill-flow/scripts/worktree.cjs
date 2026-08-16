@@ -563,16 +563,27 @@ if (cmd === 'close') {
   // `?? plugins/ai-flow/docs/grill-flows/…`，写死 `docs/grill-flows/` 会把它判成 stray，
   // 于是**每一票的 close 都被拒**，而报错说的是"子代理写错了地方"——和真实原因无关。
   const prefix = anchorPrefix();
-  const bookkeeping = (prefix ? prefix + '/' : '') + 'docs/grill-flows/';
+  // 两类改动在 stage-3 期间属于常态、豁免：
+  //   `docs/grill-flows/` — 逐票记账（qc:done / [x] / candidates.md）；
+  //   `.ai-flow/`         — flow 定义本身。**运行中升级插件就会产生它**，而那是本 flow
+  //                          刻意支持的动作（跑中发现提示词有缺陷，改完立刻生效）。它不能
+  //                          单独 commit：机器门③ 要求区间内每笔 commit 都归属某一票，
+  //                          一笔「升级 flow 定义」的提交会直接 fail 掉整道门。留在工作树里
+  //                          由 stage-4 环节 C 的 squash 一并吸收，和记账走同一条路。
+  //                          （`state/` 被 gitignore，本来就不会出现在 status 里。）
+  const exempt = [
+    (prefix ? prefix + '/' : '') + 'docs/grill-flows/',
+    (prefix ? prefix + '/' : '') + '.ai-flow/',
+  ];
   const mainSt = gitQuiet(['status', '--porcelain', '-uall']);
   if (!mainSt.ok) die('无法读取主工作树状态，拒绝回合:\n' + mainSt.out);
   const stray = mainSt.out.split('\n')
     .filter((l) => l.trim().length > 0)
-    .filter((l) => !porcelainPath(l).startsWith(bookkeeping));
+    .filter((l) => !exempt.some((b) => porcelainPath(l).startsWith(b)));
   if (stray.length > 0) {
     die(`主工作树有非记账改动，拒绝回合：\n`
       + stray.map((l) => '      ' + l).join('\n')
-      + `\n    stage-3 期间主树只该有 \`docs/grill-flows/\` 下的记账改动。出现代码改动，通常是子代理`
+      + `\n    stage-3 期间主树只该有 \`docs/grill-flows/\`（记账）与 \`.ai-flow/\`（flow 定义）下的改动。出现代码改动，通常是子代理`
       + `用相对路径写文件、而它那次 Bash 调用的 cwd 恰好是主仓（引擎的 drifted 守卫只在 cwd≠主仓时`
       + `触发，那种情况下不拦）——于是改动落在主树、worktree 里的 commit 缺内容。`
       + `\n    怎么改：判断这些改动属于哪票 → 移进该票 worktree 并 amend 进它那笔 commit；`

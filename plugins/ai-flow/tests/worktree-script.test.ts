@@ -561,6 +561,39 @@ describe('grill-flow worktree.cjs', () => {
       expect(git(repo, 'log', '-1', '--format=%s')).toContain('T1');
     });
 
+    // 运行中升级插件（`/ai-flow:add` 的 install --force、或 scripts/upgrade-flows.cjs）会改写
+    // 主树里被 git 跟踪的 `.ai-flow/<flow>/**`。那不能单独 commit——机器门③ 要求区间内每笔
+    // commit 都归属某一票，一笔「升级 flow 定义」会 fail 掉整道门——所以只能留在工作树、
+    // 由 stage-4 的 squash 吸收。close 若把它判成 stray，整条 flow 在升级之后就再也回合不了。
+    it('主树有 .ai-flow/ 下的 flow 定义改动（运行中升级插件）→ 照常回合，不判成 stray', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const def = join(repo, '.ai-flow', 'grill-flow', 'stages', 'stage-3.md');
+      mkdirSync(dirname(def), { recursive: true });
+      writeFileSync(def, 'old prompt\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'chore: flow def');
+
+      run(anchor, 'open', 'f1', 'R1', '--install', 'true');
+      deliver(repo, join(lanes, 'f1-R1'), 'src/one.txt', 'feat(T1): one');
+
+      writeFileSync(def, 'upgraded prompt\n');                                   // 已追踪、被改写
+      mkdirSync(join(repo, '.ai-flow', 'grill-flow', 'references'), { recursive: true });
+      writeFileSync(join(repo, '.ai-flow', 'grill-flow', 'references', 'new.md'), 'x\n'); // 新增（未追踪）
+      const out = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(out.stderr).not.toContain('非记账改动');
+      expect(out.code).toBe(0);
+    });
+
+    it('.ai-flow/ 之外的代码 stray 仍然拦下（豁免没有放宽到全仓）', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      run(anchor, 'open', 'f1', 'R1', '--install', 'true');
+      deliver(repo, join(lanes, 'f1-R1'), 'src/one.txt', 'feat(T1): one');
+      writeFileSync(join(repo, 'src', 'leaked.txt'), 'leaked\n');
+      const out = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(out.code).not.toBe(0);
+      expect(out.stderr).toContain('非记账改动');
+    });
+
     it('车道无独有 commit 时 sync 幂等', () => {
       const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
       run(anchor, 'open', 'f1', 'R1', '--install', 'true');
