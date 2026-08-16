@@ -101,7 +101,7 @@ async function anchorFlow(dir) {
   }
   return null;
 }
-function mainCheckoutCounterpart(dir) {
+function siblingCheckoutAnchors(dir) {
   try {
     const out = execFileSync(
       "git",
@@ -109,14 +109,34 @@ function mainCheckoutCounterpart(dir) {
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
     );
     const [commonDir, wtRoot] = out.trim().split("\n");
-    if (!commonDir || !wtRoot) return null;
+    if (!commonDir || !wtRoot) return [];
+    const self = realPath(dir);
+    const rel = relative(resolve(wtRoot), self);
+    if (rel.startsWith("..")) return [];
+    const roots = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length).trim()).filter(Boolean);
     const mainRoot = dirname(resolve(commonDir));
-    const rel = relative(resolve(wtRoot), realPath(dir));
-    if (rel.startsWith("..")) return null;
-    const counterpart = rel ? join2(mainRoot, rel) : mainRoot;
-    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+    const sharedPrefix = (a, b) => {
+      const x = a.split("/"), y = b.split("/");
+      let n = 0;
+      while (n < x.length && n < y.length && x[n] === y[n]) n++;
+      return n;
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const seen = /* @__PURE__ */ new Set();
+    const out2 = [];
+    for (const root of ordered) {
+      const cand = rel ? join2(root, rel) : root;
+      const key = resolve(cand);
+      if (key === self || seen.has(key)) continue;
+      seen.add(key);
+      out2.push(cand);
+    }
+    return out2;
   } catch {
-    return null;
+    return [];
   }
 }
 async function hasActiveFlow(cwd) {
@@ -126,9 +146,14 @@ async function hasActiveFlow(cwd) {
       const here = await anchorFlow(dir);
       if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
-      const counterpart = mainCheckoutCounterpart(dir);
-      if (counterpart && existsSync2(join2(counterpart, ".ai-flow"))) {
-        return await anchorFlow(counterpart);
+      const candidates = siblingCheckoutAnchors(dir);
+      if (candidates.length > 0) {
+        for (const cand of candidates) {
+          if (!existsSync2(join2(cand, ".ai-flow"))) continue;
+          const over = await anchorFlow(cand);
+          if (over) return over;
+        }
+        return null;
       }
     }
     const parent = dirname(dir);
@@ -4221,6 +4246,16 @@ var StageConfigSchema = external_exports.object({
   id: StageIdSchema,
   prompt: external_exports.string().min(1),
   write_scope: external_exports.enum(["unrestricted", "docs_only"]),
+  /**
+   * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
+   *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
+   *  2. Whatever the write scope, these paths stay writable while the session is
+   *     context-blocked — the block stops new work, it must not also block the safe
+   *     exit. A flow whose contract is "everything a later session needs is on disk"
+   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
+   *     leaves this unset gets no such escape and the handoff cannot be written.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
   task_gates: external_exports.array(external_exports.string()).optional()
@@ -4323,7 +4358,8 @@ async function runScript(command, cwd, opts) {
     const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
     return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}` };
   }
-  return { ok: true, reason: "" };
+  const notes = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  return { ok: true, reason: "", ...notes && { notes } };
 }
 
 // src/lib/format.ts
@@ -4338,15 +4374,22 @@ var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "LS"]);
 function deny(reason, systemMessage) {
   return { permissionDecision: "deny", permissionDecisionReason: reason, ...systemMessage && { systemMessage } };
 }
-function allow() {
-  return { permissionDecision: "allow" };
+function allow(systemMessage) {
+  return { permissionDecision: "allow", ...systemMessage && { systemMessage } };
 }
 function resolvePath(repoRoot, filePath) {
   if (filePath.startsWith("/")) return filePath;
   return join4(repoRoot, filePath);
 }
 function isFlowScriptExecution(segment, scriptFragments, stateFragments) {
-  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(segment);
+  if (stateFragments.some((f) => segment.includes(f))) return false;
+  const VALUE = String.raw`(?:"(?:[^"\`$]|\$(?![({]))*"|'[^']*'|(?:[^\s;|&\`"']|\$(?![({]))*)`;
+  const ASSIGNMENTS = new RegExp(String.raw`^(?:[A-Za-z_][A-Za-z0-9_]*=${VALUE}\s*)+$`);
+  const LEADING_ASSIGNMENTS = new RegExp(String.raw`^(?:[A-Za-z_][A-Za-z0-9_]*=${VALUE}\s+)+`);
+  const trimmed = segment.trim();
+  if (ASSIGNMENTS.test(trimmed)) return true;
+  const bare = trimmed.replace(/^(?:do|then|else)\s+/, "").replace(LEADING_ASSIGNMENTS, "");
+  const m = /^node((?:\s+--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s]*)?)*)\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))(\s[\s\S]*)?$/.exec(bare);
   if (!m) return false;
   const script = m[2] ?? m[3] ?? m[4] ?? "";
   if (!/\.(cjs|mjs|js)$/.test(script)) return false;
@@ -4387,11 +4430,24 @@ async function handlePreTool(input2) {
     }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
     if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
-      const blockedPct = state.context_warning.warned_at_pct;
-      const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : "";
-      return deny(
-        `Context blocked${pctInfo}. Run /clear to continue \u2014 state is persisted and progress won't be lost.`
-      );
+      const stageCfgForBlock = getStageConfig(config, state.current_stage);
+      const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
+      const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
+      const relForBlock = relative2(repoRoot, blockAbs);
+      const isFlowDocs = docsPaths.some((p) => {
+        const norm = p.endsWith("/") ? p : p + "/";
+        return relForBlock.startsWith(norm) || blockAbs.startsWith(join4(repoRoot, norm));
+      });
+      if (!isFlowDocs) {
+        const blockedPct = state.context_warning.warned_at_pct;
+        const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : "";
+        return deny(
+          `Context blocked${pctInfo}. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ") || "none configured"}) are still allowed so you can land a handoff.
+
+Before /clear: write whatever a later session cannot reconstruct into those docs \u2014 which lane is where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any decision you have made but not recorded.
+What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report does not** \u2014 its findings, real-machine items and security self-check cannot be reconstructed from the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree state into the docs first.`
+        );
+      }
     }
     if (tool_name === "Bash") {
       const command = String(tool_input["command"] ?? "");
@@ -4406,11 +4462,18 @@ async function handlePreTool(input2) {
         join4(repoRoot, flowRel, "scripts"),
         join4(flowRel, "scripts")
       ];
-      const cpFragments = [...stateFragments, ...scriptFragments];
-      const offending = command.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter((seg) => cpFragments.some((f) => seg.includes(f))).filter((seg) => !isFlowScriptExecution(seg, scriptFragments, stateFragments));
+      const docFragments = [
+        join4(repoRoot, flowRel, "stages"),
+        join4(flowRel, "stages"),
+        join4(repoRoot, flowRel, "config.json"),
+        join4(flowRel, "config.json")
+      ];
+      const exemptFragments = [...scriptFragments, ...docFragments];
+      const cpFragments = [...stateFragments, ...exemptFragments];
+      const offending = command.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter((seg) => cpFragments.some((f) => seg.includes(f))).filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
       if (offending.length > 0) {
         return deny(
-          "Bash access to ai-flow control-plane files (signal / active.json / scripts) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts are changed by the user manually. RUNNING a flow script is allowed, but only as a whole command on its own: `node <flow>/scripts/<name>.cjs [args]`."
+          "Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json."
         );
       }
       return null;
@@ -4455,6 +4518,7 @@ Neither is "the right one" by default \u2014 pick by what the file IS. Code and 
           `Invalid signal content for stage '${state.current_stage}'. Write exactly 'done' to the signal file to trigger stage completion. Got: '${signalContent}'.`
         );
       }
+      let gateNotes;
       if (stageCfg2.completion.script) {
         const flowDir = join4(repoRoot, ".ai-flow", activeFlowName);
         const scriptOpts = stageCfg2.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg2.completion.script.timeout_ms } : void 0;
@@ -4466,13 +4530,14 @@ ${scriptResult.reason}
 
 Fix the issues and try again.`);
         }
+        if (scriptResult.notes) gateNotes = scriptResult.notes;
       }
       if (stageCfg2.completion.gate) {
         await appendLog(repoRoot, activeFlowName, session_id, `GATE_SIGNAL_WRITTEN stage=${state.current_stage}`);
-        return allow();
+        return allow(gateNotes);
       }
       await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_ALLOW stage=${state.current_stage}`);
-      return allow();
+      return allow(gateNotes);
     }
     switch (controlPlaneRole(repoRoot, activeFlowName, absPath)) {
       case "active.json":

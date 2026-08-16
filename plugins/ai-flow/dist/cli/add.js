@@ -29,6 +29,45 @@ var PROJECT_MARKERS = [
   "Gemfile",
   "pnpm-workspace.yaml"
 ];
+var ENGINE_OWNED_ENTRIES = /* @__PURE__ */ new Set(["state"]);
+function wipeTemplateEntries(dest) {
+  for (const entry of readdirSync(dest)) {
+    if (ENGINE_OWNED_ENTRIES.has(entry)) continue;
+    rmSync(join(dest, entry), { recursive: true, force: true });
+  }
+}
+function liveFlowAt(dest) {
+  const p = join(dest, "state", "active.json");
+  if (!existsSync(p)) return null;
+  try {
+    const s = JSON.parse(readFileSync(p, "utf-8"));
+    if (!s.current_stage) return null;
+    return { flow_id: String(s.flow_id ?? "(\u672A\u77E5)"), current_stage: s.current_stage };
+  } catch {
+    return null;
+  }
+}
+function stageIdsOf(flowDir) {
+  try {
+    const cfg = JSON.parse(readFileSync(join(flowDir, "config.json"), "utf-8"));
+    return (cfg.stages ?? []).map((s) => String(s.id ?? "")).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+function checkForceReinstall(src, dest, flowName) {
+  const live = liveFlowAt(dest);
+  if (!live) return { ok: true, live: null };
+  const incoming = stageIdsOf(src);
+  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { ok: true, live };
+  return {
+    ok: false,
+    reason: `\u62D2\u7EDD\u8986\u76D6:\u8FD9\u91CC\u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow\uFF08${live.flow_id}\uFF09\uFF0C\u5B83\u505C\u5728 stage '${live.current_stage}'\uFF0C
+\u800C\u65B0\u6A21\u677F\u7684 config.json \u91CC\u6CA1\u6709\u8FD9\u4E2A stage\uFF08\u65B0\u7684\u662F:${incoming.join(", ")}\uFF09\u3002
+\u76F4\u63A5\u8986\u76D6\u4F1A\u8BA9\u5B83\u5728\u4E0B\u4E00\u6B21\u5DE5\u5177\u8C03\u7528\u65F6\u629B\u5F02\u5E38\u3001\u65E0\u6CD5\u7EE7\u7EED,\u800C\u4E14 state/ \u4E0D\u5728 git \u91CC\u3001\u6551\u4E0D\u56DE\u6765\u3002
+\u5148\u9009\u4E00\u6761:\u2460 \u7B49\u5B83\u8DD1\u5B8C\u518D\u5347\u7EA7;\u2461 \`${flowName} abort\` \u5B58\u5FEB\u7167\u540E\u518D\u5347\u7EA7;\u2462 \u624B\u5DE5\u628A state/active.json \u7684 current_stage \u6539\u6210\u65B0\u914D\u7F6E\u91CC\u7684\u5BF9\u5E94 stage id,\u518D\u91CD\u8DD1\u672C\u547D\u4EE4\u3002`
+  };
+}
 function builtinFlows() {
   if (!existsSync(PLUGIN_FLOWS_DIR)) return [];
   const out = [];
@@ -146,7 +185,18 @@ function install(flow, dir, force) {
     lines.push(`    **\u5B8C\u5168\u5C4F\u853D** ${outer}/.ai-flow \u7684 flow(\u8FD9\u662F\u9879\u76EE\u9694\u79BB\u7684\u9884\u671F\u884C\u4E3A)\u3002\u786E\u8BA4\u8FD9\u662F\u4F60\u8981\u7684\u3002`);
     lines.push("");
   }
-  if (force && existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+  if (force && existsSync(dest)) {
+    const check = checkForceReinstall(src, dest, flow);
+    if (!check.ok) fail(`${check.reason}
+\u4F4D\u7F6E:${dest}`);
+    if (check.live) {
+      lines.push(`\u26A0\uFE0F  ${dest} \u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow:${check.live.flow_id}\uFF08\u5F53\u524D stage:${check.live.current_stage}\uFF09`);
+      lines.push(`    \u8986\u76D6\u4F1A**\u7ACB\u5373\u6362\u6389\u5B83\u540E\u7EED\u8981\u7528\u7684 stage \u63D0\u793A\u8BCD / references / scripts**;`);
+      lines.push(`    \u8FD0\u884C\u72B6\u6001(state/)\u539F\u6837\u4FDD\u7559,flow \u4E0D\u4F1A\u4E2D\u65AD\u3002\u82E5\u8BE5 session \u8FD8\u5F00\u7740,\`/reload-plugins\` \u540E\u7EE7\u7EED\u5373\u53EF\u3002`);
+      lines.push("");
+    }
+    wipeTemplateEntries(dest);
+  }
   mkdirSync(dest, { recursive: true });
   cpSync(src, dest, { recursive: true });
   const preflightSh = join(dest, "preflight.sh");
@@ -238,7 +288,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 export {
   builtinFlows,
+  checkForceReinstall,
   detect,
   ensureGitignore,
-  nearestProjectRoot
+  nearestProjectRoot,
+  wipeTemplateEntries
 };

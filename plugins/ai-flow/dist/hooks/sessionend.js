@@ -173,7 +173,7 @@ async function anchorFlow(dir) {
   }
   return null;
 }
-function mainCheckoutCounterpart(dir) {
+function siblingCheckoutAnchors(dir) {
   try {
     const out = execFileSync(
       "git",
@@ -181,14 +181,34 @@ function mainCheckoutCounterpart(dir) {
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
     );
     const [commonDir, wtRoot] = out.trim().split("\n");
-    if (!commonDir || !wtRoot) return null;
+    if (!commonDir || !wtRoot) return [];
+    const self = realPath(dir);
+    const rel = relative(resolve(wtRoot), self);
+    if (rel.startsWith("..")) return [];
+    const roots = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length).trim()).filter(Boolean);
     const mainRoot = dirname(resolve(commonDir));
-    const rel = relative(resolve(wtRoot), realPath(dir));
-    if (rel.startsWith("..")) return null;
-    const counterpart = rel ? join2(mainRoot, rel) : mainRoot;
-    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+    const sharedPrefix = (a, b) => {
+      const x = a.split("/"), y = b.split("/");
+      let n = 0;
+      while (n < x.length && n < y.length && x[n] === y[n]) n++;
+      return n;
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const seen = /* @__PURE__ */ new Set();
+    const out2 = [];
+    for (const root of ordered) {
+      const cand = rel ? join2(root, rel) : root;
+      const key = resolve(cand);
+      if (key === self || seen.has(key)) continue;
+      seen.add(key);
+      out2.push(cand);
+    }
+    return out2;
   } catch {
-    return null;
+    return [];
   }
 }
 async function hasActiveFlow(cwd) {
@@ -198,9 +218,14 @@ async function hasActiveFlow(cwd) {
       const here = await anchorFlow(dir);
       if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
-      const counterpart = mainCheckoutCounterpart(dir);
-      if (counterpart && existsSync2(join2(counterpart, ".ai-flow"))) {
-        return await anchorFlow(counterpart);
+      const candidates = siblingCheckoutAnchors(dir);
+      if (candidates.length > 0) {
+        for (const cand of candidates) {
+          if (!existsSync2(join2(cand, ".ai-flow"))) continue;
+          const over = await anchorFlow(cand);
+          if (over) return over;
+        }
+        return null;
       }
     }
     const parent = dirname(dir);

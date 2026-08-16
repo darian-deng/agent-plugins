@@ -153,7 +153,7 @@ async function anchorFlow(dir) {
   }
   return null;
 }
-function mainCheckoutCounterpart(dir) {
+function siblingCheckoutAnchors(dir) {
   try {
     const out = execFileSync(
       "git",
@@ -161,14 +161,34 @@ function mainCheckoutCounterpart(dir) {
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
     );
     const [commonDir, wtRoot] = out.trim().split("\n");
-    if (!commonDir || !wtRoot) return null;
+    if (!commonDir || !wtRoot) return [];
+    const self = realPath(dir);
+    const rel = relative(resolve(wtRoot), self);
+    if (rel.startsWith("..")) return [];
+    const roots = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length).trim()).filter(Boolean);
     const mainRoot = dirname(resolve(commonDir));
-    const rel = relative(resolve(wtRoot), realPath(dir));
-    if (rel.startsWith("..")) return null;
-    const counterpart = rel ? join2(mainRoot, rel) : mainRoot;
-    return resolve(counterpart) === realPath(dir) ? null : counterpart;
+    const sharedPrefix = (a, b) => {
+      const x = a.split("/"), y = b.split("/");
+      let n = 0;
+      while (n < x.length && n < y.length && x[n] === y[n]) n++;
+      return n;
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const seen = /* @__PURE__ */ new Set();
+    const out2 = [];
+    for (const root of ordered) {
+      const cand = rel ? join2(root, rel) : root;
+      const key = resolve(cand);
+      if (key === self || seen.has(key)) continue;
+      seen.add(key);
+      out2.push(cand);
+    }
+    return out2;
   } catch {
-    return null;
+    return [];
   }
 }
 async function hasActiveFlow(cwd) {
@@ -178,9 +198,14 @@ async function hasActiveFlow(cwd) {
       const here = await anchorFlow(dir);
       if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
-      const counterpart = mainCheckoutCounterpart(dir);
-      if (counterpart && existsSync2(join2(counterpart, ".ai-flow"))) {
-        return await anchorFlow(counterpart);
+      const candidates = siblingCheckoutAnchors(dir);
+      if (candidates.length > 0) {
+        for (const cand of candidates) {
+          if (!existsSync2(join2(cand, ".ai-flow"))) continue;
+          const over = await anchorFlow(cand);
+          if (over) return over;
+        }
+        return null;
       }
     }
     const parent = dirname(dir);
@@ -4357,6 +4382,16 @@ var StageConfigSchema = external_exports.object({
   id: StageIdSchema,
   prompt: external_exports.string().min(1),
   write_scope: external_exports.enum(["unrestricted", "docs_only"]),
+  /**
+   * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
+   *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
+   *  2. Whatever the write scope, these paths stay writable while the session is
+   *     context-blocked — the block stops new work, it must not also block the safe
+   *     exit. A flow whose contract is "everything a later session needs is on disk"
+   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
+   *     leaves this unset gets no such escape and the handoff cannot be written.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
   task_gates: external_exports.array(external_exports.string()).optional()
@@ -4428,6 +4463,19 @@ import { join as join6 } from "path";
 
 // src/lib/prompt-render.ts
 import { join as join5 } from "path";
+var INLINE_INJECTION_BUDGET = 1e4;
+function injectableStagePrompt(rendered, promptPath, overhead = 0) {
+  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
+
+**\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
+${promptPath}
+
+\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09`;
+}
+function assembledOverhead(assemble) {
+  return assemble("").length;
+}
 function renderPrompt(content, repoRoot, flowName) {
   const flowRoot = join5(repoRoot, ".ai-flow", flowName);
   const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
@@ -4494,24 +4542,27 @@ async function advanceStage(repoRoot, flowName, sessionId) {
   if (existsSync5(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
+  const assemble = (body) => `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
+
+\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+${body}
+\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+\u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
   const promptPath = join6(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
   let promptContent = "";
   if (existsSync5(promptPath)) {
     try {
-      promptContent = renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName);
+      promptContent = injectableStagePrompt(
+        renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
+        promptPath,
+        assembledOverhead(assemble)
+      );
     } catch {
     }
   }
   if (nextStageCfg.completion.gate) promptContent += "\n" + gateProtocolNote();
-  return {
-    additionalContext: `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-${promptContent}
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-\u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`
-  };
+  return { additionalContext: assemble(promptContent) };
 }
 
 // src/lib/posttool-handler.ts
