@@ -4158,6 +4158,62 @@ function flowStatusLine(opts) {
   return `[${opts.flowName}] ${prefix}${opts.stageId}${gate} \xB7 flow ${opts.flowId}`;
 }
 
+// src/lib/prompt-render.ts
+import { join as join2 } from "path";
+var INLINE_INJECTION_BUDGET = 1e4;
+function commandOutputPrefix(flowName) {
+  return `[ai-flow system] Hook intercepted this command for flow '${flowName}'. Do NOT invoke a skill named '${flowName}' \u2014 proceed directly with the instructions below.
+
+`;
+}
+function injectableStagePrompt(rendered, promptPath, overhead = 0) {
+  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
+
+**\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
+${promptPath}
+
+\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09`;
+}
+function assembledOverhead(assemble) {
+  return assemble("").length;
+}
+function renderPrompt(content, repoRoot, flowName) {
+  const flowRoot = join2(repoRoot, ".ai-flow", flowName);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  return substituted + "\n" + writtenDocLengthNote();
+}
+function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
+  const flowRoot = join2(repoRoot, ".ai-flow", flowName);
+  const lines = [
+    `[ai-flow:paths]`,
+    `project_root: ${repoRoot}`,
+    `flow_root: ${flowRoot}`
+  ];
+  if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
+  return lines.join("\n") + "\n\n";
+}
+function writtenDocLengthNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
+    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u7F29\u53D9\u8FF0\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
+    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF0C\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\u2014\u2014`,
+    `\u7B80\u6D01\u53EA\u9488\u5BF9\u53D9\u8FF0\u4E0E\u5197\u4F59\uFF0C\u7EDD\u4E0D\u7528\u5B83\u7701\u6389\u5FC5\u9700\u6761\u76EE\u3002`
+  ].join("\n");
+}
+function gateProtocolNote() {
+  return [
+    ``,
+    `\u2500\u2500\u2500 Gate \u534F\u8BAE\uFF08\u672C\u9636\u6BB5\u542B Gate \xB7 \u5F15\u64CE\u5F3A\u5236\uFF0C\u4F18\u5148\u7EA7\u9AD8\u4E8E\u672C\u9636\u6BB5\u63D0\u793A\u8BCD\u7684\u4EFB\u4F55\u63AA\u8F9E\uFF09\u2500\u2500\u2500`,
+    `\u5230\u8FBE Gate \u7684\u552F\u4E00\u65B9\u5F0F\uFF1A\u7528 Write \u5411 signal \u6587\u4EF6\u5199\u5165 'done'\u3002**\u5FC5\u987B\u5148\u5199 signal**\u2014\u2014`,
+    `\u5199\u5165\u540E\u5F15\u64CE\u4F1A\u56DE\u6CE8\u4E00\u6761\u300CStage \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u300D\u7684\u6D88\u606F\uFF0C\u5E76\u6307\u793A\u4F60\u5448\u73B0\u5BA1\u67E5\u6458\u8981 + approve \u63D0\u793A\u3002`,
+    `approve \u7684\u63D0\u793A\u8BED\u4EE5\u5F15\u64CE\u90A3\u6761\u4E3A\u51C6\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u81EA\u884C\u590D\u8FF0\u3002`,
+    `**\u672A\u5199 signal\u3001\u672A\u6536\u5230\u5F15\u64CE\u786E\u8BA4\uFF0C\u7EDD\u4E0D\u5411\u7528\u6237\u63D0\u793A\u6267\u884C approve**\u2014\u2014\u6B64\u65F6 signal \u4E0D\u5B58\u5728\uFF0Capprove \u4F1A\u88AB\u5F15\u64CE\u62D2\u7EDD\uFF0C`,
+    `\u7528\u6237 /clear \u91CD\u5165\u540E\u8FD8\u5F97\u91CD\u505A\u672C\u9636\u6BB5\u3002\u51C6\u5907\u8BF4\u300Capprove\u300D\u524D\u5148\u81EA\u67E5\uFF1Asignal \u5199\u4E86\u5417\uFF1F\u5F15\u64CE\u786E\u8BA4\u6536\u5230\u4E86\u5417\uFF1F\u6CA1\u6709 \u2192 \u7ACB\u5373\u8865\u5199 signal\u3002`
+  ].join("\n");
+}
+
 // src/lib/commands/router.ts
 var VALID_COMMANDS = ["start", "approve", "abort", "resume", "status", "help"];
 function escapeRegex(s) {
@@ -4215,22 +4271,22 @@ import {
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join3, dirname, resolve, relative } from "path";
+import { join as join4, dirname, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync as existsSync2, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
-import { join as join2 } from "path";
+import { join as join3 } from "path";
 import { homedir } from "os";
 function claudeDir() {
-  return process.env["CLAUDE_CONFIG_DIR"] || join2(homedir(), ".claude");
+  return process.env["CLAUDE_CONFIG_DIR"] || join3(homedir(), ".claude");
 }
 function registryDir() {
-  return join2(claudeDir(), "ai-flow", "sessions");
+  return join3(claudeDir(), "ai-flow", "sessions");
 }
 function bindingPath(sessionId) {
   const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, "_");
-  return join2(registryDir(), `${safe}.json`);
+  return join3(registryDir(), `${safe}.json`);
 }
 function bindSession(sessionId, projectRoot, flowName) {
   try {
@@ -4242,7 +4298,7 @@ function bindSession(sessionId, projectRoot, flowName) {
       flowName,
       boundAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    const tmp = join2(dir, `${randomBytes(4).toString("hex")}.tmp`);
+    const tmp = join3(dir, `${randomBytes(4).toString("hex")}.tmp`);
     writeFileSync(tmp, JSON.stringify(payload, null, 2));
     renameSync(tmp, bindingPath(sessionId));
   } catch {
@@ -4264,10 +4320,10 @@ function lookupSession(sessionId) {
 
 // src/lib/state.ts
 function statePath(repoRoot, flowName, file) {
-  return join3(repoRoot, ".ai-flow", flowName, "state", file);
+  return join4(repoRoot, ".ai-flow", flowName, "state", file);
 }
 function stateDir(repoRoot, flowName) {
-  return join3(repoRoot, ".ai-flow", flowName, "state");
+  return join4(repoRoot, ".ai-flow", flowName, "state");
 }
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
@@ -4327,7 +4383,7 @@ async function patchActiveState(repoRoot, flowName, patch) {
 function findRepoRoot(cwd) {
   let dir = cwd;
   while (true) {
-    if (existsSync3(join3(dir, ".ai-flow"))) return dir;
+    if (existsSync3(join4(dir, ".ai-flow"))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -4355,7 +4411,7 @@ function realPath(p) {
   }
 }
 async function anchorFlow(dir) {
-  const aiFlowDir = join3(dir, ".ai-flow");
+  const aiFlowDir = join4(dir, ".ai-flow");
   if (!existsSync3(aiFlowDir)) return null;
   for (const entry of readdirSync3(aiFlowDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -4391,7 +4447,7 @@ function siblingCheckoutAnchors(dir) {
     const seen = /* @__PURE__ */ new Set();
     const out2 = [];
     for (const root of ordered) {
-      const cand = rel ? join3(root, rel) : root;
+      const cand = rel ? join4(root, rel) : root;
       const key = resolve(cand);
       if (key === self || seen.has(key)) continue;
       seen.add(key);
@@ -4405,14 +4461,14 @@ function siblingCheckoutAnchors(dir) {
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    if (existsSync3(join3(dir, ".ai-flow"))) {
+    if (existsSync3(join4(dir, ".ai-flow"))) {
       const here = await anchorFlow(dir);
       if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
       const candidates = siblingCheckoutAnchors(dir);
       if (candidates.length > 0) {
         for (const cand of candidates) {
-          if (!existsSync3(join3(cand, ".ai-flow"))) continue;
+          if (!existsSync3(join4(cand, ".ai-flow"))) continue;
           const over = await anchorFlow(cand);
           if (over) return over;
         }
@@ -4474,57 +4530,6 @@ function signalPath(repoRoot, flowName) {
 }
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
-}
-
-// src/lib/prompt-render.ts
-import { join as join4 } from "path";
-var INLINE_INJECTION_BUDGET = 1e4;
-function injectableStagePrompt(rendered, promptPath, overhead = 0) {
-  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
-  return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
-
-**\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
-${promptPath}
-
-\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09`;
-}
-function assembledOverhead(assemble) {
-  return assemble("").length;
-}
-function renderPrompt(content, repoRoot, flowName) {
-  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
-  return substituted + "\n" + writtenDocLengthNote();
-}
-function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
-  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-  const lines = [
-    `[ai-flow:paths]`,
-    `project_root: ${repoRoot}`,
-    `flow_root: ${flowRoot}`
-  ];
-  if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
-  return lines.join("\n") + "\n\n";
-}
-function writtenDocLengthNote() {
-  return [
-    ``,
-    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
-    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u7F29\u53D9\u8FF0\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
-    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF0C\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\u2014\u2014`,
-    `\u7B80\u6D01\u53EA\u9488\u5BF9\u53D9\u8FF0\u4E0E\u5197\u4F59\uFF0C\u7EDD\u4E0D\u7528\u5B83\u7701\u6389\u5FC5\u9700\u6761\u76EE\u3002`
-  ].join("\n");
-}
-function gateProtocolNote() {
-  return [
-    ``,
-    `\u2500\u2500\u2500 Gate \u534F\u8BAE\uFF08\u672C\u9636\u6BB5\u542B Gate \xB7 \u5F15\u64CE\u5F3A\u5236\uFF0C\u4F18\u5148\u7EA7\u9AD8\u4E8E\u672C\u9636\u6BB5\u63D0\u793A\u8BCD\u7684\u4EFB\u4F55\u63AA\u8F9E\uFF09\u2500\u2500\u2500`,
-    `\u5230\u8FBE Gate \u7684\u552F\u4E00\u65B9\u5F0F\uFF1A\u7528 Write \u5411 signal \u6587\u4EF6\u5199\u5165 'done'\u3002**\u5FC5\u987B\u5148\u5199 signal**\u2014\u2014`,
-    `\u5199\u5165\u540E\u5F15\u64CE\u4F1A\u56DE\u6CE8\u4E00\u6761\u300CStage \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u300D\u7684\u6D88\u606F\uFF0C\u5E76\u6307\u793A\u4F60\u5448\u73B0\u5BA1\u67E5\u6458\u8981 + approve \u63D0\u793A\u3002`,
-    `approve \u7684\u63D0\u793A\u8BED\u4EE5\u5F15\u64CE\u90A3\u6761\u4E3A\u51C6\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u81EA\u884C\u590D\u8FF0\u3002`,
-    `**\u672A\u5199 signal\u3001\u672A\u6536\u5230\u5F15\u64CE\u786E\u8BA4\uFF0C\u7EDD\u4E0D\u5411\u7528\u6237\u63D0\u793A\u6267\u884C approve**\u2014\u2014\u6B64\u65F6 signal \u4E0D\u5B58\u5728\uFF0Capprove \u4F1A\u88AB\u5F15\u64CE\u62D2\u7EDD\uFF0C`,
-    `\u7528\u6237 /clear \u91CD\u5165\u540E\u8FD8\u5F97\u91CD\u505A\u672C\u9636\u6BB5\u3002\u51C6\u5907\u8BF4\u300Capprove\u300D\u524D\u5148\u81EA\u67E5\uFF1Asignal \u5199\u4E86\u5417\uFF1F\u5F15\u64CE\u786E\u8BA4\u6536\u5230\u4E86\u5417\uFF1F\u6CA1\u6709 \u2192 \u7ACB\u5373\u8865\u5199 signal\u3002`
-  ].join("\n");
 }
 
 // src/lib/preflight.ts
@@ -4706,19 +4711,24 @@ ${result.reason}`
   bindSession(sessionId, repoRoot, flowName);
   await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
   const promptPath = join7(repoRoot, ".ai-flow", flowName, firstStage.prompt);
-  let stageContent = "";
-  if (existsSync6(promptPath)) {
-    stageContent = renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName);
-  }
-  if (firstStage.completion.gate) stageContent += "\n" + gateProtocolNote();
-  const ctx = buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
+  const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
 
 flow_id: ${flowId}
 requirement: ${requirement.trim()}
 current_stage: ${firstStage.id}
 
-` + stageContent;
-  return { action: "allow", additionalContext: ctx };
+` + body;
+  const gateNote = firstStage.completion.gate ? "\n" + gateProtocolNote() : "";
+  let stageContent = "";
+  if (existsSync6(promptPath)) {
+    stageContent = injectableStagePrompt(
+      renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
+      promptPath,
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+    );
+  }
+  stageContent += gateNote;
+  return { action: "allow", additionalContext: assemble(stageContent) };
 }
 
 // src/lib/commands/approve.ts
@@ -4727,7 +4737,7 @@ import { join as join9 } from "path";
 // src/lib/advance-stage.ts
 import { existsSync as existsSync7, readFileSync as readFileSync5, unlinkSync as unlinkSync3 } from "fs";
 import { join as join8 } from "path";
-async function advanceStage(repoRoot, flowName, sessionId) {
+async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4764,18 +4774,19 @@ ${body}
 
 \u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
   const promptPath = join8(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const gateNote = nextStageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
   let promptContent = "";
   if (existsSync7(promptPath)) {
     try {
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble)
+        assembledOverhead(assemble) + gateNote.length + callerOverhead
       );
     } catch {
     }
   }
-  if (nextStageCfg.completion.gate) promptContent += "\n" + gateProtocolNote();
+  promptContent += gateNote;
   return { additionalContext: assemble(promptContent) };
 }
 
@@ -4819,9 +4830,14 @@ gate-pending \u671F\u95F4\u4EA7\u7269\u88AB\u6539\u52A8\u5230\u4E0D\u5408\u89C4\
   }
   await appendLog(repoRoot, flowName, sessionId, `APPROVED stage=${state.current_stage}`);
   const enteredStage = nextStage(config, state.current_stage);
-  const result = await advanceStage(repoRoot, flowName, sessionId);
-  const systemMessage = result.terminal ? `[${flowName}] \u2705 \u6D41\u7A0B\u5DF2\u7ED3\u675F` : `[${flowName}] \u2705 \u5DF2\u8FDB\u5165 ${enteredStage} \xB7 \u6B63\u5728\u8BFB\u53D6\u9636\u6BB5\u6587\u6863\u2026`;
   const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
+  const result = await advanceStage(
+    repoRoot,
+    flowName,
+    sessionId,
+    pathsPreamble.length + commandOutputPrefix(flowName).length
+  );
+  const systemMessage = result.terminal ? `[${flowName}] \u2705 \u6D41\u7A0B\u5DF2\u7ED3\u675F` : `[${flowName}] \u2705 \u5DF2\u8FDB\u5165 ${enteredStage} \xB7 \u6B63\u5728\u8BFB\u53D6\u9636\u6BB5\u6587\u6863\u2026`;
   return {
     action: "allow",
     systemMessage: gateNotes ? `${gateNotes}
@@ -5016,6 +5032,11 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
     current_stage: currentStage,
     base_sha: snapshot.base_sha ?? "HEAD",
     started_at: snapshot.started_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    // Carry the code-diff baseline across. `abort` snapshots the whole state, so it is in
+    // there; this function rebuilds `restored` field by field and used to drop it, which
+    // silently lost the baseline on every resume — stage-4 then reads the injected paths
+    // block, finds no `base_sha_code`, and is told that case is "extremely rare".
+    ...snapshot.base_sha_code ? { base_sha_code: snapshot.base_sha_code } : {},
     last_session_id: null,
     // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
     // (last_session_id) is left null so the next SessionStart binds normally.
@@ -5029,17 +5050,22 @@ Example: ${flowName} resume ${flowName}/aborted-2024-01-01T00-00-00`
   await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = join11(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
-  let stageContent = "";
-  if (existsSync9(promptPath)) {
-    stageContent = renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName);
-  }
-  if (stageCfg.completion.gate) stageContent += "\n" + gateProtocolNote();
-  const ctx = buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
+  const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
 current_stage: ${currentStage}
 requirement: ${restored.requirement}
 
-` + stageContent;
-  return { action: "allow", additionalContext: ctx };
+` + body;
+  const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
+  let stageContent = "";
+  if (existsSync9(promptPath)) {
+    stageContent = injectableStagePrompt(
+      renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
+      promptPath,
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+    );
+  }
+  stageContent += gateNote;
+  return { action: "allow", additionalContext: assemble(stageContent) };
 }
 
 // src/lib/commands/status.ts
@@ -5142,9 +5168,7 @@ function makeOutput(additionalContext, permissionDecision, reason) {
 function resultToHookOutput(result, flowName) {
   let additionalContext = result.additionalContext;
   if (result.action === "allow" && additionalContext !== void 0 && flowName) {
-    additionalContext = `[ai-flow system] Hook intercepted this command for flow '${flowName}'. Do NOT invoke a skill named '${flowName}' \u2014 proceed directly with the instructions below.
-
-` + additionalContext;
+    additionalContext = commandOutputPrefix(flowName) + additionalContext;
   }
   const o = {
     hookEventName: "UserPromptSubmit",

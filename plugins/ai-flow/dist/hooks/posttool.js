@@ -4513,7 +4513,7 @@ function gateProtocolNote() {
 }
 
 // src/lib/advance-stage.ts
-async function advanceStage(repoRoot, flowName, sessionId) {
+async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4550,18 +4550,19 @@ ${body}
 
 \u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
   const promptPath = join6(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const gateNote = nextStageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
   let promptContent = "";
   if (existsSync5(promptPath)) {
     try {
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble)
+        assembledOverhead(assemble) + gateNote.length + callerOverhead
       );
     } catch {
     }
   }
-  if (nextStageCfg.completion.gate) promptContent += "\n" + gateProtocolNote();
+  promptContent += gateNote;
   return { additionalContext: assemble(promptContent) };
 }
 
@@ -4638,8 +4639,8 @@ async function handlePostTool(input2) {
           };
         }
         await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
-        const result = await advanceStage(repoRoot, flowName, session_id);
         const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
+        const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
         return { additionalContext: pathsPreamble + result.additionalContext };
       }
     }

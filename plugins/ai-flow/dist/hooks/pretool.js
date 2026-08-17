@@ -4429,7 +4429,7 @@ async function handlePreTool(input2) {
       );
     }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
-    if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
+    if (state.context_blocked && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
       const stageCfgForBlock = getStageConfig(config, state.current_stage);
       const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
       const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
