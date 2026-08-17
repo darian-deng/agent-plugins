@@ -9,7 +9,7 @@ import {
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { advanceStage } from '../advance-stage.js';
 import { runScript } from '../script-executor.js';
-import { buildAiFlowPreamble } from '../prompt-render.js';
+import { buildAiFlowPreamble, commandOutputPrefix } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 
 export async function handleApprove(
@@ -78,11 +78,17 @@ export async function handleApprove(
   // advancing, so we can give the user a deterministic, instant confirmation
   // that approve succeeded — independent of whether the model speaks first.
   const enteredStage = nextStage(config, state.current_stage);
-  const result = await advanceStage(repoRoot, flowName, sessionId);
+  // Both of these get prepended to `additionalContext` before the host sees it, so their
+  // lengths are charged to the stage prompt's budget. This is the path every gated stage
+  // takes, and it was the worst-under-measured of the four (416 characters uncounted).
+  const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
+  const result = await advanceStage(
+    repoRoot, flowName, sessionId,
+    pathsPreamble.length + commandOutputPrefix(flowName).length
+  );
   const systemMessage = result.terminal
     ? `[${flowName}] ✅ 流程已结束`
     : `[${flowName}] ✅ 已进入 ${enteredStage} · 正在读取阶段文档…`;
-  const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
   return {
     action: 'allow',
     systemMessage: gateNotes ? `${gateNotes}\n\n${systemMessage}` : systemMessage,

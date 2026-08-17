@@ -66,6 +66,18 @@ const PROJECT_ARTIFACTS = new Set([
   'helper.md', // flow 根目录下，不在 stages/ 或 references/ 里
 ]);
 
+// 插件自己的 skill 定义。flow 文档提到 `SKILL.md` 时讲的都是同一件事：**用 Skill 工具调，别去
+// Read 这个文件**（插件缓存目录并存十几个历史版本，实测有一次读到五天前的旧版并照它已废弃的编排
+// 派发），而这条禁令必须点出文件名才说得清。它不进 PROJECT_ARTIFACTS 白名单——那张表的语义是
+// 「产物在项目 docs 目录下、本仓无从检查」，而 skills/ 就在本仓、查得到。放白名单等于把一个能真
+// 查的断言关掉：skills/comment/ 被改名或移走时，四份 flow 文档里那句指令会指向不存在的位置而测试照绿。
+const SKILL_DIRS = join(__dirname, '..', 'skills');
+
+/** 从文档正文里解析出它点名的 skill 目录名（`skill: "ai-flow:comment"` → `comment`）。 */
+function skillTargets(text: string): string[] {
+  return [...text.matchAll(/ai-flow:([a-z0-9-]+)/g)].map((m) => m[1]!).filter((n) => n !== 'paths');
+}
+
 describe('flow 文档之间的指路不能断', () => {
   const docs = flowDocs();
 
@@ -84,7 +96,14 @@ describe('flow 文档之间的指路不能断', () => {
         if (PROJECT_ARTIFACTS.has(name)) continue;
         const hit =
           existsSync(join(FLOWS_DIR, doc.flow, 'references', name)) ||
-          existsSync(join(FLOWS_DIR, doc.flow, 'stages', name));
+          existsSync(join(FLOWS_DIR, doc.flow, 'stages', name)) ||
+          // `SKILL.md` 落在 skills/<name>/ 下，不在任何 flow 目录里——但它在本仓，所以查得了。
+          // ⚠️ 必须查**这份文档点名的那个** skill，不能「任意一个 skills/*/ 下有 SKILL.md 就算命中」——
+          // 仓里五个 skill 目录**全都**带 SKILL.md，那种写法下把 skills/comment/ 删掉测试照样全绿，
+          // 等于这条断言是空操作。所以从正文解析 `ai-flow:<name>` 拿目录名。
+          // ⚠️ 精度边界（今天够用、以后可能不够）：解析的是**整份文件**、命中任一即算过。一份文档同时
+          // 提到两个 skill 时，删掉其中一个不会变红。要收紧就得按段落配对，那需要先给文档定段落约定。
+          skillTargets(text).some((dir) => existsSync(join(SKILL_DIRS, dir, name)));
         if (!hit) dangling.push(name);
       }
       expect(dangling, `${doc.flow}/${doc.rel} 指向了不存在的文件（拼错，或拆分时漏建）`).toEqual([]);

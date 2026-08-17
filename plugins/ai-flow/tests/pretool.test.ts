@@ -976,6 +976,52 @@ describe('handlePreTool — context block enforcement', () => {
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 
+  // The latch lives on shared flow state, so without an agent_id check it reaches every
+  // subagent — including ones started after it, carrying a fraction of the context that
+  // caused it. Observed: a session latched at 61% and did the prescribed thing — handed
+  // the remaining fix work to a fresh subagent — which was then refused mid-edit at 75K
+  // of its own context, leaving one file created and its call sites unwired.
+  it('context_blocked=true + 子代理写代码 → 不被 block 拦（fresh context 正是退化时的处方）', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 61, warned_at: new Date().toISOString() },
+    });
+    const input = makeInput(repo.repoRoot, 'Edit', {
+      file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b',
+    });
+    input.agent_id = 'agent-abc';
+    const out = await handlePreTool(input);
+    // 断言 allow 而不是只排除 block 的文案：写不进去就是写不进去，换一条守卫来拦同样是回归。
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    expect(out?.permissionDecisionReason ?? '').not.toMatch(/context blocked/i);
+  });
+
+  it('context_blocked=true + 主 session 写代码 → 仍 DENY（agent_id 缺席时行为不变）', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 61, warned_at: new Date().toISOString() },
+    });
+    const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', {
+      file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b',
+    }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/context blocked/i);
+  });
+
   it('context_blocked=false + write tool → normal processing (not denied by block)', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);

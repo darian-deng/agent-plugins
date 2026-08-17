@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { discoverFlows, loadFlowConfig } from './flow-config-loader.js';
 import { flowStatusLine } from './format.js';
+import { commandOutputPrefix } from './prompt-render.js';
 import { parseFlowCommand, VALID_COMMANDS, escapeRegex } from './commands/router.js';
 import { handleStart } from './commands/start.js';
 import { handleApprove } from './commands/approve.js';
@@ -24,10 +25,8 @@ function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | '
 function resultToHookOutput(result: { action: string; reason?: string; additionalContext?: string; systemMessage?: string }, flowName?: string): HookOutput {
   let additionalContext = result.additionalContext;
   if (result.action === 'allow' && additionalContext !== undefined && flowName) {
-    additionalContext =
-      `[ai-flow system] Hook intercepted this command for flow '${flowName}'. ` +
-      `Do NOT invoke a skill named '${flowName}' — proceed directly with the instructions below.\n\n` +
-      additionalContext;
+    // Same string the commands measure against the injection budget — see `commandOutputPrefix`.
+    additionalContext = commandOutputPrefix(flowName) + additionalContext;
   }
   const o: UserPromptOutput = {
     hookEventName: 'UserPromptSubmit',

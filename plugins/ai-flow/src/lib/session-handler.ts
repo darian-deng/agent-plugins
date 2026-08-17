@@ -142,14 +142,14 @@ export async function handleSessionStart(
   // S2: flow-complete signal at terminal stage (no gate) — self-heal
   if (isFlowComplete && !stageCfg.completion.gate) {
     await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
-    const result = await advanceStage(repoRoot, flowName, session_id);
+    const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
     return { additionalContext: pathsPreamble + result.additionalContext };
   }
 
   // S1 + none/script: self-heal advance
   if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
     await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
-    const result = await advanceStage(repoRoot, flowName, session_id);
+    const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
     // expectedNext is the stage we just advanced into (it was the signal value)
     const base = { additionalContext: pathsPreamble + result.additionalContext };
     if (!result.terminal && expectedNext) {
@@ -174,6 +174,9 @@ export async function handleSessionStart(
     ``,
     `阶段完成后，将 'done' 写入 signal 文件触发推进（引擎自动计算下一步）。`,
   ].join('\n');
+  // Built before the budget check, not after: a gated stage carries this note too, so its
+  // length is part of what the host receives and must be measured with the wrapper.
+  const gateNote = stageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
@@ -181,11 +184,11 @@ export async function handleSessionStart(
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble)
+        assembledOverhead(assemble) + gateNote.length
       );
     } catch { /* non-fatal */ }
   }
-  if (stageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
+  promptContent += gateNote;
 
   const statusLine = flowStatusLine({
     flowName,

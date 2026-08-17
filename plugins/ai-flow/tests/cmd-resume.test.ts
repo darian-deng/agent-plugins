@@ -80,6 +80,41 @@ describe('handleResume', () => {
     expect(state!.requirement).toBe('resumed task');
   });
 
+  // `abort` snapshots the whole state (JSON.stringify), so a snapshot taken after stage-3's
+  // mark-base carries `base_sha_code`. This function rebuilds the state field by field and
+  // used to drop it — silently losing the code-diff baseline on EVERY resume. stage-4 then
+  // reads the injected paths block, finds no `base_sha_code`, and follows a recovery path
+  // its own docs called "extremely rare".
+  it('snapshot 带 base_sha_code → 必须一起恢复（丢了 stage-4 就没有 diff 基线）', async () => {
+    const repo = makeRepo();
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-with-base', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'r',
+      current_stage: 'work', base_sha: 'abc123',
+      base_sha_code: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      started_at: '2024-01-01T00:00:00.000Z', last_session_id: null, context_size: 0,
+      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    });
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-with-base');
+    expect(result.action).toBe('allow');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.base_sha_code).toBe('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef');
+    // 而且它要出现在注入的 [ai-flow:paths] 块里——那是 stage-4 唯一的读取处
+    expect((result as { additionalContext: string }).additionalContext).toContain('deadbeefdead');
+  });
+
+  it('snapshot 没有 base_sha_code（mark-base 之前中止）→ 字段缺席，不是空串', async () => {
+    const repo = makeRepo();
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-no-base', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'r',
+      current_stage: 'work', base_sha: 'abc123',
+      started_at: '2024-01-01T00:00:00.000Z', last_session_id: null, context_size: 0,
+      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+    });
+    await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-no-base');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.base_sha_code).toBeUndefined();
+  });
+
   it('last_session_id reset to null on restore (new session)', async () => {
     const repo = makeRepo();
     const snapshot = {

@@ -22,7 +22,14 @@ export interface AdvanceResult {
  *
  * Used by: pretool-handler (none/script), approve.ts, session-handler (self-heal).
  */
-export async function advanceStage(repoRoot: string, flowName: string, sessionId: string): Promise<AdvanceResult> {
+/**
+ * `callerOverhead` = length of everything the CALLER prepends to `additionalContext` before
+ * the host sees it. Every current caller adds the `[ai-flow:paths]` preamble outside this
+ * function (~256 chars), and `approve` additionally goes through the command banner (~160) —
+ * none of which was counted, so the budget check here under-measured by up to 416 characters
+ * on the path that every gated stage takes. Whoever adds must measure: this parameter is how.
+ */
+export async function advanceStage(repoRoot: string, flowName: string, sessionId: string, callerOverhead = 0): Promise<AdvanceResult> {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -74,6 +81,9 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
     `════════════════════════════════\n\n` +
     `用 1-2 句自然语言告知用户已进入新阶段，然后直接开始工作，不要等待用户回复。`;
   const promptPath = join(repoRoot, '.ai-flow', flowName, nextStageCfg.prompt);
+  // Built before the budget check, not after: a gated stage carries this note too, so its
+  // length is part of what the host receives and must be measured with the wrapper.
+  const gateNote = nextStageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
@@ -81,11 +91,11 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble)
+        assembledOverhead(assemble) + gateNote.length + callerOverhead
       );
     } catch { /* non-fatal */ }
   }
-  if (nextStageCfg.completion.gate) promptContent += '\n' + gateProtocolNote();
+  promptContent += gateNote;
 
   return { additionalContext: assemble(promptContent) };
 }

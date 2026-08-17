@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { hasActiveFlow, writeActiveState, appendLog, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
@@ -126,17 +126,24 @@ export async function handleStart(
   await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
 
   const promptPath = join(repoRoot, '.ai-flow', flowName, firstStage.prompt);
-  let stageContent = '';
-  if (existsSync(promptPath)) {
-    stageContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
-  }
-  if (firstStage.completion.gate) stageContent += '\n' + gateProtocolNote();
-
-  const ctx =
+  // Same budget contract as the advance / session-start injection points — see the note in
+  // `resume.ts`. This path had no check at all either, and its wrapper carries the user's
+  // own `requirement` text, which has no length bound.
+  const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName) +
     `Flow '${flowName}' started!\n\n` +
     `flow_id: ${flowId}\nrequirement: ${requirement.trim()}\ncurrent_stage: ${firstStage.id}\n\n` +
-    stageContent;
+    body;
+  const gateNote = firstStage.completion.gate ? '\n' + gateProtocolNote() : '';
+  let stageContent = '';
+  if (existsSync(promptPath)) {
+    stageContent = injectableStagePrompt(
+      renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+      promptPath,
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+    );
+  }
+  stageContent += gateNote;
 
-  return { action: 'allow', additionalContext: ctx };
+  return { action: 'allow', additionalContext: assemble(stageContent) };
 }

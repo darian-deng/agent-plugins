@@ -108,8 +108,10 @@ export async function handlePostTool(
 
       // none/script completion — advance immediately
       await appendLog(repoRoot, flowName, session_id, `POSTTOOL_SIGNAL_ADVANCE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName, session_id);
+      // Built first so its length can be charged to the stage prompt's budget — this
+      // preamble is part of what the host receives.
       const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
+      const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
       return { additionalContext: pathsPreamble + result.additionalContext };
     }
     // Signal content is not 'done' — fall through to context monitoring

@@ -25,7 +25,10 @@ git worktree prune && git worktree list --porcelain
 | 不存在（分支零 commit） | 有，且干净 | 已开未派 | **别 close**（对零 commit 分支 ff 会 "Already up to date" 并成功拆除，看起来像交付了、实则一行代码没有——`close` 现在会拦）。直接派发子代理 |
 | 不存在 | 有未提交改动，票上**有** `impl:done` | 实施已交付；质量链未跑**或正在跑** | ⚠️ **`impl:done` 只说明实施段交付过，不说明质量链没在跑**——质量链期间机械型 findings 就地修、不 commit，产出的正是这个状态。派人之前先按 `subagent-lifecycle.md` 确认在飞代理死没死（`/clear` 不杀它）。确认已停 → 按 `quality-chain.md` 派质量链代理接手，**别重做实现** |
 | 不存在 | 有未提交改动，票上**无** `impl:done` | 实施在飞 | 先定夺工作树（reset 重来 or 在现状上续，把决定写进重派 prompt），续跑实施段契约。⚠️ 先按 `subagent-lifecycle.md` 确认原子代理死没死——`/clear` 不杀在飞子代理 |
-| 有 `[partial]` 标记 + 剩余清单 | 有 | 截断续做 | 按清单续派（**不做 git 考古**）→ 末轮 `--amend` 去掉 `[partial]` → 走完契约剩余步骤 |
+| 有 `[partial]` 标记，票上**无** `impl:done` | 有，且干净 | 续做段没派或没交付 | 按票面 `rest:` 字段续派**实施代理**（⛔ 不是质量链——它会只审那笔 `[partial]` 就 `--amend` 摘掉标记，静默交付半成品；`quality-chain.md` 形态乙那条 fail-closed 就是拦这个）|
+| 有 `[partial]` 标记 + `rest:`，票上**无** `impl:done` | 有未提交改动 | 截断待续做 | 按 `rest:` 续派**实施代理**（**不做 git 考古**；那一轮不再 commit，改动留树上累积）。⚠️ 它交付后主 session 要写 `impl:done`，否则下次重入会落回本行、把同一份清单再做一遍 |
+| 有 `[partial]` 标记，票上**有** `impl:done` | 有未提交改动 | 续做已交付、待质量链 | 派质量链代理（`quality-chain.md` **形态乙**，prompt 里把 `rest:` 内容标成「已由续做代理做完」）→ 由它 `--amend` 去掉 `[partial]`。⛔ 别再派实施代理——`subagent-lifecycle.md` 记过同款事故：两个 agent 同时写一棵车道树，来回三轮 |
+| 有 `[partial]` 标记，票上**有** `impl:done` | 有，但**干净** | 记账与物理状态冲突 | ⛔ **停下**，不许 `--amend`、不许续派。`impl:done` 声称续做已交付（那意味着树里该有未提交改动），而树是空的——改动要么被别人提交了、要么被 reset 掉了。先按 `subagent-lifecycle.md` 查在飞代理、再查 `git reflog` 判改动去哪了。⚠️ 这一格若误按上一行处理，质量链形态乙的 fail-closed **按设计不触发**（`rest:` 被标成「已做完」时树允许是干净的），于是 `[partial]` 标记被摘掉、票面上再没有东西说它没做完，而机器门四条断言全过 |
 | 在 `wt/<flow_id>-T<n>` 上、未合回来，**且 subject 不含 `[partial]`** | 有 | 已交付未回合 | **别重派**——先裁回报（主循环第 4 步）再走回合（第 5 步）。⛔ 漏掉这个前提会把一张只做了一半的票 `--ff-only` 合进需求分支 |
 | 在 `wt/<flow_id>-T<n>` 上、未合回来 | 无（分支还在） | 已交付、工作目录被清掉 | 上面那步 `git worktree prune` 本身就会制造这个状态（有人手动删过目录）。`git worktree add <path> <branch>` 复用该分支恢复，再按上一行走。**别重派**——重派会撞「分支已存在」 |
 | 在主分支上 | 还在（`close` 里 ff 成功但 remove 失败） | 已回合未拆 | `git worktree remove` 补拆，再按下一行继续 |

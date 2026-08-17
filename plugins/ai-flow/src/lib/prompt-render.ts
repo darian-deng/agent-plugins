@@ -58,7 +58,29 @@ export const INLINE_INJECTION_BUDGET = 10_000;
  * that will actually spill sail through as "inline". Callers must pass what they add;
  * `assembledOverhead()` computes it from the caller's own template so the two cannot
  * drift apart.
+ *
+ * ⚠️ The wrapper is not the only thing appended. A gated stage also gets
+ * `gateProtocolNote()` (~347 chars) glued on, and that used to happen AFTER this check —
+ * so every gated stage was injected 347 chars longer than anything measured it. Callers
+ * must fold that length into `overhead` too, which is why they build the note first and
+ * append the same string they measured. The budget test does the same per stage.
  */
+/**
+ * The banner `userprompt-handler` prepends to every allowed command's `additionalContext`.
+ *
+ * Lives here rather than in that handler so the command implementations can measure it
+ * without importing their own dispatcher (that would be a cycle). They must: the banner is
+ * part of what the host receives, so a command that renders a stage prompt has to count it
+ * against the same ceiling. Its length varies with the flow name — it appears twice — which
+ * is why this is a function and not a constant.
+ */
+export function commandOutputPrefix(flowName: string): string {
+  return (
+    `[ai-flow system] Hook intercepted this command for flow '${flowName}'. ` +
+    `Do NOT invoke a skill named '${flowName}' — proceed directly with the instructions below.\n\n`
+  );
+}
+
 export function injectableStagePrompt(rendered: string, promptPath: string, overhead = 0): string {
   if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
   return (

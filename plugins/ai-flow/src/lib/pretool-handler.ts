@@ -200,7 +200,25 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // So: still refuse writes to the codebase, but let the flow's own docs through, and
   // say plainly what /clear does and does not cost. The claim it used to make —
   // "progress won't be lost" — is false while a subagent is running.
-  if (state.context_blocked && WRITE_TOOLS.has(tool_name)) {
+  //
+  // Scope it to the main session, mirroring the measurement side (`posttool-handler`
+  // skips accounting when `agent_id` is present). `context_blocked` is latched on the
+  // shared flow state by whoever crossed the threshold, so without this the latch
+  // reaches every subagent too — including ones that started after it and carry a
+  // fraction of the context that caused it. Observed: a session latched at 61% and
+  // then did the right thing — handed the remaining fix work to a fresh subagent —
+  // and that subagent was refused mid-edit at 75K of its own context (7.5% of the
+  // window). It had already created one file seconds earlier, so the refusal split a
+  // single change in half and left an unimported module behind; six of the seven
+  // items were never started. Delegating to a fresh context is the prescribed
+  // response to a degraded one, and this is the branch that punished it.
+  //
+  // Deliberately NOT extended to Bash. This is a signal to the model, not a security
+  // boundary — `cat >`, `sed -i` and `git commit` have always gone through, and no
+  // run has been observed routing around the block that way. Catching them would mean
+  // parsing shell for write intent, and would refuse `git commit` / test runs / the
+  // flow's own scripts, which the stage prompts hand out by name.
+  if (state.context_blocked && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
     const stageCfgForBlock = getStageConfig(config, state.current_stage);
     const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
     // Resolve the target here rather than reusing the one computed further down —

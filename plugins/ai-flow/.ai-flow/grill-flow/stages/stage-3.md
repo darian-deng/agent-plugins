@@ -7,7 +7,7 @@
 
 ## 岔路 → 先读哪份
 
-本页只留主循环，和那几条「违反了不会有任何东西变红」的红线。下面每一格对应一个**可观察的触发事件**，撞上了先读那份再动手，**不要凭记忆推**。文件都在 `{{flow_root}}/references/` 下：
+本页只留主循环，和那几条「违反了不会有任何东西变红」的红线。下面每一格对应一个**可观察的触发事件**，撞上了先读那份再动手，**不要凭记忆推**。文件都在 `{{flow_root}}/references/` 下——**下面凡出现 `<FR>` 都指 `{{flow_root}}` 这个绝对路径**（原本这串路径在本页出现六次，收成简写是为了不让它把这一页顶出注入上限）。⛔ **用 Write 写文件时把 `<FR>` 换成上面那个绝对路径，别把 `<FR>` 原样填进 `file_path`**——sh 里代入失败会报错，Write 不会：它会在仓库根下建出一个字面名为 `<FR>` 的目录，signal 落在那里等于没写，引擎不推进也不报错：
 
 | 触发事件 | 读 |
 |---|---|
@@ -22,14 +22,9 @@
 | 想停下来问开发者（先查证，别直接问） | `ask-before-asking.md` |
 | 要改前置产物（alignment / spec / tickets） | `revision-protocol.md` |
 
-## 先查文档，再问开发者
-
-到了本 stage，前面两步已经把决策落成了文件。**执行越往后，「这个当时定过吗」的答案越是「定过」**——而你手上没有那段对话，只有文件。所以：**任何「要不要停下来问开发者」的念头，先当成一次查证任务**——去哪份文件查哪一段，见 `ask-before-asking.md`（含「疑问 → 查这里」对照表）。查到了照做、不问；查不到才问，且拿到答案立即写回对应文件。
-
 ## 前置读取
 
 - `{{project_root}}/docs/grill-flows/<flow_id>/` 下 `spec.md` + `tickets.md`（`<flow_id>` 用 context 注入的实际值，勿自拼）
-- `references/per-ticket-review.md`（实施段）+ `references/quality-chain.md`（质量链段）— **一票的两段交付契约（派发时按它们拼 prompt；本页不复述其内容）**
 
 ## 入场
 
@@ -37,7 +32,7 @@
 
 **Step 0 预检**：`git branch --show-current`（在 main/master → 停，要开发者切需求分支）；`git status --porcelain`（含**代码**改动 → 停问开发者；仅 `docs/grill-flows/` 改动属正常，豁免）；`git worktree list`（有 `wt/<flow_id>-` 分支的条目 → 上一轮残留，照 `reentry.md` 先收口，别新开。**除非 tickets.md 已有 `lane:` 标记**——那是正在用的长驻车道，不是残留，按 `reentry.md` 的「车道模式的重入」接着跑）。落点在**仓库同级**的 `<repo 名>.ai-flow-worktrees/`，不在仓库里，所以 `git status` 看不到它们，只有 `git worktree list` 能。
 
-**Step 1 起点 commit + mark-base**：`git add` 全部 flow docs（alignment.md + wayfinder-map.md + spec.md + tickets.md）→ `git commit -m "docs: <feature> stage1-2 outputs"` → 用 Write 写 `{{flow_root}}/state/mark-base`（内容任意如 `capture`）触发引擎捕获 `base_sha_code`。
+**Step 1 起点 commit + mark-base**：`git add` 全部 flow docs（alignment.md + wayfinder-map.md + spec.md + tickets.md）→ `git commit -m "docs: <feature> stage1-2 outputs"` → 用 Write 写 `<FR>/state/mark-base`（内容任意如 `capture`）触发引擎捕获 `base_sha_code`。
 
 **Step 2 定执行单位**：照 `execution-unit.md` 跑一次 `schedule.cjs` 再选，**不要凭感觉**。下面主循环写的是一票一树；车道模式的差异全在 `lane-mode.md`。
 
@@ -66,7 +61,7 @@
 每票一个（车道模式：每组一个、只在该组第一票前开）：
 
 ```sh
-node {{flow_root}}/scripts/worktree.cjs open <flow_id> T<n>
+node <FR>/scripts/worktree.cjs open <flow_id> T<n>
 ```
 
 它负责位置、gitignore 检查、分支命名、装依赖，并打印派发要用的绝对路径。**位置/命名/装依赖不必记，这条命令就是全部。**
@@ -76,12 +71,9 @@ node {{flow_root}}/scripts/worktree.cjs open <flow_id> T<n>
 **一票派两次，不是一次**（理由见 `quality-chain.md` 开头：最贵的那一段不能跑在最胖的那个上下文里）：
 
 1. **实施代理**（按 `per-ticket-review.md` 拼）→ 它做完实现、改动留工作树不提交、回报首行 `impl-done: <N> 个文件已改，未提交`。
-2. 你复核 `git -C <WT> status --porcelain` 非空、且 `git -C <WT> log` 无本票新 commit → 在该票那条写 `impl:done`（与 `qc:done` 同一口径：票行内或其缩进子项；机器门不解析它）→ **再派质量链代理**（按 `quality-chain.md` 拼），由它走三评审 → 裁 → 注释清理 → 地板 → commit。
+2. 你复核 `git -C <WT> status --porcelain` 非空、且 `git -C <WT> log` 无本票新 commit（**续做轮例外**：HEAD 带 `[partial]` 允许）→ 在该票那条写 `impl:done`（与 `qc:done` 同一口径：票行内或其缩进子项；机器门不解析它。**续做轮交付后照样写**——它是「剩余已做完」的唯一标记，漏了重入会再派一次实施）→ **再派质量链代理**（按 `quality-chain.md` 拼，带 `[partial]` 的走形态乙），由它走三评审 → 裁 → 注释清理 → 地板 → commit。
 
-契约里的「派发时带什么」是完整清单，其中最容易漏的两条：
-
-- **cwd 纪律**（一切 git 用 `git -C <WT>`、一切写用 `<WT>/…` 绝对路径）——漏了就静默空转。
-- ⛔ **票面整段内联，不给 `tickets.md` 路径**（实测 68K token，给了路径就被整篇读进去，此后每轮重新计费，而别人的票一次都用不上）。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
+契约里的「派发时带什么」是完整清单，其中最容易漏的两条：**cwd 纪律**（git 一律 `git -C <WT>`、写一律绝对路径，漏了就静默空转）；⛔ **票面整段内联，不给 `tickets.md` 路径**（实测被整篇读过 14 次，读进去之后每轮重新计费，而别人的票一次都用不上）。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
 
 **派子代理的两条硬规则**（理由与实测代价见 `subagent-lifecycle.md`，这里只留结论）：
 
@@ -97,7 +89,7 @@ node {{flow_root}}/scripts/worktree.cjs open <flow_id> T<n>
 ⚠️ **派完不要只等通知。通知是一次性的**——它已经来过、而你读错了，就不会有第二条来纠正你（实测空转 1 小时 07 分正是这个机制）。**每隔 15 分钟主动扫一次**，一屏看全各票/各车道的 `ahead / dirty / 是否 HEAD 后继 / 待补依赖 / 静默时长`：
 
 ```sh
-node {{flow_root}}/scripts/worktree.cjs status <flow_id>
+node <FR>/scripts/worktree.cjs status <flow_id>
 ```
 
 **一棵声称在飞的树静默 ≥30 分钟 = 那个子代理已经停了**（工作树的物理变化是唯一不依赖自我报告的信号）→ `subagent-lifecycle.md`。
@@ -106,10 +98,10 @@ node {{flow_root}}/scripts/worktree.cjs status <flow_id>
 
 **收到「完成」通知，先做一次机械判定再读正文**——判据按你派的是哪一段分两套：
 
-- **实施代理**：首行必须是 `impl-done: <N> 个文件已改，未提交` → 复核 `git -C <WT> status --porcelain` **非空**。⚠️ 截断自保护时首行是 `commit: <sha> [partial]`，**那一形态下树是干净的、不适用非空复核**，改核那笔 commit 在不在。
+- **实施代理**：首行必须是 `impl-done: <N> 个文件已改，未提交` → 复核 `git -C <WT> status --porcelain` **非空**。⚠️ 截断自保护时首行是 `commit: <sha> [partial]`：树干净、不适用非空复核，改核那笔在不在，**把回报里的剩余清单落成票面 `rest: <差什么/做到哪>` 字段**（与 `wip:` 同口径；⛔ 不落盘，/clear 之后它就没了，而续派和质量链的 fail-closed 都以它为键），**再按它续派实施代理**（⛔ 别直接派质量链让它捎带做剩余）。
 - **质量链代理**：首行必须是 `commit: <sha>` → 复核树**为空**、`HEAD` 等于那个 sha。
 
-首行不是这两者之一 → **这一票没交付**，不管状态写的是不是 `completed`。动那棵树（提交 / rebase / 另派人进去）之前还要核两条，两条都对上才动手：
+首行不是这两者之一 → **这一票没交付**，不管状态写的是不是 `completed`。⚠️ 首行是「未完成」而票上已有 `[partial]`（续做轮又撞上限）→ **先把回报里刷新过的剩余清单写回票面 `rest:`**，否则续派会拿陈旧清单重做已完成的部分。**首行对上了也别立刻动那棵树**（提交 / rebase / 另派人进去）——还要核两条命令，两条都对上才动手，命令在 `subagent-lifecycle.md`。
 
 ⚠️ **别把两套用混**：实施代理交付后树本来就是脏的，拿「必须为空」去核它会永远判成「它还没停」，质量链就永远派不出去。两套命令见 `subagent-lifecycle.md`。
 
@@ -126,7 +118,7 @@ node {{flow_root}}/scripts/worktree.cjs status <flow_id>
 裁完、无未决项之后：
 
 ```sh
-node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
+node <FR>/scripts/worktree.cjs close <flow_id> T<n>
 ```
 
 它跑一组前置断言 → `git merge --ff-only` → 拆除 worktree、保留分支，并报出「哪些兄弟车道现在过期了」。断言失败时脚本会说清是哪一条、怎么处置——照它说的做，别绕过；各类失败的处置在 `recovery.md`。
@@ -143,8 +135,9 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 
 1. 落 candidates.md（带 ticket ID 前缀、append 前 grep 去重）
 2. 需真机的票加 `rm:pending`，并往 tickets.md `## 待真机验证` 段 append 一条 `- T<n> — <一句话验什么>`
-3. 在该票那条上写 `qc:done`（行内或其缩进子项，写在别处不算）
-4. 勾 `[x]`
+3. **把质量链回报第二行的 `qc-metrics: …` 原样抄到该票那条**（与 `qc:done` 同一口径）。⛔ 别自己重算、别改格式——它是「小票该不该减配质量链」的唯一样本来源，而 commit body 留不住它（stage-4 的 squash 会连票分支一起删）
+4. 在该票那条上写 `qc:done`（行内或其缩进子项，写在别处不算）
+5. 勾 `[x]`
 
 ⛔ **车道模式下这份清单还要多一步「已知碰撞面登记」，且它和 `rm:pending` 一样必须排在 `qc:done` 之前**；收口测试也不按批、按轮且有硬上限——两条都在 `lane-mode.md`，**漏做不会有任何东西变红**。
 
@@ -160,17 +153,15 @@ node {{flow_root}}/scripts/worktree.cjs close <flow_id> T<n>
 
 ## 输出规格
 
-git commits（每票一笔代码 commit、subject 首行含 `T<n>`、**历史线性**）+ `tickets.md`（`batch:` / `qc:done` / `[x]`，真机票另带 `rm:pending` + `## 待真机验证` 段）+ `candidates.md`——后两者为工作树未提交状态，由 stage-4 squash 吸收。
-
-验证：机器门 `scripts/gate-stage-3.cjs`（fail-closed）。**七条断言的规格、理由、每条报错的「怎么改」都在脚本里**（头部注释 + 各条报错文案），取那份——在此复述只会漂。报违规时的处置（含哪两条是 rebase 适配的预期情形）在 `recovery.md`。
+每票一笔代码 commit（规格见上「元规则」与主循环第 3/6 步）+ `tickets.md` 与 `candidates.md` 的记账（留工作树，stage-4 squash 吸收）。验证是机器门 `scripts/gate-stage-3.cjs`（fail-closed）——**七条断言的规格、理由、每条报错怎么改都在脚本里，取那份**；违规处置见 `recovery.md`。
 
 ## 完成条件
 
-- tickets.md 全部 ticket 级项 `[x]`，每个都有 `qc:done`。
-- 本 flow 的 worktree 已全部拆除（机器门⑤ 按落点前缀查，新旧两处都查），历史线性。
+前两条（全部 `[x]` 且各有 `qc:done`、worktree 全拆除且历史线性）由机器门 fail-closed 拦，不必自查。**唯一需要你自己保证的**：
+
 - **本 stage 期间问开发者拍板的结论已逐条落盘**：新增决策写进 `spec.md` 的 `## Decisions`；改动了范围 / 已对齐结论的走 `revision-protocol.md` 回写 `alignment.md`。机器门验不了这条，但它决定下一次 /clear 之后这些结论还在不在——不落盘就等于没问过。
 
 ## Signal
 
 **触发条件**：全部 `[x]`，**或**开发者明确表示完成。
-**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`。引擎跑机器门（`gate-stage-3.cjs`，fail-closed）通过后**自动进 stage-4**（本 stage 无人工 gate——这道门是唯一的引擎兜底）。
+**动作**：用 Write 工具向 `<FR>/state/signal` 写入 `done`。引擎跑机器门（`gate-stage-3.cjs`，fail-closed）通过后**自动进 stage-4**（本 stage 无人工 gate——这道门是唯一的引擎兜底）。

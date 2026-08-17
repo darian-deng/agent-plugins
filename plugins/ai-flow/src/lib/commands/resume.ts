@@ -8,7 +8,7 @@ import {
   type ActiveState,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 
 export async function handleResume(
@@ -79,6 +79,11 @@ export async function handleResume(
     current_stage: currentStage,
     base_sha: snapshot.base_sha ?? 'HEAD',
     started_at: snapshot.started_at ?? new Date().toISOString(),
+    // Carry the code-diff baseline across. `abort` snapshots the whole state, so it is in
+    // there; this function rebuilds `restored` field by field and used to drop it, which
+    // silently lost the baseline on every resume — stage-4 then reads the injected paths
+    // block, finds no `base_sha_code`, and is told that case is "extremely rare".
+    ...(snapshot.base_sha_code ? { base_sha_code: snapshot.base_sha_code } : {}),
     last_session_id: null,
     // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
     // (last_session_id) is left null so the next SessionStart binds normally.
@@ -94,17 +99,28 @@ export async function handleResume(
 
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
-  let stageContent = '';
-  if (existsSync(promptPath)) {
-    stageContent = renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName);
-  }
-  if (stageCfg.completion.gate) stageContent += '\n' + gateProtocolNote();
-
-  const ctx =
+  // Same budget contract as the advance / session-start injection points: this path also
+  // hands a rendered stage prompt to the host through `additionalContext`, so it is under
+  // the same character ceiling and must degrade to "go read the file" instead of spilling.
+  // It used to have no check at all — and its wrapper is the largest of the four, because
+  // `requirement` is the user's own text with no length bound: measured on this repo, a
+  // ~430-character requirement is enough to push the tightest stage page over the limit,
+  // at which point the host silently keeps ~2,000 characters of it.
+  const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) +
     `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
     `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
-    stageContent;
+    body;
+  const gateNote = stageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
+  let stageContent = '';
+  if (existsSync(promptPath)) {
+    stageContent = injectableStagePrompt(
+      renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+      promptPath,
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+    );
+  }
+  stageContent += gateNote;
 
-  return { action: 'allow', additionalContext: ctx };
+  return { action: 'allow', additionalContext: assemble(stageContent) };
 }
