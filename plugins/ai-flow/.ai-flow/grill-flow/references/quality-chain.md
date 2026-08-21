@@ -65,9 +65,17 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 ## 固定顺序
 
-### 0. `/simplify`(apply)
+### 0. `/simplify`(apply) —— Claude Code **内置**斜杠命令
 
 机械质量修（复用 / 简化 / 效率）。**必须跑在三评审之前**——三个轴的职责定义就是「只报 simplify 修不动的判断型问题」，顺序反了它们会把本该机械修掉的一整类问题当判断型上报，或者干脆按定义放过。改动仍不 commit。
+
+**怎么调**：`Skill` 工具，`skill: "simplify"`，`args` = 本票改动文件的绝对路径清单（空格分隔）。
+
+⛔ **搜不到不等于没装。** 它编译在 CLI 二进制里，磁盘上没有对应文件——`~/.claude/commands/`、各插件的 `commands/`、项目 `.claude/` 全都翻不到。**别据此判「本机没装」而跳过这一步、或改成自己手做**（实测发生过一次：搜了四个位置、写下「本机没装 `/simplify`」、以自审顶替）。也别拿名字相近的东西顶替——`code-simplifier` 这个名字在各仓库同时以插件、项目级 skill、code-review 评审轴三种身份出现过，都不是它。
+
+⛔ **必须传文件清单。** 不传 `args`，它按自己的 Phase 0 去跑 `git diff @{upstream}...HEAD`——那条命令在**你的 cwd** 求值、不认 `<WT>`，拿到的是空 diff 或别票的改动，而它照样返回「无 finding」且不报任何错（与 `per-ticket-review.md` 开头那条静默空转同源）。清单取自 `git -C <WT> diff HEAD --name-only`（形态乙 / 丙用 `diff HEAD~1 --name-only`），逐条拼成以 `<WT>/` 开头的绝对路径。
+
+**它自己会 fan-out 四个清理轴（复用 / 简化 / 效率 / altitude），那一层同样要同步派发**（`run_in_background: false`，理由同第 1 步）。
 
 ### 1. 三评审并行
 

@@ -95,7 +95,7 @@ grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——
 ### 最终 CR（条件式）→ squash
 开发者确认无更多问题、且 `## 待真机验证` 无 `rm:pending` 残留（或已明确豁免）后：
 1. **先做 stage-4.md 的「squash 前工作树 scope 核对」**（`git add -A` 前逐条核 `git status --porcelain`：只有本 flow 代码范围 ∪ `docs/grill-flows/**` 记账 tracking 才纳入；跨子项目 stray 改动别吞、停下问开发者）→ 再 `git add -A` 收尾（index = 本 flow 范围内的全部累积改动）。
-2. **依改动量选择性 CR**（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
+2. **依改动量选择性 CR**——⛔ 这里的「CR」指下面这几行**本 flow 自派的子代理**，**不是**任何叫得出名字的现成命令：不调 Claude Code 内置的 `/code-review`，也不调仓库自带的 `code-review*` 命令 / orchestrator agent（它们按各自的范围和判据跑，产出看着像回事，最难发现错在哪）。（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
    - 环节 C 零代码改动（只 review 没让改）→ **跳过 CR**（环节 B 已覆盖）。
    - 有实质改动 → 派 **Spec/Standards 子代理**聚焦审人审动过的文件；清单含安全敏感改动（鉴权 / 输入 / 密钥 / 序列化）→ 加派**安全**。
    - 纯拼写 / import 级小修 → 主 session 自核。
