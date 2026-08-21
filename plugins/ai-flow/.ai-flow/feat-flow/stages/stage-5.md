@@ -68,7 +68,7 @@
 
 两个视角**并行派发**，都用内置 `general-purpose` 子代理（能跑 git）——主 session 只给 `<base>`，让审查者自己 `git diff <base>..HEAD` / `git log` / 按需 Read 文件。
 
-**完整做法在 `assembly-review.md`**：视角① 的传入清单与九条组装级维度、视角② 的 OWASP/CWE 逐项清单与依赖审计判定脚本、综合处理的 `receiving-code-review` 纪律、阻塞项的 3 轮硬上限。
+**完整做法在 `assembly-review.md`**：视角① 的传入清单与八条组装级维度、视角② 的 OWASP/CWE 逐项清单与依赖审计判定脚本、综合处理的 `receiving-code-review` 纪律、阻塞项的 3 轮硬上限。
 
 ⛔ **视角② 安全专项强制，不可跳过**——无论改动类型每次都跑。安全是最高代价缺陷类，跨模块可利用性只有组装后才看得全。
 

@@ -57,6 +57,7 @@ const PROJECT_ARTIFACTS = new Set([
   'plan.md',
   'design.md',
   'architecture.md',
+  'tech-design.md',
   'task-reports.md',
   'context-delta.md',
   'research.md',

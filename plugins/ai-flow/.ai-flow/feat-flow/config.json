@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "name": "feat-flow",
-  "description": "中大型功能需求开发工作流（10+ task）：6 stage 覆盖需求确认 → 实施蓝图 → 实施计划 → 代码实施 → 质量门 → 知识沉淀。设计哲学：context 长期健康、/clear 安全持久化、知识基础设施自动建立与维护。",
+  "description": "功能需求开发工作流：6 stage 覆盖需求确认 → 实施蓝图 → 实施计划 → 代码实施 → 质量门 → 知识沉淀。设计哲学：context 长期健康、/clear 安全持久化、知识基础设施自动建立与维护。",
   "context": {
     "warn_at_pct": 30,
     "rewarn_delta_pct": 5,

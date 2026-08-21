@@ -12,6 +12,7 @@
   - A/B 期间 HEAD 恒领先 base，故 `HEAD==base` 唯一对应「已 reset 进环节 C」，⚠️ **不再 AND「review.md 该节是否已写」**——reset 与首次写 review.md 之间有窗口，那段时间 review.md 可能还没「人工 review」节。
   - 处理：**不重派双视角**，直接续——重呈相对 base 的全量改动（去 IDE Changes 组看，或 `git diff <base>` 辅以 `git status` 覆盖 untracked 新文件）+ review.md 结论，从「还有其他问题吗」继续人审-修复循环。
   - 若 review.md 还没有「本 flow 改动范围」节，按 `final-review-and-squash.md` 里那条用 task-reports.md 的 `**Commit**` sha 反推。
+  - ⛔ **若 review.md 还没有「真机验证」节，先补建清单再续人审**（来源与做法见 `final-review-and-squash.md` 的「真机验证清单」；两处来源都空也要显式写「无 `[manual]` 项」）。清单的建立点在人审循环**之前**，所以 `/clear` 落在「reset 已跑、清单还没写」这个窗口里时，直接从「还有其他问题吗」续就会把它整段跳过——而空清单天然满足完成条件，没有任何东西会报错，squash 就这么放行了。
 - **否则** → 处于环节 A/B，按下面重派双视角。
 
 ## 审查中途 /clear：重启环节 B

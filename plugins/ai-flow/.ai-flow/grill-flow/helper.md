@@ -4,7 +4,7 @@
 
 **mattpocock/skills v1.1 方法论在 ai-flow 引擎上的完整实现**——散文 spec（不锁实现）+ tracer-bullet 垂直切片 + 主 session 调度 fresh 子代理逐票实施（写集不相交的票各开一个 worktree 并行，决策点人在环），配结构化质量把控。
 
-**实现规模不限**；**设计迷雾大**（一次 grilling 聊不出 spec）走 stage-1 的 wayfinder 子模式。
+**设计迷雾大**（一次 grilling 聊不出 spec）走 stage-1 的 wayfinder 子模式。
 
 ## 核心内核（"轻"在哪、质量在哪）
 

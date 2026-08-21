@@ -37,7 +37,7 @@ AI（主 session 或 subagent）自查发现前置 stage 产物漏写 / 错了�
 
 - design.md（决策记录 / 范围 / AC / UI 状态清单）
 - architecture.md（N≥2）
-- **tech-design.html（N≥2）**——它是 design.md / architecture.md 的**派生视图**，也是 stage-2 gate 的开发者主审面、团队之后回看的那一份。md 相关节一改就必须**重新生成**对应节（做法见 `tech-design-view.md`），否则开发者看到的是过期方案，而没有任何东西会报错
+- **tech-design.md / .html（N≥2，取 stage-2 入场选定的那种）**——它是 design.md / architecture.md 的**派生视图**，也是 stage-2 gate 的开发者主审面、团队之后回看的那一份。md 相关节一改就必须**重新生成**对应节（做法见 `tech-design-view.md`），否则开发者看到的是过期方案，而没有任何东西会报错
 - plan.md（N≥3）
 - 已 ship 代码 + task-reports.md（N≥4）
 - review.md（N≥5）

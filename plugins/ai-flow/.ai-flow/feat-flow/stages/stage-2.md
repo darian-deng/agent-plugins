@@ -16,6 +16,9 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 ## 入场动作
 
 1. **ADR 查阅**：执行 `{{flow_root}}/references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
+2. **选对齐视图形态**（`AskUserQuestion`，入场问一次，**默认轻量**）：这份视图的消费者就是被问的这个人，所以由他选，**不要用任何阈值代他判**（改动文件数 / diff 行数 / 决策条数都不行——票面静态特征与实际工作量的秩相关只有 0.15，划错线的失败方式是静默的）。两个选项：
+   - **轻量（默认）**：出 Markdown 的 `tech-design.md`，落位图用 mermaid 围栏块。代价：没有全屏看图、没有 dark / light、默认只有一张落位图。
+   - **完整**：出 `tech-design.html`。代价：多付一轮配图质量门（每张图渲 PNG → 读图 → 逐条核 → 修，≤2 轮）+ 一整套 HTML 外壳组装。
 
 ## 步骤
 
@@ -101,22 +104,24 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 - <一句话描述> — 来源: <来源节>[；被否决替代: <X> 为何不选]
 ```
 
-## 生成开发者对齐视图（tech-design.html）
+## 生成开发者对齐视图（`tech-design.md` / `tech-design.html`）
 
-architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 生成 `{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html`——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施）。结构与呈现全遵该契约：术语表靠前、现状落位图建心智模型、提议方案「概览先行→机制下钻 + 嵌入式为什么」、决策台账降为附录速查；配图遵**图优先**原则（凡能讲清的结构/流程/时序/状态都配，每张准确贴合本需求 + 图文同主题）。
+architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 在 `{{project_root}}/docs/feat-flows/<flow_id>/` 下生成入场选定形态的对齐视图——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施）。结构与呈现全遵该契约：术语表靠前、现状落位图建心智模型、提议方案「概览先行→机制下钻 + 嵌入式为什么」、决策台账降为附录速查；配图遵**图优先**原则（凡能讲清的结构/流程/时序/状态都配，每张准确贴合本需求 + 图文同主题）。
 
-配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）；HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
+**轻量模式**照该契约的「轻量模式」节：主 session 自己按章节增量写 md，落位图写成 mermaid 围栏块，收尾跑一次 `mmdc` 只判退出码（无配图子代理、无 HTML 外壳、无视觉自检循环）。
 
-md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
+**完整模式**：配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）；HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
+
+design.md + architecture.md 是给执行器的完备产物，对齐视图是给人对齐的蒸馏视图——后者是本 Gate 的开发者主审面。
 
 ## 开发者审批清单（写 signal 后随引擎确认一并呈现）
 
 > 呈现这份清单是给开发者审阅讨论用，**呈现 ≠ 到达 Gate**。到达 Gate 必须写 signal（见末尾「Signal」段）；只有写入 signal、收到引擎「已提交」确认后，才向开发者提示执行 `feat-flow approve`。不要在没写 signal 时就抛 approve 提示。
 
-完成 architecture.md（架构审查阻塞项已回改）+ context-delta.md + tech-design.html 后，请开发者打开 `tech-design.html` 审阅整体方案，并以下列 7 点 **+ 独立架构审查的建议项**作为审查引导逐项确认：
+完成 architecture.md（架构审查阻塞项已回改）+ context-delta.md + 对齐视图后，请开发者打开这份对齐视图审阅整体方案，并以下列 7 点 **+ 独立架构审查的建议项**作为审查引导逐项确认：
 
 ```
-对照 tech-design.html / architecture.md 逐项审：
+对照对齐视图 / architecture.md 逐项审：
 
 1. 覆盖：design.md 每个决策是否都在蓝图里有对应实现位置？
 2. 模块定位：新建模块/文件的目录位置是否符合项目既有惯例？
@@ -134,8 +139,8 @@ md 是给执行器的完备产物，tech-design.html 是给人对齐的蒸馏视
 - **批量成员已枚举**：凡「包装/注册/映射一批成员」的文件,接口设计节已列出完整成员清单或明确数量（供 Stage 3 体量门用，防截断）
 - **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
-- **`tech-design.html` 已生成**（按 `{{flow_root}}/references/tech-design-view.md`：术语表靠前、实质默认展开只折附录、图优先且每张准确贴合本需求 + 图文同主题、决策台账作附录速查、正文无时间性叙事、正文/表/图/代码统一内容宽度且无横向滚动条）
-- 开发者审批以 tech-design.html 为主审面，7 点 + 架构审查建议项已主动呈现
+- **对齐视图已生成**（入场选定的形态，按 `{{flow_root}}/references/tech-design-view.md`：术语表靠前、实质默认展开只折附录、图准确贴合本需求 + 图文同主题、决策台账作附录速查、正文无时间性叙事；完整模式另加统一内容宽度、无横向滚动条、查看器资产已注入，轻量模式另加 `mmdc` 退出码为 0）
+- 开发者审批以对齐视图为主审面，7 点 + 架构审查建议项已主动呈现
 
 ## Signal
 
