@@ -125,7 +125,7 @@ Stage 6 知识沉淀完成。所有写入已完成，approve 后将 amend 进本
 
 **approve 后**（流程结束）：先把知识沉淀 amend 进 stage-5 那笔 `feat:` 提交，再向开发者报告。
 
-approve 前开发者可能已 `git restore` 撤回部分写入，故 amend 必须在 approve 之后执行，只收幸存的文件。`-A` 之前照 helper.md 铁律「`git add -A` 前先核范围」核一遍——本环节的范围是知识沉淀写入的那些文件（CLAUDE.md / rules / ADR / skills）∪ `docs/feat-flows/**`，范围外的改动不要 amend 进这笔 feat commit：
+approve 前开发者可能已 `git restore` 撤回部分写入，故 amend 必须在 approve 之后执行，只收幸存的文件。`-A` 之前照 helper.md 铁律「`git add -A` 前先核范围」核一遍——本环节的范围是知识沉淀写入的那些文件（CLAUDE.md / rules / ADR / skills）∪ `docs/feat-flows/**` ∪ `.ai-flow/**`（flow 定义，运行中升级过插件就会有它），范围外的改动不要 amend 进这笔 feat commit：
 
 ```bash
 git add -A && git commit --amend --no-edit

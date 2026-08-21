@@ -88,9 +88,10 @@ describe('feat-flow preflight.cjs — integration', () => {
   it('passes when all prerequisites are mocked', () => {
     const fakeHome = makeFakeHome();
 
-    // The 4 user skills feat-flow's preflight requires.
+    // The 4 user skills feat-flow's preflight requires — keep in sync with
+    // SKILL_INSTALL in .ai-flow/feat-flow/preflight.cjs.
     const skills = [
-      'grounded-design', 'subagent-driven-development', 'receiving-code-review', 'optimize-claude-context',
+      'subagent-driven-development', 'test-driven-development', 'receiving-code-review', 'optimize-claude-context',
     ];
     for (const skill of skills) {
       mkdirSync(join(fakeHome, '.claude', 'skills', skill), { recursive: true });

@@ -33,6 +33,9 @@ implementer 报 完成 / 完成但有顾虑 后，主 session **立即**把下�
 ### ADR 候选
 子代理 assess-candidate 路由到 ADR 的候选（跨文件、有权衡）——Stage 6 评 ADR
 
+### 待人工验证
+子代理上报的、机器地板（verify / 单测 / typecheck / lint）验不了的行为，每条一句「验什么」（判据见 dispatch-unit.md「`[manual]` 项」）。**Stage 5 环节 C 从这里汇总成真机验证清单交开发者逐条验，全部收口才允许 squash**——所以这里漏一条，那条行为整个 flow 里没人验过
+
 ### 前置修订
 本 task 自查发现前置 stage 问题时填：L1/L2/L3 + 描述 + 处理（见 revision-protocol.md 入口 B）
 

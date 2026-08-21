@@ -48,7 +48,8 @@
 
 - 修代码（默认）
 - 若是既有测试被打破 + 怀疑测试在测**实现细节** → 应用下面「既有测试破坏纪律」
-- 修复后 `git add -A && git commit -m "fix: resolve verification errors"`（`-A` 全树暂存，不受当前目录影响）
+- 修复后提交。⛔ **`-A` 之前先核范围**（判据同下方红线、见 helper.md 铁律）：本环节的 `git add -A` 是**本 flow 四处 `-A` 里最危险的一处**——它吞进来的 stray 会落在 `<base>..HEAD` 区间内，于是环节 C 按 `<base>..HEAD` 算「本 flow 改动范围」时**把那个 stray 算成范围内**，环节 C 的 scope 核对于是全绿放行、stray 被 squash 进那笔 `feat:`。范围外有改动 → 不要 `-A`，改为只 `git add <本次真改的那几个文件>`，或停下问开发者
+- 核过再 `git add -A && git commit -m "fix: resolve verification errors"`（`-A` 全树暂存，不受当前目录影响）
 - 重跑直到全过
 
 ### 既有测试破坏纪律
@@ -73,7 +74,9 @@
 
 ## 环节 C：人工 review 闭环 + 最终 CR + squash
 
-环节 A/B 是 AI 自查，这一环是**开发者**把关。**完整做法在 `final-review-and-squash.md`**（reset 摊平、注释清理两次、人审-修复循环、条件式最终 CR、Context 变化捕获、squash message 格式）。
+环节 A/B 是 AI 自查，这一环是**开发者**把关。**完整做法在 `final-review-and-squash.md`**（reset 摊平、注释清理两次、**真机验证清单收口**、人审-修复循环、条件式最终 CR、Context 变化捕获、squash message 格式）。
+
+**这里是全流程唯一的真机验证落点**：环节 A/B 全是机器地板 + 读 diff，两者都验不了「跑起来对不对」。清单来自两处——design.md 里 stage-1 标的 `[manual]` AC，以及 task-reports.md 各 task 的 `### 待人工验证`。环节 C 全程工作区 unstaged、代码可运行，正是唯一能真机验的时机。
 
 ⛔ **本环节走完前绝不写 signal**，即便讨论中开发者说「可以了」，也要先跑完最终 CR 并 squash。
 
@@ -87,8 +90,9 @@
 
 注：问题挑战 design.md 已记录决策的「架构级冲突」处理（见 `assembly-review.md` §综合处理）是本协议的特例。
 
-## 四条红线（违反了不会有任何东西报错）
+## 五条红线（违反了不会有任何东西报错）
 
+- ⛔ **真机验证清单没收口，不许 squash**：design.md 的 `[manual]` AC ∪ task-reports.md 各 `### 待人工验证`，逐条由开发者真机验过（记 review.md「真机验证」节）或**开发者明确豁免并注明原因**，才进最终 CR + squash。**空清单也要显式确认是空的**——漏登记的清单天然满足完成条件，于是那些行为整个 flow 里没人验过，而 stage-6 打印「建议人工测试」时代码已经 squash 完、flow 即将结束，那时发现问题只能另开一次修复。
 - ⛔ **环节 C 入场的顺序不能反**：先 `git diff --name-only <base>..HEAD` 把范围**写进 review.md**，才 `git reset <base>`。reset 之后 `<base>..HEAD` 是空的，那份范围再也算不出来——而它是收尾 `git add -A` 前 scope 核对的唯一依据。
 - ⛔ **`git add -A` 之前先核范围**：逐条对 `git status --porcelain`，只把落在本 flow 范围内的改动纳入（判据见 helper.md 铁律）。有范围外的改动 → 不要 `-A`，停下问开发者。monorepo 里一把 `-A` 会把别的子项目 stray 一起吞进 squash。
 - ⛔ **reset 之后派任何子代理看改动，一律用 `git diff --staged <base>`，不用 `<base>..HEAD`**——后者此时是空 diff，子代理会对着空 diff 写出一份「没发现问题」，而这不报任何错误。
@@ -99,6 +103,7 @@
 - 自动化回归全过（squash commit 前在 working tree 跑一次确认）
 - **视角① 与视角② 都已跑**（安全视角强制，不可跳过）
 - **环节 C 已走完**：开发者确认无更多问题，人审改动全部过回归，最终 CR 已跑（或按条件跳过）且干净
+- **真机验证清单已收口**：每条已验过或已由开发者明确豁免，结论记在 review.md「真机验证」节（清单为空时也要写明「无 `[manual]` 项」）
 - **环节 C 已把全部改动 squash 成单个 `feat` commit**（body 末行带 `flow-squash: <flow_id>` 锚点），working tree 干净
 - review.md 存在且完整（**含安全节**）
 - 所有阻塞项（视角① 阻塞 + 安全 Critical/High）已修复

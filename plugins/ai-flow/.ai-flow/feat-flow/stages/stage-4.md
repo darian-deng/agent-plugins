@@ -10,6 +10,7 @@
 | 触发事件 | 读 |
 |---|---|
 | 要 dispatch 下一个执行单元（每个单元都重走一遍） | `dispatch-unit.md` |
+| 派完了要等 / 收到「完成」通知 / `/clear` 重入 / 子代理迟迟没回报 | `subagent-lifecycle.md` |
 | 子代理回报了「完成 / 完成但有顾虑」，要落盘 + 评审 | `task-report-and-review.md` |
 | pre-commit hook 挡住 / 受阻 / 需补充信息 / `[partial]` / 前置 stage 有错 | `stage-4-exceptions.md` |
 | 要改前置产物（design / architecture / plan） | `revision-protocol.md` |
@@ -29,10 +30,10 @@
 
 **先判首次进入还是 /clear 重入**：看引擎注入的 `[ai-flow:paths]` 块里是否已有 `base_sha_code` 行（Step 1 触发引擎捕获后才会注入它），或 plan.md 是否已有 `[x]`。
 
-- **已含 `base_sha_code`，或 plan.md 已有 `[x]`** → /clear 重入：**跳过 Step 1**（绝不重跑——重新捕获会污染 Stage 5 的 diff 基准；引擎也会在已存在时拒绝覆写）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。其中：
+- **已含 `base_sha_code`，或 plan.md 已有 `[x]`** → /clear 重入：**跳过 Step 1**（绝不重跑——重新捕获会污染 Stage 5 的 diff 基准；引擎也会在已存在时拒绝覆写）。改为：读 task-reports.md 重建待沉淀术语 → 从第一个未 `[x]` 的 task 续跑主循环（按执行单元清单确定它属哪个单元/簇）。⛔ **续派之前先按 `subagent-lifecycle.md` §三 确认上一轮那个子代理死没死**——`/clear` 不杀在飞子代理，而 feat-flow 全程跑在同一棵主工作树上，撞上就是两个子代理写同一棵树。其中：
   - **已 commit 但 task report 缺失 / 不全的 task**（无 `**审查**` 行，或缺 `context 候选` / `ADR 候选` 等只有子代理能产出的字段）→ 派一个子代理读 `git show <sha>` **重跑评审 + 重跑 assess-candidate**，据回报重建该 task report。主 session 不读代码、跑不了 assess-candidate，故这类字段必须由子代理重建；重跑安全（diff 已含该 task 最终改动）。
   - 有 **`[partial]` commit + 「剩余工作」清单**的 task → 按 `stage-4-exceptions.md` 的「截断自保护」续跑，**不做 git 考古**。
-  - Step 0 的分支复核仍要做。
+  - Step 0 的**分支与工作树两项复核都仍要做**——⛔ 别只复核分支：重入时工作树里的代码改动正是「上一轮子代理留下的中间态 / 它还在跑」的唯一物理信号，跳过它就等于默认那个代理已经死了。
 - **无 `base_sha_code` 且 plan.md 无 `[x]`** → 首次进入，按 Step 0 → 3 顺序走。
 
 **Step 0：分支 + 工作树预检（任何 commit 之前）**
@@ -80,14 +81,15 @@ touch {{project_root}}/docs/feat-flows/<flow_id>/task-reports.md
 每个单元循环这四步，**每一步的做法都在 references 里，不要凭记忆拼**：
 
 1. **预处理 + 拼 dispatch prompt** → `dispatch-unit.md`（四条预处理、prompt 字段清单、模型分层、实施要求、耦合簇、精简回报形状）
-2. **dispatch**，等回报
-3. **回报到手 → 立即落盘 + 评审 + 越界核查** → `task-report-and-review.md`（四步 checklist、report 模板、四条越界维度）
+2. **dispatch**，然后**直接结束回合等宿主唤醒**（`subagent-lifecycle.md` §一：串行下你手上没有不依赖它结果的活，结束回合是免费的；⛔ 不要用前台 `sleep` 或轮询循环占位等待）
+3. **回报到手 → 先按 `subagent-lifecycle.md` §二 核首行与两条物理信号，确认它真的停了** → 再落盘 + 评审 + 越界核查 → `task-report-and-review.md`（四步 checklist、report 模板、四条越界维度）
 4. **确认本 task 段完整**（有 `**审查**` 行），再 dispatch 下一单元
 
 回报是「受阻 / 需补充信息」，或 commit 撞 pre-commit hook → `stage-4-exceptions.md`。
 
-### 四条红线（违反了不会有任何东西报错）
+### 五条红线（违反了不会有任何东西报错）
 
+- ⛔ **完成通知不等于子代理已停。** 宿主对「干完了」和「停下了」发的是同一种 `completed`，正文才是差别。**判据是回报首行必须是 `impl-done: <commit sha>`**（不需要理解正文）+ `git log -1` 与 `git status --porcelain` 两条物理复核（`subagent-lifecycle.md` §二）。没核就落盘 / 派下一个 → 两个子代理同写同一棵主工作树，commit 归属错乱且没有任何机器门会拦。
 - ⛔ **钉死串行：绝不并行 dispatch 实施子代理。** SDD 本就禁并行 implementer；耦合的 task 已被 Stage 3 合并进同一簇/同一子代理，不存在「并行两个子代理改同一文件」的场景。**即使两个单元无文件交集，也串行派。**
 - ⛔ **dispatch = 机械拼装，不即兴。** plan 的每 task 已自带 `decisions` / `verify` / `files`（符号锚点）/ `read_first`，主 session 照着拼、**不补 plan 没给的信息**。要补的信息缺失 = plan 缺信息 = 走异常处理，不在 dispatch 时现编。
 - ⛔ **抑制 SDD 的三个越界默认行为**（feat-flow 接管这些，不让 SDD 冲出 stage-4 边界）：

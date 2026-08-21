@@ -82,6 +82,11 @@ ok('git');
 // ── 4. Required user-installed skills ─────────────────────────────────────────
 const SKILL_INSTALL = {
   'subagent-driven-development': 'npx skills add obra/superpowers@subagent-driven-development -g -y',
+  // Hard dependency, not a nice-to-have: dispatch-unit.md deliberately does NOT
+  // inline the red-green steps (it only names this skill), so when it is absent the
+  // implementer subagent gets no TDD guidance at all — it writes the implementation
+  // first, `verify` still exits 0, and nothing turns red anywhere.
+  'test-driven-development': 'npx skills add obra/superpowers@test-driven-development -g -y',
   'receiving-code-review': 'npx skills add obra/superpowers@receiving-code-review -g -y',
   'optimize-claude-context': 'npx skills add darian-deng/agent-skills@optimize-claude-context -g -y',
 };

@@ -179,8 +179,12 @@ const SPLIT_STAGES: SplitStage[] = [
   {
     flow: 'feat-flow',
     stage: 'stage-4.md',
-    routed: ['dispatch-unit.md', 'task-report-and-review.md', 'stage-4-exceptions.md', 'revision-protocol.md', 'adr-scan.md'],
+    routed: ['dispatch-unit.md', 'subagent-lifecycle.md', 'task-report-and-review.md', 'stage-4-exceptions.md', 'revision-protocol.md', 'adr-scan.md'],
     resident: [
+      // 宿主对「干完了」和「停下了」发同一种 completed 通知，正文才是差别、且很容易被读成相反的意思。
+      // 判错的后果落在同一棵主工作树上（feat-flow 不做工作树隔离），而没有任何机器门会拦。
+      ['完成通知不等于子代理已停', /完成通知不等于子代理已停/],
+      ['首行机械判据 impl-done: <commit sha>', /首行必须是\s*`impl-done: <commit sha>`/],
       ['钉死串行，绝不并行 dispatch 实施子代理', /绝不并行 dispatch 实施子代理/],
       ['dispatch = 机械拼装，不补 plan 没给的信息', /不补 plan 没给的信息/],
       ['抑制 SDD：不建 worktree', /不建 worktree/],
@@ -195,6 +199,9 @@ const SPLIT_STAGES: SplitStage[] = [
     stage: 'stage-5.md',
     routed: ['assembly-review.md', 'review-md.md', 'final-review-and-squash.md', 'stage-5-reentry.md', 'adr-scan.md', 'revision-protocol.md'],
     resident: [
+      // 空清单天然满足完成条件，于是全流程唯一的真机验证落点被整段跳过——而 stage-6 那行
+      // 「建议人工测试」出现时代码已经 squash 完、flow 即将结束。
+      ['真机验证清单没收口不许 squash', /真机验证清单没收口，不许 squash/],
       ['环节 C 入场顺序不能反：先写范围再 reset', /先\s*`git diff --name-only <base>\.\.HEAD`\s*把范围\*{0,2}写进 review\.md/],
       ['git add -A 之前先核范围', /`git add -A`\s*之前先核范围/],
       ['reset 之后必须用 --staged，不用 <base>..HEAD', /`git diff --staged <base>`[\s\S]{0,40}不用\s*`<base>\.\.HEAD`/],
