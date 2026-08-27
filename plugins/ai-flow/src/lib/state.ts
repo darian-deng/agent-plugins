@@ -503,3 +503,79 @@ export function activeJsonPath(repoRoot: string, flowName: string): string {
 export function scriptsDir(repoRoot: string, flowName: string): string {
   return join(repoRoot, '.ai-flow', flowName, 'scripts');
 }
+
+/**
+ * Where the engine parks a RENDERED copy of the current stage prompt for the model to Read.
+ *
+ * Two engine paths hand the model a path instead of the prompt body: the oversize fallback
+ * (`injectableStagePrompt`) and the gate-pending branch. Both used to point at
+ * `stages/<id>.md` — the TEMPLATE — and that is not the same document:
+ *
+ *  - `{{flow_root}}` / `{{project_root}}` are still literal there. Substitution happens in
+ *    `renderPrompt()`, i.e. only on the injection path. A model that copies one verbatim
+ *    into Write creates a directory literally named `{{flow_root}}` and the file lands
+ *    nowhere — silently, because Write does not fail (shell would). Stage prompts carry
+ *    these on their load-bearing paths: where to write `signal`, which docs to read first.
+ *  - the template also lacks what the engine appends at injection time
+ *    (`writtenDocLengthNote()`, and `gateProtocolNote()` for gated stages).
+ *
+ * So pointing at the template silently downgrades "here is your executable stage" into
+ * "here is a form to fill in from memory". Materializing the rendered text removes the
+ * whole failure class instead of warning about it.
+ *
+ * Lives under `state/` because that is already gitignored (`.ai-flow/<flow>/state/`) and
+ * flow-scoped. It is NOT control-plane: the Bash fence lists `state/signal` and
+ * `state/active.json` by name, not the directory, and the read-ordering guard only matches
+ * paths that `config.stages[].prompt` declares — so the model can Read this freely.
+ */
+export function renderedPromptPath(repoRoot: string, flowName: string): string {
+  return statePath(repoRoot, flowName, 'current-prompt.md');
+}
+
+/**
+ * Write the rendered prompt out and return its path; `null` if it could not be written.
+ *
+ * `stageId` is stamped into a header because this file OUTLIVES the moment it was written.
+ * It is only refreshed on the two pointer paths, so a later stage that injects inline
+ * leaves the previous stage's copy sitting there — and `helper.md` names this path to the
+ * model, so it can find it without being handed a pointer. A model that compacts mid-stage
+ * and re-reads it would otherwise get a complete, plausible, WRONG stage's prompt with
+ * nothing to signal the mismatch. The header makes that detectable; `advanceStage` also
+ * deletes the file on every transition so it rarely gets the chance.
+ *
+ * Fail-open by design: callers fall back to pointing at the template. A degraded pointer
+ * still beats no prompt at all, which is what throwing here would produce.
+ */
+export function materializeRenderedPrompt(
+  repoRoot: string,
+  flowName: string,
+  stageId: string,
+  rendered: string
+): string | null {
+  try {
+    const dest = renderedPromptPath(repoRoot, flowName);
+    const header =
+      `<!-- ai-flow: stage=${stageId} flow=${flowName} -->\n` +
+      `> ⚠️ 这是 stage **${stageId}** 提示词的渲染副本（引擎落盘，占位符已展开）。\n` +
+      `> **它和你当前所处的 stage 不一致时，就是旧件——别照它执行**，去读引擎本次注入给你的内容。\n\n`;
+    mkdirSync(dirname(dest), { recursive: true });
+    // tmp + rename, same as active.json / signal in this file: a reader must never observe
+    // a half-written prompt, and the pointer message that sends them here is generated
+    // right after this returns.
+    const tmp = statePath(repoRoot, flowName, `current-prompt.${randomBytes(4).toString('hex')}.tmp`);
+    writeFileSync(tmp, header + rendered, 'utf-8');
+    renameSync(tmp, dest);
+    return dest;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the rendered copy. Called on every stage transition so a stale one cannot be read. */
+export function clearRenderedPrompt(repoRoot: string, flowName: string): void {
+  try {
+    const p = renderedPromptPath(repoRoot, flowName);
+    if (existsSync(p)) unlinkSync(p);
+  } catch { /* best-effort: a stale copy is caught by its stage header anyway */ }
+}
+

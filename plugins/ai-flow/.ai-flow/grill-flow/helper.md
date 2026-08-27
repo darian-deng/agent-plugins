@@ -85,6 +85,11 @@ docs/grill-flows/<flow_id>/
 └── review.md            # 收尾审 findings + 原始测试输出（stage-4）
 
 .ai-flow/grill-flow/state/   # 引擎维护：active.json / signal / mark-base / transitions.log
+                             # + current-prompt.md（**最近一次落盘时那个 stage** 的提示词渲染副本：
+                             #   占位符已展开、写盘长度纪律已在内。只在「提示词超注入上限」与
+                             #   「gate-pending 重入」这两条指路路径上生成；每次 stage 推进与 flow
+                             #   收尾都会删掉它。文件开头有 `stage=<id>` 头——**与你当前 stage 不符
+                             #   就是旧件，别照它执行**）
 ../<repo 名>.ai-flow-worktrees/<flow_id>-T<n>/
                              # stage-3 并行票的隔离工作树，在**仓库同级**（不在仓库内，
                              # 所以不需要 gitignore）；分支 wt/<flow_id>-T<n>；

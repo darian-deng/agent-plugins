@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { handleStart } from '../src/lib/commands/start.js';
 import { advanceStage } from '../src/lib/advance-stage.js';
 import { handleSessionStart } from '../src/lib/session-handler.js';
 import { renderPrompt, writtenDocLengthNote } from '../src/lib/prompt-render.js';
+import { renderedPromptPath } from '../src/lib/state.js';
 import {
   createFlowTestRepo,
   writeActiveState,
@@ -111,15 +114,23 @@ describe('doc length note injection points', () => {
   });
 
   /**
-   * gate-pending 分支不注入 stage 提示词正文，只给出它的路径让模型自己 Read。
-   * 磁盘上的 `stages/*.md` **不含**这段长度纪律——`renderPrompt()` 只在注入路径上追加它。
-   * 所以这条分支必须自己把它拼上，否则「去 Read 那个文件」这条指路把纪律丢在了半路，
-   * 而 gate 上改文档正是它适用的时刻。这两条断言之外没有任何用例覆盖这条分支的内容：
-   * 删掉那次拼接，其余 570+ 用例照样全绿。
+   * gate-pending 分支不注入 stage 提示词正文，只给出一条「去 Read 这个文件」。
+   *
+   * 它必须指向引擎落盘的**渲染副本**，不是 `stages/<id>.md` 模板——模板里的
+   * `{{flow_root}}` / `{{project_root}}` 还是字面量（替换只发生在注入路径的
+   * renderPrompt 里），而把字面占位符抄进 Write 是静默失败：建出一个字面名的目录、
+   * 文件落在那里等于没写，且不报错。模板也不含引擎追加的长度纪律。
+   *
+   * 这三条断言分别钉住：指向副本、副本里占位符已展开、长度纪律在副本里。
    */
-  it('gate-pending recovery carries the note AND points at the stage prompt', async () => {
+  it('gate-pending 指向渲染副本，且副本里占位符已展开、带长度纪律', async () => {
     const repo = createFlowTestRepo('gated-flow', GATED_CONFIG);
     cleanups.push(repo.cleanup);
+    // 模板里放一个占位符，验证模型读到的那份确实已展开
+    writeFileSync(
+      join(repo.repoRoot, '.ai-flow', 'gated-flow', 'stages', 'review.md'),
+      '# Review\n\nsignal 写到 {{flow_root}}/state/signal，产物在 {{project_root}}/docs/。\n'
+    );
     writeActiveState(repo.repoRoot, 'gated-flow', {
       flow_id: 'gated-flow-abc',
       flow_name: 'gated-flow',
@@ -127,12 +138,23 @@ describe('doc length note injection points', () => {
       current_stage: 'review',
       base_sha: 'abc',
     });
-    // review 是终端 stage，signal 'flow-complete' + gate → gate pending
-    writeSignal(repo.repoRoot, 'gated-flow', 'flow-complete');
+    writeSignal(repo.repoRoot, 'gated-flow', 'flow-complete'); // review 是终端 stage → gate pending
     const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-gp'));
-    expect(out!.additionalContext).toContain(LEN_MARKER);
-    // 指路本身也没有别的用例盯着：路径丢了，这条分支就退回成「只说等 approve」
-    expect(out!.additionalContext).toContain('stages/review.md');
+    const ctx = out!.additionalContext!;
+
+    // 1) 指向落盘的渲染副本，而不是模板
+    const readyPath = renderedPromptPath(repo.repoRoot, 'gated-flow');
+    expect(ctx).toContain(readyPath);
+    expect(ctx).not.toContain('stages/review.md');
+
+    // 2) 副本里占位符已展开——这是这条路径存在的全部意义
+    const onDisk = readFileSync(readyPath, 'utf-8');
+    expect(onDisk).not.toContain('{{flow_root}}');
+    expect(onDisk).not.toContain('{{project_root}}');
+    expect(onDisk).toContain(join(repo.repoRoot, '.ai-flow', 'gated-flow'));
+
+    // 3) 长度纪律随副本一起到手（注入里就不必再拼一份）
+    expect(onDisk).toContain(LEN_MARKER);
   });
 
   it('session recovery re-injects the note', async () => {

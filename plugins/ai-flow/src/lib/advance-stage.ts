@@ -7,6 +7,8 @@ import {
   appendLog,
   activeJsonPath,
   signalPath,
+  materializeRenderedPrompt,
+  clearRenderedPrompt,
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
@@ -46,6 +48,9 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
     // Clean up signal file so stale 'flow-complete' doesn't trigger S2 self-heal on a future flow
     const sig = signalPath(repoRoot, flowName);
     if (existsSync(sig)) unlinkSync(sig);
+    // Same reason as the signal: a rendered copy left behind outlives this flow, and the
+    // next one would find a complete, plausible prompt from a flow that already ended.
+    clearRenderedPrompt(repoRoot, flowName);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
 
     return {
@@ -55,6 +60,13 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
       terminal: true,
     };
   }
+
+  // Drop the previous stage's rendered copy before entering the next one. Without this it
+  // survives every transition that injects inline (i.e. most of them), and `helper.md` hands
+  // the model that path by name — so a compacted session could Read a complete, plausible
+  // prompt belonging to a stage it already left. The stage header inside is the backstop;
+  // deleting it is the primary fix.
+  clearRenderedPrompt(repoRoot, flowName);
 
   // Reset first_prompt_handled so Layer 2 re-injects guidance on the first
   // non-command prompt in the newly entered stage (e.g. after approve).
@@ -91,7 +103,8 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead
+        assembledOverhead(assemble) + gateNote.length + callerOverhead,
+        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
       );
     } catch { /* non-fatal */ }
   }

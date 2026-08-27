@@ -11,6 +11,7 @@ import {
   activeJsonPath,
   gcRegistry,
   type ActiveState,
+  materializeRenderedPrompt,
 } from './state.js';
 import { bindSession } from './session-registry.js';
 import { truncateError, flowStatusLine } from './format.js';
@@ -137,10 +138,30 @@ export async function handleSessionStart(
     // inlining it — the whole branch lands around 700 characters, far under
     // INLINE_INJECTION_BUDGET, and pointing avoids handing a "go do this stage" document
     // to a session whose stage is already submitted and merely awaiting approval.
-    // Deliberately no existsSync here (unlike the normal-recovery path further down):
-    // if the flow definition renamed this file, a failed Read is a VISIBLE error, which
-    // beats that path's silent degradation to an empty prompt body. Don't "unify" the two.
-    const stagePromptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+    // Point at a RENDERED copy, not at `stages/<id>.md`. The template still has literal
+    // `{{flow_root}}` / `{{project_root}}` (substitution happens in renderPrompt, i.e. only
+    // on the injection path) and lacks the notes the engine appends — and copying a literal
+    // placeholder into Write is silent, it just creates a directory by that name. Falls back
+    // to the template path if the write fails; the message below says which one you got.
+    //
+    // Deliberately no existsSync on the template (unlike the normal-recovery path further
+    // down): a failed Read is a VISIBLE error, which beats that path's silent degradation to
+    // an empty prompt body. Don't "unify" the two.
+    const templatePath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+    let renderedForRead: string | null = null;
+    let templateReadable = true;
+    try {
+      renderedForRead = renderPrompt(readFileSync(templatePath, 'utf-8'), repoRoot, flowName);
+    } catch {
+      // Template itself is gone/renamed. Keep pointing at it so the Read fails LOUDLY —
+      // but the message below must not then blame "落盘失败", which would send the reader
+      // hunting a disk problem instead of a missing stage file.
+      templateReadable = false;
+    }
+    const materialized = renderedForRead
+      ? materializeRenderedPrompt(repoRoot, flowName, state.current_stage, renderedForRead)
+      : null;
+    const stagePromptPath = materialized ?? templatePath;
     const lines: string[] = [
       `[ai-flow] 流程 '${flowName}' 恢复中，Stage '${state.current_stage}' 已提交，等待用户确认。`,
       ``,
@@ -152,6 +173,17 @@ export async function handleSessionStart(
       `⚠️ 本次注入**不含**本 stage 的提示词正文。开发者在 gate 上提出任何修改、` +
         `或你要做 approve 之后的收尾动作之前，**先 Read 这个文件**并照它执行：`,
       stagePromptPath,
+      materialized
+        // ⚠️ 不要在这里提 gate 协议：这条分支**有意**不注入它（signal 已写，「先写 signal」
+        // 那条提醒在此刻自相矛盾——`gate-protocol.test.ts` 钉着这一点），副本里也没有。
+        // 说它「随本次注入另给」是错的。
+        ? `（这是引擎为你落盘的**渲染后**副本：路径占位符已展开、写盘文档长度纪律已在内。）`
+        : templateReadable
+          ? `⚠️ 上面给的是**模板原文**（渲染副本落盘失败）：里面的 \`{{flow_root}}\` / \`{{project_root}}\` ` +
+            `**没有被展开**，用上面 \`[ai-flow:paths]\` 块里的真实路径代入，⛔ 别照字面写——` +
+            `sh 会报错，但 Write 不会，它会建出一个字面名的目录、文件落在那里等于没写。`
+          : `⛔ 本 stage 的提示词文件读不出来（可能被改名或删了）。上面那个路径 Read 会失败——` +
+            `这不是磁盘问题，是 flow 定义与 active.json 里的 stage id 对不上。先把它修好，别凭记忆往下做。`,
       isTerminal
         ? `⛔ 终端 stage 的 approve 后动作只写在上面那份提示词里，引擎的流程完成消息不会重复它` +
           `（它只说「总结产出、建议下一步」）——不读就动手会静默漏掉。`
@@ -168,7 +200,10 @@ export async function handleSessionStart(
     // added — the lines above already say the signal is in and not to advance, which is
     // what that note would repeat.)
     return {
-      additionalContext: pathsPreamble + lines.join('\n') + '\n' + writtenDocLengthNote(),
+      // The materialized copy already carries writtenDocLengthNote (renderPrompt adds it).
+      // Only the degraded template-pointer path needs it appended here.
+      additionalContext:
+        pathsPreamble + lines.join('\n') + (materialized ? '' : '\n' + writtenDocLengthNote()),
       systemMessage: statusLine,
     };
   }
@@ -218,7 +253,8 @@ export async function handleSessionStart(
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length
+        assembledOverhead(assemble) + gateNote.length,
+        (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
       );
     } catch { /* non-fatal */ }
   }

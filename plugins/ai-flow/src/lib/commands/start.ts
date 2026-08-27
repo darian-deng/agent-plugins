@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
-import { hasActiveFlow, writeActiveState, appendLog, type ActiveState } from '../state.js';
+import { hasActiveFlow, writeActiveState, appendLog, materializeRenderedPrompt, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
 import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
@@ -140,7 +140,8 @@ export async function handleStart(
     stageContent = injectableStagePrompt(
       renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
       promptPath,
-      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
+      (text) => materializeRenderedPrompt(repoRoot, flowName, firstStage.id, text)
     );
   }
   stageContent += gateNote;

@@ -7,5 +7,5 @@ plugins/ai-flow/dist-local/
 .specstory
 .cursorindexingignore
 .vscode/
-.ai-flow/*/state/
+**/.ai-flow/**/state/
 .worktrees/

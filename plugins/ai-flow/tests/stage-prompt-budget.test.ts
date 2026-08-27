@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { advanceStage } from '../src/lib/advance-stage.js';
 import { createFlowTestRepo, writeActiveState, BLOCKING_CONFIG } from './fixtures/helpers.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
+import { renderedPromptPath, materializeRenderedPrompt } from '../src/lib/state.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
@@ -151,6 +152,70 @@ describe('注入预算的行为级回归（调真引擎，不在测试里复算 
     expect(overLimit, '兜底时一个字的正文都不许带').not.toContain('xxxxxxxxxx');
   });
 
+  /**
+   * 兜底不只是「给个路径」——给的必须是**渲染副本**。
+   *
+   * 指向 `stages/<id>.md` 模板会把两样东西丢掉：占位符（`{{flow_root}}` 在模板里还是
+   * 字面量，替换只发生在注入路径的 renderPrompt 里），以及引擎追加的长度纪律。
+   * 前者是静默的——把字面占位符抄进 Write 会建出一个同名目录、文件落在那里等于没写。
+   * 超预算的那一页恰恰是内容最多、最需要照着执行的那一页。
+   */
+  it('兜底指向渲染副本，副本里占位符已展开', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    // 撑爆预算，并在里面埋一个占位符
+    const body = '{{flow_root}}/state/signal\n' + 'x'.repeat(INLINE_INJECTION_BUDGET);
+    writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'review.md'), body);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 't',
+      current_stage: 'work', base_sha: 'abc',
+    });
+    const out = (await advanceStage(repo.repoRoot, 'test-flow', 'sess-1')).additionalContext!;
+
+    expect(out, '超预算 → 兜底').toContain('立刻用 Read');
+    const readyPath = renderedPromptPath(repo.repoRoot, 'test-flow');
+    expect(out, '兜底要指向渲染副本').toContain(readyPath);
+
+    const onDisk = readFileSync(readyPath, 'utf-8');
+    expect(onDisk, '副本里不该再有未展开的占位符').not.toContain('{{flow_root}}');
+    expect(onDisk).toContain(join(repo.repoRoot, '.ai-flow', 'test-flow'));
+  });
+
+  /**
+   * 副本必须带 stage 头，且在 stage 推进时被删掉。
+   *
+   * 它只在两条指路路径上刷新，所以一个之后走内联注入的 stage 不会覆盖它——副本会活过
+   * 那次推进。而 `helper.md` 把这个路径按名字告诉了模型（resume-guidance 点名让它读
+   * helper.md），所以模型不需要拿到指路也能找到这个文件。一个 compact 之后的 session
+   * 去读它，会拿到一份完整、可信、却属于上一个 stage 的提示词，没有任何东西提示不对。
+   * 删除是主防线，stage 头是兜底。
+   *
+   * ⚠️ 用例形状要小心：推进到**终端** stage 走的是另一条清理（收尾那条），拿它做断言
+   * 会让「推进时清理」这行被删掉也照样绿。所以这里让 review 的提示词**不超预算**
+   * （推进后不会重新落盘），断言的就只能是推进路径上那次删除。
+   */
+  it('副本带 stage 头；推进到下一个 stage 时被清掉', async () => {
+    const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 't',
+      current_stage: 'work', base_sha: 'abc',
+    });
+
+    // 模拟 work 阶段留下的副本（该 stage 超过预算，走过指路路径）
+    const copy = materializeRenderedPrompt(repo.repoRoot, 'test-flow', 'work', '这是 work 的提示词正文');
+    expect(copy).not.toBeNull();
+    expect(readFileSync(copy!, 'utf-8')).toContain('<!-- ai-flow: stage=work');
+    expect(readFileSync(copy!, 'utf-8')).toContain('别照它执行'); // 头要点名「不符即旧件」
+
+    // review 的提示词很短 → 推进后走内联注入、不会重新落盘。
+    // 所以副本消失只可能是推进路径上那次清理干的。
+    writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'review.md'), '# Review\n短。\n');
+    await advanceStage(repo.repoRoot, 'test-flow', 'sess-1');
+
+    expect(existsSync(copy!), '推进到下一个 stage 后，上一个 stage 的副本必须已删除').toBe(false);
+  });
+
   it('callerOverhead 计入判据：调用方额外前置的长度会把临界线往下压', async () => {
     const probe = await advanceIntoGatedStage(PROBE);
     const overhead = probe.length - PROBE;
@@ -172,27 +237,48 @@ describe('注入预算的行为级回归（调真引擎，不在测试里复算 
 });
 
 describe('injectableStagePrompt', () => {
+  /** 落盘成功时的桩：返回一个副本路径。 */
+  const ok = (p = '/repo/.ai-flow/f/state/current-prompt.md') => () => p;
+  /** 落盘失败时的桩。降级路径靠它覆盖——CR 变异验证过：这条路上的文案此前零测试。 */
+  const fails = () => null;
+
   it('预算之内 → 原样注入', () => {
     const short = 'x'.repeat(100);
-    expect(injectableStagePrompt(short, '/repo/.ai-flow/f/stages/s.md')).toBe(short);
+    expect(injectableStagePrompt(short, '/repo/.ai-flow/f/stages/s.md', 0, ok())).toBe(short);
   });
 
   it('包裹开销计入判据：正文本身没超、加上包裹就超 → 走兜底', () => {
     const body = 'x'.repeat(INLINE_INJECTION_BUDGET - 100);
-    expect(injectableStagePrompt(body, '/p.md', 0)).toBe(body);          // 不计开销 → 通过
-    const out = injectableStagePrompt(body, '/p.md', 400);               // 计入开销 → 兜底
-    expect(out).toContain('/p.md');
+    expect(injectableStagePrompt(body, '/p.md', 0, ok())).toBe(body);      // 不计开销 → 通过
+    const out = injectableStagePrompt(body, '/p.md', 400, ok());           // 计入开销 → 兜底
+    expect(out).toContain('/repo/.ai-flow/f/state/current-prompt.md');
     expect(out).not.toContain('xxxxx');
   });
 
-  it('超预算 → 不注入截断正文，而是给出真实 stage 文件路径与「立刻 Read」的指令', () => {
+  it('超预算 → 不注入截断正文，而是指向渲染副本 + 「立刻 Read」', () => {
     const long = '正文'.repeat(INLINE_INJECTION_BUDGET);
-    const path = '/repo/.ai-flow/f/stages/stage-3.md';
-    const out = injectableStagePrompt(long, path);
-    expect(out).toContain(path);
+    const copy = '/repo/.ai-flow/f/state/current-prompt.md';
+    const out = injectableStagePrompt(long, '/repo/.ai-flow/f/stages/stage-3.md', 0, ok(copy));
+    expect(out).toContain(copy);
     expect(out).toContain('Read');
     expect(out.length).toBeLessThan(INLINE_INJECTION_BUDGET);
     // 关键：一个字的正文都不带。截断的提示词比没有提示词更糟——模型无从知道它是残缺的。
     expect(out).not.toContain('正文正文');
+  });
+
+  /**
+   * 降级分支（落盘失败）。此前没有任何用例走这里：把两处占位符警告和补拼的长度纪律
+   * 全部删空，583 例照样全绿。而这条路上给的是**模板**路径——占位符没展开、
+   * 也没有 renderPrompt 追加的长度纪律，两样都得由这段文案自己补回来。
+   */
+  it('落盘失败 → 指向模板，且必须警告占位符未展开 + 补上长度纪律', () => {
+    const long = '正文'.repeat(INLINE_INJECTION_BUDGET);
+    const tpl = '/repo/.ai-flow/f/stages/stage-3.md';
+    const out = injectableStagePrompt(long, tpl, 0, fails);
+    expect(out).toContain(tpl);                    // 退回模板路径
+    expect(out).toContain('{{flow_root}}');        // 点名那个会被照字面抄的东西
+    expect(out).toContain('没有被展开');
+    expect(out).toContain('Write 不会');            // 说清为什么是静默失败
+    expect(out).toContain('写盘文档长度');           // 模板里没有，必须由这里补
   });
 });

@@ -67,6 +67,7 @@ docs/feat-flows/<flow_id>/
 
 .ai-flow/feat-flow/state/
 ├── active.json              # 引擎维护（flow_id、current_stage、base_sha 等；含 base_sha_code 字段：Stage 4 起点 SHA，由引擎在 mark-base 触发时捕获，stage 不直接写）
+├── current-prompt.md        # **最近一次落盘时那个 stage** 的提示词渲染副本（占位符已展开、写盘长度纪律已在内）。只在「提示词超注入上限」与「gate-pending 重入」这两条指路路径上生成；每次 stage 推进与 flow 收尾都会删掉它。文件开头有 `stage=<id>` 头——**与你当前 stage 不符就是旧件，别照它执行**
 ├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
 ├── mark-base                # AI 写此 marker → 引擎捕获 HEAD 为 base_sha_code（Stage 4 Step 1）
 ├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）

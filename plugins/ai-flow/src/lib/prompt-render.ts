@@ -81,20 +81,48 @@ export function commandOutputPrefix(flowName: string): string {
   );
 }
 
-export function injectableStagePrompt(rendered: string, promptPath: string, overhead = 0): string {
+/**
+ * `materialize` lets the caller park the RENDERED text somewhere the model can Read it and
+ * hand back that path. Kept as a callback so this module stays free of `fs` — the caller
+ * (which already has repoRoot/flowName) supplies `materializeRenderedPrompt`.
+ *
+ * Without it we would point at `stages/<id>.md`, which is the TEMPLATE, not this document:
+ * its `{{flow_root}}` / `{{project_root}}` are unsubstituted (substitution happens right
+ * here in `renderPrompt`, on the injection path only), and it lacks `writtenDocLengthNote()`.
+ * (`gateProtocolNote()` is NOT in the copy either — callers staple that onto the injection
+ * itself, so it still arrives inline; the pointer message says so rather than claiming the
+ * copy is self-contained.) Copying a literal `{{flow_root}}` into Write is silent — it creates a directory
+ * by that name and the write lands nowhere. See `materializeRenderedPrompt`.
+ */
+export function injectableStagePrompt(
+  rendered: string,
+  promptPath: string,
+  overhead: number,
+  // Required, not optional: omitting it silently restores the exact behaviour this change
+  // exists to remove (pointing at the unsubstituted template). A fifth injection point that
+  // forgets it should fail to compile, not fail quietly at runtime. Pass `() => null` to opt
+  // into the degraded path deliberately.
+  materialize: (rendered: string) => string | null
+): string {
   if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  const readyPath = materialize?.(rendered) ?? null;
+  const target = readyPath ?? promptPath;
   return (
     `⛔ 本 stage 的提示词是 ${rendered.length} 字符，超过宿主注入能内联携带的上限（${INLINE_INJECTION_BUDGET} 字符），` +
     `**因此它没有随这次注入送到你手上**。\n\n` +
-    `**现在立刻用 Read 工具读完整提示词，读完再开始任何动作：**\n${promptPath}\n\n` +
+    `**现在立刻用 Read 工具读完整提示词，读完再开始任何动作：**\n${target}\n\n` +
+    (readyPath
+      ? `（这是引擎为你落盘的**渲染后**副本：路径占位符已展开、写盘文档长度纪律已在内。` +
+        `Gate 协议不在副本里，它随本次注入另给。）\n\n`
+      : `⚠️ 落盘渲染副本失败，上面给的是**模板原文**：里面的 \`{{flow_root}}\` / \`{{project_root}}\` ` +
+        `**没有被展开**，用本次注入顶部 \`[ai-flow:paths]\` 块里的真实路径代入，⛔ 别照字面写——` +
+        `sh 会报错，但 Write 不会，它会建出一个字面名的目录、文件落在那里等于没写。\n\n`) +
     `⚠️ 不要凭这段话推测流程该怎么走——你手上现在没有流程，只有这条指路。` +
     `（宿主可能另外给你一段预览和一个 \`tool-results/…\` 路径，那是它自己落盘的副本；读上面那个路径。）` +
-    // Same reason the gate-pending branch appends it: what the model is being sent to Read
-    // off disk does NOT carry this note. `renderPrompt()` adds it on the injection path, and
-    // this branch throws that rendered string away. Without it, an oversize stage loses the
-    // length discipline entirely — worse than the gate-pending case, which at least still
-    // had it. Cheap here: this branch is a few hundred characters against a 10k ceiling.
-    '\n' + writtenDocLengthNote()
+    // The materialized copy already carries this note (it is part of `rendered`). Only the
+    // degraded template-pointer path needs it appended, or an oversize stage loses the
+    // length discipline entirely.
+    (readyPath ? '' : '\n' + writtenDocLengthNote())
   );
 }
 

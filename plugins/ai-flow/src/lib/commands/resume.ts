@@ -6,6 +6,7 @@ import {
   writeActiveState,
   appendLog,
   type ActiveState,
+  materializeRenderedPrompt,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
 import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
@@ -129,7 +130,8 @@ export async function handleResume(
     stageContent = injectableStagePrompt(
       renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
       promptPath,
-      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length
+      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
+      (text) => materializeRenderedPrompt(repoRoot, flowName, currentStage, text)
     );
   }
   stageContent += gateNote;
