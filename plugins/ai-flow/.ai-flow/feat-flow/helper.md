@@ -34,18 +34,20 @@
 ```sh
 feat-flow start <自然语言需求描述>   # 启动新 flow，引擎生成 flow_id (<日期>-<rand4>)
 feat-flow approve                    # 通过当前 Gate
-feat-flow abort                     # 中止当前 flow（创建快照到 docs/feat-flow/<flow_id>/）
-feat-flow resume                    # 在新 session 中恢复 flow
+feat-flow abort                     # 中止当前 flow（创建快照分支；会跑 git add -A，非日常操作）
+feat-flow resume <branch>           # 从 abort 的快照分支捡回被中止的 flow（要带分支名）
 feat-flow status                    # 查看当前 stage 和状态
 feat-flow help                      # 查看本文档
 ```
+
+⚠️ **`/clear` 之后不需要敲任何命令**：引擎的 SessionStart hook 会自动恢复到当前 stage（注入 `[ai-flow:paths]` + 当前 stage 提示词）。`resume` 是另一回事——它只能从 `abort` 留下的快照分支恢复，且要求当前**没有** active flow；`/clear` 之后 flow 仍然是 active 的，对它敲 `resume` 只会得到「已有 active flow，请先 abort」，⛔ **别照那句去 abort**——你要恢复的东西早就恢复好了，而 abort 会跑一次 `git add -A` 并把快照提交到新分支。
 
 ## 6 Stage 流水线
 
 | ID | 名称 | Gate | 关键工具 |
 |----|------|------|---------|
 | stage-1 | 需求确认（接地式问询 / load-bearing 结论走 AskUserQuestion / 术语表 / 需求源摄入 / ADR 查阅 / 项目命令 / TDD 基建 / UI / 独立审计） | ✅ | figma MCP + tavily-extract/lark-doc（需求源）+ general-purpose（调研/审计） |
-| stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成开发者对齐视图 tech-design.md / .html，入场问一次、默认轻量） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ mermaid/mmdc（配图） |
+| stage-2 | 实施蓝图（+ 独立架构/复用审查 + 生成开发者对齐视图 tech-design.md / .html，入场问一次、默认轻量；视图含**代码库改动面**文件级清单，呈给开发者前跑一次**陌生读者可读性审查**） | ✅ | feature-dev:code-architect + general-purpose（架构审查）+ general-purpose（可读性审查，只读视图）+ mermaid/mmdc（配图，`references/assets/mermaid-theme.json` 定主题与正交直角布局（ELK，mermaid 除默认 dagre 外的第二个布局引擎，11.14.0 起随 mermaid-cli 自带）） |
 | stage-3 | 实施计划（plan 原生格式：decisions 切片 + 执行单元；AI 内部三轮 review（Round 3 只裁「维持」项，维持集为空且耦合边界一致时可跳过）+ 七项检查，任一项残留即为分歧、落盘 plan.md「待开发者决策」节、停下等开发者拍板） | ❌（无 Gate；有分歧时靠「不写 signal」软停，无引擎兜底） | general-purpose（三轮内部 review）；self-review checklist 内联，无外部 plan skill |
 | stage-4 | 代码实施（按执行单元串行派、机械拼装、截断自保护、子代理生命周期把关） | ❌（无 Gate） | subagent-driven-development + optimize-claude-context（implementer 子代理跑 assess-candidate 沉淀知识） |
 | stage-5 | 质量门（回归 + 组装级双视角 + 人审闭环：集成闭环 + 强制安全 + 真机验证清单收口 + 人工 review 在工作区 diff→修复→最终 CR→squash 成单 feat 提交） | ✅ | general-purpose（集成 + 安全 双视角）+ receiving-code-review + optimize-claude-context（assess-candidate 源头过滤 context 候选） |
@@ -115,7 +117,7 @@ docs/adr/                    # Stage 6 写入；首次出现 ADR 候选时由 ha
 - Node.js ≥ 18
 - git
 - claude CLI（feat-flow 仅在 Claude Code 内运行）
-- mermaid-cli（`mmdc`）— Stage 2 配图渲染（手写 .mmd → mmdc 渲 SVG）：`npm install -g @mermaid-js/mermaid-cli`（preflight 按命令检测）
+- mermaid-cli（`mmdc`）**≥ 11.14.0** — Stage 2 配图渲染（手写 .mmd → mmdc 渲 SVG）：`npm install -g @mermaid-js/mermaid-cli`（preflight **按命令 + 版本**检测，低于下限直接拦）。版本下限来自配图契约用的 `layout: elk`——`@mermaid-js/layout-elk` 从 11.14.0 起才随 mermaid-cli 自带，而更旧的版本**不报错、静默退回默认布局**（退出码仍是 0，配图自检也发现不了，因为它用同一份配置渲染）。用 `mmdc --version` 确认。
 
 ## 已知偏离 upstream
 

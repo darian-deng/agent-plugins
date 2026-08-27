@@ -28,7 +28,7 @@ AI 自查发现前置产物漏写/错了。直接进影响评估。**禁止自�
 | **L3** | 局部命名/措辞/显然遗漏 | inline 修为当前态；按下方暴露纪律当场告知，不嵌进产物正文 |
 
 ### 2. 上游产物影响回溯（关键）
-按当前 stage，逐一审视**全部**已产出的上游产物（alignment.md / wayfinder-map.md / spec.md / tickets.md / tech-design.html / 已 ship 代码 / review.md），受影响的**全部同步更新**。绝不允许"上游停留旧决策、当前产出已是新决策"的分裂状态——/clear 后任何子代理会拿到分裂的真相源。**tech-design.html 是 spec 的派生视图**（gate 主审面）：spec 相关节一改，必须同步重生 HTML 对应节，否则开发者在 gate 看到的是过期视图。
+按当前 stage，逐一审视**全部**已产出的上游产物（alignment.md / wayfinder-map.md / spec.md / tickets.md / tech-design.html / 已 ship 代码 / review.md），受影响的**全部同步更新**。绝不允许"上游停留旧决策、当前产出已是新决策"的分裂状态——/clear 后任何子代理会拿到分裂的真相源。**tech-design.html 是 spec.md 与 tickets.md 两者的派生视图**（gate 主审面）：spec **或 tickets** 相关节一改，必须同步重生 HTML 对应节（`Touches` / `delivers` → 「代码库改动面」章节，`## 方案审查` → 「方案审查结论」章节），否则开发者在 gate 看到的是过期视图。⚠️ **只重切 tickets、不动 spec 的那种改法同样要重生**——`stages/stage-2.md` 第 7 步「gate-pending 期间的范围变更」就是这种形态，漏了不会有任何东西报错。
 
 **回改一律覆盖为当前态**：产物正文改成新决策即可，**不留"原本…改成…"演化叙事**（回溯交给 git diff）。
 

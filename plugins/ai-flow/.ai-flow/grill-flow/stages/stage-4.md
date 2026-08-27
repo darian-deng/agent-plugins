@@ -7,7 +7,7 @@
 
 ## 先查文档，再问开发者
 
-本 stage 与开发者来回最频繁（环节 C 的人审-修复循环），也最容易把早就定过的事重新翻出来问。**有疑问先按 `stage-3.md` 顶部那张「疑问 → 查这里」的表查文档，查不到才问。**
+本 stage 与开发者来回最频繁（环节 C 的人审-修复循环），也最容易把早就定过的事重新翻出来问。**有疑问先按 `stage-3.md` 顶部那张「岔路 → 先读哪份」的表查文档，查不到才问**（本 stage 用得上的只有 `recovery.md` 与 `revision-protocol.md` 两格，其余是 stage-3 执行期专用）。
 
 两条本 stage 特有的：
 
@@ -32,7 +32,7 @@
 
 1. **环节 A 全量测试**：AI 跑（假绿检测：测试数>0），失败修代码，原始输出（通过/失败计数 + commit SHA）落 review.md。
 2. **环节 B 组装审 + 安全专项**（组装审一次、不套娃；**安全阻塞项有「修复后一次独立复核」例外**）：`general-purpose` 子代理并行审 `git diff <base>..HEAD`——Standards（携 fowler-smells.md，跨 ticket smell）+ Spec（携 spec.md，User Stories 闭环）+ 安全专项。⚖️ **派几个不是固定的**：先按 `assembly-review.md` 的「派几个先算一次」节走那一节的全部判据——都成立时只派安全专项。⛔ **判据本身以那一节为准，本行不复述**（阈值一改就会漂）；跳过与否连各条依据一起写进 review.md，**跳过时还要把「跨票反向读取对」列成人审点名项**。阻塞项修复 → `fix:` commit。**安全专项的对抗立场 / 扫查类别 / 独立复核例外一律以 `assembly-review.md` 为准，本行不复述细节**（细节复述必漂移）。
-3. **环节 C 开发者 IDE 人审 + squash**：reset 前先 `git diff --name-only <base>..HEAD` 记下**本 flow 代码改动范围**写入 review.md（squash 前 scope 核对的依据，跨 /clear 保留）→ `git reset <base>` 摊平为未暂存全量 → 告知开发者去 IDE Changes 组亲审（勿手动 stage，保语言服务）→ **真机验证清单**（若 tickets.md 有 `## 待真机验证` 段：逐票请开发者做真机 / 鉴权 / 运行时验证，验过 → 把该票 `rm:pending` 改 `rm:done`，验出问题 → 并入人审-修复循环。这是全流程唯一的真机验证落点）→ **人审-修复循环**（开发者提问题 → AI 改工作树 → 重跑全量测试 → 记 review.md）→ 开发者确认无更多问题**且无 `rm:pending` 残留（或开发者明确豁免）** → 最终 CR（条件式，子代理用 `git diff --staged <base>`）→ **squash 前工作树 scope 核对**（见下）→ **squash 成单个 feat commit**（body 末行 `flow-squash: <flow_id>`）。
+3. **环节 C 开发者 IDE 人审 + squash**：reset 前先 `git diff --name-only <base>..HEAD` 记下**本 flow 代码改动范围**写入 review.md（squash 前 scope 核对的依据，跨 /clear 保留）→ `git reset <base>` 摊平为未暂存全量 → 告知开发者去 IDE Changes 组亲审（勿手动 stage，保语言服务）→ **真机验证清单**（若 tickets.md 有 `## 待真机验证` 段：逐票请开发者做真机 / 鉴权 / 运行时验证，验过 → 把该票 `rm:pending` 改 `rm:done`，验出问题 → 并入人审-修复循环。这是全流程唯一的真机验证落点）→ **人审-修复循环**（开发者提问题 → AI 改工作树 → 重跑全量测试 → 记 review.md）→ 开发者确认无更多问题**且 `## 待真机验证` 段登记的每张票都已 `rm:done` 或已明确豁免**（判据细节见下面「完成条件」，⛔ 别简化成「grep 到空」——豁免的票标记不会被改写） → 最终 CR（条件式，子代理用 `git diff --staged <base>`）→ **squash 前工作树 scope 核对**（见下）→ **squash 成单个 feat commit**（body 末行 `flow-squash: <flow_id>`）。
 
 **squash 前工作树 scope 核对**（`git add -A` 之前必做，防 monorepo 里把跨子项目 stray 改动一并吞进 squash）：逐条核对 `git status --porcelain`，只有落在**本 flow 范围**内的改动才纳入 squash。
 
@@ -50,7 +50,8 @@
 
 - 全量测试全过；安全专项已跑，Standards / Spec 两轴**已跑或已按规模跳过且依据记进 review.md**；跳过的话**点名项在人工 review 节有独立结论**（与「已知碰撞面逐行点名」同一纪律，不许一句「已查」带过）；阻塞项已修。
 - **tickets.md 末尾的「已知会撞的文件」清单已逐行点名**，每行在 review.md 有独立结论（清单不存在 → 明写「无已知碰撞面」）。这是车道模式下机器门⑦ 失效之后唯一的替代保护，做法见 `assembly-review.md`。
-- **环节 C 走完**：开发者确认无更多问题、人审改动全过回归、最终 CR 干净（或条件跳过）；**tickets.md `## 待真机验证` 无 `rm:pending` 残留（全 `rm:done` 或开发者明确豁免）**。
+- **环节 C 走完**：开发者确认无更多问题、人审改动全过回归、最终 CR 干净（或条件跳过）；**tickets.md `## 待真机验证` 段登记的每一张票，其票行上的标记都已从 `rm:pending` 变成 `rm:done`（或开发者对该票明确豁免、并在 review.md 注明原因）**。
+  ⛔ **别去 `## 待真机验证` 段里 grep `rm:pending`**：该段的条目格式是 `- T<n> — 验什么`（stage-3 记账第 2 项定的），**根本不含这个词**，所以「该段无 `rm:pending` 残留」这种查法恒为真、清单非空时同样为真。标记在**票行**上，正确查法是拿该段列出的票号去票行核：`grep -n 'rm:pending' tickets.md` —— **每一条命中都必须在 review.md 有对应结论**（验过了→该票行本该已改成 `rm:done`；开发者明确豁免→review.md 里写明豁免原因）。⚠️ **不要要求这条 grep 为空**：被豁免的票没有任何指令改写它的票行标记，要求为空会让豁免场景永不可满足，逼人把标记直接删掉、连「这票被豁免过」这个事实一起丢。
 - **全部改动已 squash 成单个 `feat` commit**（body 带 `flow-squash: <flow_id>` 锚点），working tree 干净。
 - **stage-3 留下的票分支已清理**（`git branch --list "wt/<flow_id>-*"` 为空）——它们在 stage-3 被刻意保留供重入判相位，squash 之后再无用途，不删会跨 flow 累积。
 - **人审过程中定下的取舍已落盘**（方案层进 `spec.md` 的 `## Decisions`，范围/已对齐结论的走修订协议回写 `alignment.md`），不是只记在 `review.md` 的问题流水里——stage-5 的沉淀读的是前者。

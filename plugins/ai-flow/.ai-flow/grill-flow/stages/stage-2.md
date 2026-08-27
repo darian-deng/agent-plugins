@@ -14,16 +14,15 @@
 
 ## 步骤
 
-**重入子产物级探测**（stage-2 密度高，逐产物续跑防重跑/覆盖）：spec.md 无 / `## Testing Decisions` 空 → 从 alignment 综合 spec；spec 全但 `## 方案审查` 空 → 派方案审查；spec+审查全但 HTML 缺 → 生成 HTML；前三者全但 tickets 缺 → 切 tickets；全在 → 去 gate。
+**重入子产物级探测**（stage-2 密度高，逐产物续跑防重跑/覆盖）：spec.md 无 / `## Testing Decisions` 空 → 从 alignment 综合 spec；spec 全但 `## 方案审查` 空 → 派方案审查；spec+审查全但 tickets 缺 → 切 tickets；tickets 全但 `## 方案审查` 里没有 `### 切票后补审` 小节 → **补做那两项审查**（⛔ 别因为 `## 方案审查` 非空就判「审查已完成」跳过去——非空只说明切票前那部分做过了，而补审两项按设计发生在切票之后，/clear 恰好落在中间时这一跳是静默的）；补审已在但 HTML 缺 → 生成 HTML；HTML 在但末尾无 `<!--READABILITY-REVIEWED-->` → 补跑可读性审查（同一个静默跳过：审查在 HTML 生成之后、呈给开发者之前，没有这个锚就判不出它跑没跑）；全在 → 去 gate。
 
 1. **散文 spec**（照 to-spec，从 alignment 综合）→ `spec.md`，段标题**建议用这些字面量**（机器门按 `## <标题>` 前缀匹配、容忍后缀，但用纯字面量最稳）：`## Problem` / `## Solution` / `## User Stories` / `## Decisions` / `## Testing Decisions` / `## Out of scope` / `## 方案审查`（User Stories 用编号列表；Testing Decisions 写 seam）。**禁文件路径与 typed 代码**；例外：prototype 产出的、比散文更精确的 snippet（状态机/reducer/schema/type shape）可 inline；**接口契约用散文**（描述行为契约，非签名）。**跨端/跨仓行为契约**（若涉及）：把稳定的跨端/跨仓行为约定沉淀成附录段 `## 跨端/跨仓行为契约`（散文，写清各端/各仓的稳定行为与边界），供 stage-3 读一份定稿、免去每 ticket 现场逆向推导。
 2. **seam 与开发者确认**：在探索代码库、选最高现有 seam 之后提，写进 `## Testing Decisions`。
 3. **对抗性方案审查**（gate 前必跑）：派独立子代理在方案层挑**新引入决策**的复用缺失/过度工程/方案漏洞——**只审本次新增，不重议 grilling 已定方案**。findings 写进 `## 方案审查` 段带 resolved 状态；**即使无阻塞项也必须写该段**（记「已审查，无阻塞项」）——机器门要求此段非空。
-   - 切完 tickets 后**补审两项**：
+   - 切完 tickets 后**补审两项**（结论写进 `## 方案审查` 段下的 `### 切票后补审` 小节——**这个小标题是重入探测判「补审做没做」的唯一锚**，两项都无 finding 也要写「已补审，无 finding」）：
      - 逐票核 `Touches`，找**为了并行而拆散耦合**的切片。征兆是两票的 `Touches` 是同一模块/目录下互补的文件集、却互相没有 `Blocked by`。写 tickets 的一方现在有明确的过度拆分动机（拆开就能并行、就更快），下面那条纪律没有检测方，靠这一审补上。
      - **抽查票面事实**：挑 3–5 张：优先取 `AC` / `delivers` 里**可证伪陈述条数最多**的票（数括号依据的条数），其中**一条括号依据都没有的一律优先入选**。让审查子代理照那些依据实地复核一遍（依据缺失的直接报出来）。这一条与下面「票面断言必须实读核过」互为检测方——写票的一方没有检测方时，这类错误只会在 stage-3 被实施子代理撞出来，而那时纠正成本已经是一次往返。
-4. **HTML 方案视图**：照 `spec-view.md`（sonnet 子代理手写 .mmd→mmdc 渲 SVG→主 session 增量组装）→ `tech-design.html`。
-5. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:` + `Touches:`（ticket 内 acceptance criteria 用 `AC:` 前缀子项，不参与 frontier/门）。
+4. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:` + `Touches:`（ticket 内 acceptance criteria 用 `AC:` 前缀子项，不参与 frontier/门）。
    - **`Blocked by:`** = 实施先后（前置票没做完，这票没法做/没法验证）。写票号列表 `T1, T3`，无前置写 `none`。机器门校验引用完整性 + 无自依赖 + 无环——`TBD`/散文过不去，stage-3 要按它算 frontier。
    - **`Touches:`** = 本票**预计改哪些文件**。stage-3 用「Touches 不相交」判定哪些票可以各开一个 worktree 并行做，stage-3 机器门还会按该票 commit 的实际改动核对它。预估不了写 `none`——该票只能串行。写法（机器门会校验，不合直接拦）：
      - 路径**相对 flow 锚点**（就是 `{{project_root}}`），空格或逗号分隔：`src/lib/state.ts src/hooks/ tests/*.test.ts`
@@ -47,19 +46,20 @@
      **为什么是前置条件而不是建议**：票面上的任何静态特征都预测不了这张票要做多少事——实测 40 张票里，`Touches` 条数与实际工作量的秩相关只有 0.15，票面字数 0.12，六特征回归的交叉验证 R² 是负的。而**带了计数的票族预测得极准**（同族内 r=0.969）。最刺眼的一组：六张迁移票的 `Touches` 逐字相同、都是 2 条路径，其中票面只有 111 字的那张实际是 65 个函数 / 9 个域，成了全流程最贵的一票；票面 2475 字、`Touches` 8 条的那张反而只有它的三分之一。**差别不在票写得多细，在有没有把工作项数出来。**
      数出来之后你才有依据判断要不要就地拆开——**拆的依据是票面上已经写死的枚举**，此时各子票的 `Touches` 也能同步收窄到各自的域，不会退化成几张票共用一条宽声明（那会让断言⑥ 对它们整体失效）。
    - **门禁类交付（新增检查脚本 / lint 规则 / CI job / pre-commit 钩子）必须在票面写明「落地当天是红是绿」**，两条都要：① AC 里给出**存量扫描的预期结果**（实测数字，或明写「切票时未测，实施第一步就是测」）；② 明写红的那部分**归哪张票消掉**，或明写「接受它红着、理由是 X」。**①走了「切票时未测」那个口子时，②改写成**「落地当天由实施子代理跑出存量结果并回报，主 session 当场按 stage-3『执行期插票』判归属」——把待办显式挂到那条路径上，⛔ 别在票面上编一个归属（编出来的归属会以「已有票面依据」的身份误导实施子代理）。⛔ 不许把这个判断留给实施子代理——它只看得到自己那一票。实测两次：一次新 CI 闸落地即红，本地 pre-commit 会挡住全组提交，其中一组差异不属于任何一张票、被迫临时插票；一次新校验器在每台开发机恒红、CI 恒绿。
+5. **HTML 方案视图**：照 `spec-view.md`（sonnet 子代理手写 .mmd→mmdc 渲 SVG→主 session 增量组装）→ `tech-design.html`。⛔ **派配图子代理时把主题文件的绝对路径展开后写进 prompt**（`{{flow_root}}/references/assets/mermaid-theme.json` 的真实路径）——子代理没有 stage 提示词，占位符不展开，`mmdc -c` 读不到配置会非零退出并被误判成语法错。⛔ **生成完、呈给开发者前必须跑该契约的「陌生读者可读性审查」**（派一个只读这份 HTML、禁读 spec/tickets/代码的子代理，回报读不懂 / 术语无定义 / 有决定没理由三类并逐条回改）——机器门不查内容质量，这是唯一的外部检测方。**本步必须排在切 tickets 之后**：视图里的「代码库改动面」取自 tickets 的 `Touches`，而「方案审查结论」要含切完票之后才做的那两项补审（过度拆分检测 + 票面事实抽查）——顺序反了，开发者签字时看到的是缺两项结论的旧版本，且没有任何东西会报错。
 6. **quiz 粒度**：切完 quiz 开发者、粒度/blocking 确认。
 7. **gate-pending 期间的范围变更**：审查 / 等 approve 时冒出**范围级变更（非措辞级）**——功能对等边界改动、要删/推迟项变化等——按 `revision-protocol.md` 回写 alignment.md（这本属 stage-1 的结账范畴，提示开发者范围结账应前移），再同步 spec/tickets；纯措辞调整就地改 spec 即可。
 
 ## 输出规格
 
 文件 → `docs/grill-flows/<flow_id>/` 下 `spec.md` + `tickets.md` + `tech-design.html`（+ `diagram/*.svg`）。`<flow_id>` 一律用 context 顶部注入的实际值，勿自拼日期或加后缀（机器门读 active.json 的真实 flow_id 定位文件，路径不符会失配）。
-验证：机器门 `scripts/gate-stage-2.cjs` 校验三文件存在 + spec 三段非空 + 每票有 `Blocked by`（票号列表、引用完整、无自依赖、无环）与 `Touches`。
+验证：机器门 `scripts/gate-stage-2.cjs` 校验三文件存在 + spec 三段非空 + 每票有 `Blocked by`（票号列表、引用完整、无自依赖、无环）与 `Touches` + HTML 的两类锚点（`<!--VIEWER_CSS-->` / `<!--VIEWER_JS-->` **不得残留**；`<!--READABILITY-REVIEWED-->` **必须存在**——前者「有=没做」，后者「无=没做」，方向相反别弄混）。
 
 ## 完成条件
 
 - spec.md 含非空 `## Testing Decisions` / `## User Stories` / `## 方案审查`；seam 已与开发者确认。
 - 涉及跨端/跨仓行为契约的：spec 含 `## 跨端/跨仓行为契约` 附录段（散文、定稿）。
-- tech-design.html 生成、可打开。
+- tech-design.html 生成、可打开；**陌生读者可读性审查已跑、命中项已回改、末尾已落 `<!--READABILITY-REVIEWED-->` 锚**（这条现在由 `gate-stage-2.cjs` fail-closed 拦，漏跑写不了 signal）。
 - tickets.md 每条 ticket 级项有 `Blocked by`（票号列表 / `none`）与 `Touches`；依赖无环；粒度已 quiz 确认。
 
 ## Signal

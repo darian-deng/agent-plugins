@@ -88,7 +88,13 @@ export function injectableStagePrompt(rendered: string, promptPath: string, over
     `**因此它没有随这次注入送到你手上**。\n\n` +
     `**现在立刻用 Read 工具读完整提示词，读完再开始任何动作：**\n${promptPath}\n\n` +
     `⚠️ 不要凭这段话推测流程该怎么走——你手上现在没有流程，只有这条指路。` +
-    `（宿主可能另外给你一段预览和一个 \`tool-results/…\` 路径，那是它自己落盘的副本；读上面那个路径。）`
+    `（宿主可能另外给你一段预览和一个 \`tool-results/…\` 路径，那是它自己落盘的副本；读上面那个路径。）` +
+    // Same reason the gate-pending branch appends it: what the model is being sent to Read
+    // off disk does NOT carry this note. `renderPrompt()` adds it on the injection path, and
+    // this branch throws that rendered string away. Without it, an oversize stage loses the
+    // length discipline entirely — worse than the gate-pending case, which at least still
+    // had it. Cheap here: this branch is a few hundred characters against a 10k ceiling.
+    '\n' + writtenDocLengthNote()
   );
 }
 
@@ -144,15 +150,22 @@ export function buildAiFlowPreamble(repoRoot: string, flowName: string, baseSha?
  *    stage's artifact is code, and "be shorter" must not reach it;
  *  - carve out the exhaustiveness rules it would otherwise contradict
  *    (enumerate-every-member lists, decision ledgers, machine-gate sections
- *    that must be present even when empty).
+ *    that must be present even when empty);
+ *  - carve out the rationale prose in human-alignment docs. The exemption list
+ *    used to protect only the appendix-grade material above, which made the
+ *    compression pressure asymmetric in exactly the wrong direction: the
+ *    tech-design contract calls the decision ledger "附录速查表，不是正文主体"
+ *    and the embedded 「为什么」 its 命根子, yet only the ledger was shielded.
+ *    Developers reported reading the generated doc and still not knowing what
+ *    the design was or why — squeezing out the rationale is how that happens.
  */
 export function writtenDocLengthNote(): string {
   return [
     ``,
     `─── 写盘文档长度（引擎注入 · 只约束写入磁盘的 Markdown 文档，不约束代码）───`,
-    `写盘文档以最短可用为准：压缩叙述、删样板与重复，能用条目就不写长段落。`,
-    `豁免：要求穷举的清单（批量成员、决策台账等）逐条列全，机器门要求的段落即使无内容也照写——`,
-    `简洁只针对叙述与冗余，绝不用它省掉必需条目。`,
+    `写盘文档以最短可用为准：压掉铺陈、删样板与重复，能用条目就不写长段落。`,
+    `豁免：要求穷举的清单（批量成员、决策台账等）逐条列全；机器门要求的段落即使无内容也照写；要开发者签字的文档里，每个设计点旁的「为什么」与每节的概览段落照写不压。`,
+    `简洁只针对样板、重复与铺陈，豁免项不算冗余。`,
   ].join('\n');
 }
 

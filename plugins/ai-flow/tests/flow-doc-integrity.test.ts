@@ -253,3 +253,75 @@ for (const sp of SPLIT_STAGES) {
     });
   });
 }
+
+/**
+ * references 里的 `{{flow_root}}` / `{{project_root}}` 永远不会被展开。
+ *
+ * `renderPrompt` 只跑在 `stages/*.md` 上（start / resume / advance-stage /
+ * session-handler 四个调用点全是 `readFileSync(promptPath)`）。references 是模型自己
+ * Read 进来的，占位符原样到手。
+ *
+ * 为什么这值得一道机器门：`sh` 里代入失败会报错，**Write 不会**——它会在仓库根下建出一个
+ * 字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，而引擎不推进也不报错。
+ * `grill-flow/stages/stage-3.md` 已经为它的 `<FR>` 简写写过这条警告，但那是 stage 提示词；
+ * references 层一度没有任何东西守着，其中 `assembly-review.md` 恰好带着一条
+ * 「重写 `{{flow_root}}/state/mark-base`」的指令。
+ *
+ * 判据不是「不许出现占位符」（讲路径就得写出来），而是「声明必须出现在首次使用之前」。
+ *
+ * ⚠️ **范围只有 `references/`，这是刻意的**：`helper.md` 与 `scripts/*.cjs` 里也出现这两个
+ * 占位符，但那些地方是在**讲这个替换机制本身**（「stage 提示词里的路径用注入的绝对
+ * `{{project_root}}` 锚定」），不是「照它写一个文件」的指令——要求它们声明「本文件的占位符
+ * 不会展开」会和它们正在解释的事情自相矛盾。references 才是模型照着执行动作的地方。
+ */
+describe('references 里的占位符必须带声明，且声明在首次使用之前', () => {
+  const PLACEHOLDER = /\{\{\s*(?:flow_root|project_root)\s*\}\}/;
+  /**
+   * 只认「明说花括号形式不会被展开」这一种写法。
+   *
+   * ⛔ 不能放宽成 `换成.*绝对路径` 这类泛用措辞——「绝对路径」是这批文档的高频说法，
+   * 那样会让没有真声明的文件免检。
+   *
+   * ⛔ 也不能认「…`{{flow_root}}` 展开出来的就是它」这种句式。它读起来像声明，其实是
+   * **尖括号简写的约定句**（「`<flow_root>` = 本文件所在目录的上一级；stage-3 提示词里
+   * `{{flow_root}}` 展开出来的就是它」），说的是那个简写指向哪里，**没有**说本文件里的
+   * 花括号不会被展开。更麻烦的是这句话自身含占位符，于是「声明行 ≤ 首次使用行」对它恒真
+   * ——三份 reference（execution-unit / lane-mode / reentry）因此拿到永久豁免，往里加一条
+   * 真的 `{{flow_root}}/state/…` 写盘指令，这道门照绿。实测过，所以它由 CONVENTION 单独识别。
+   */
+  const DECLARES = /没展开|不会被展开/;
+  /** 尖括号简写的约定句：提到占位符只是为了说明简写指向哪里，不构成「会照字面用它」。 */
+  const CONVENTION = /`<(?:flow_root|project_root)>`[^\n]*本文件所在目录的上一级/;
+
+  const refs = flowDocs().filter((d) => d.rel.startsWith('references/') && d.rel.endsWith('.md'));
+
+  it('扫到了两个 flow 的全部 reference（防止过滤器退化成只扫一个 flow）', () => {
+    expect(refs.length).toBeGreaterThanOrEqual(25);
+    for (const flow of ['feat-flow', 'grill-flow']) {
+      expect(refs.some((d) => d.flow === flow), `${flow} 的 references 一份都没扫到`).toBe(true);
+    }
+  });
+
+  for (const doc of refs) {
+    const text = readFileSync(doc.abs, 'utf-8');
+    if (!PLACEHOLDER.test(text)) continue;
+    it(`${doc.flow}/${doc.rel} 的占位符声明出现在首次使用之前`, () => {
+      const lines = text.split('\n');
+      // 约定句与声明句本身不算「使用」——它们提到占位符是为了解释它，不是照字面写它。
+      const uses = lines
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => PLACEHOLDER.test(l) && !CONVENTION.test(l) && !DECLARES.test(l));
+      if (uses.length === 0) return; // 通篇只在解释机制，没有会被照字面执行的指令
+      const declaredAt = lines.findIndex((l) => DECLARES.test(l));
+      const firstUse = uses[0]!.i;
+      expect(
+        declaredAt >= 0 && declaredAt <= firstUse,
+        declaredAt < 0
+          ? '这份 reference 里写了 {{flow_root}} / {{project_root}}，但通篇没说明它们不会被引擎展开。' +
+              '模型照字面 Write 会建出一个字面名的目录，落盘等于没写，且不报错。'
+          : `声明在第 ${declaredAt + 1} 行，而首次使用在第 ${firstUse + 1} 行——声明必须排在前面，` +
+              '否则模型可能在读到声明之前就照字面用了它。',
+      ).toBe(true);
+    });
+  }
+});

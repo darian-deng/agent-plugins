@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG } from './fixtures/helpers.js';
@@ -23,14 +23,51 @@ function injectorBody(flow: string): string {
 }
 
 describe('viewer assets stay identical across flows', () => {
-  for (const file of ['viewer.js', 'viewer.css']) {
+  /**
+   * 资产清单**自动发现**，不手工枚举。
+   *
+   * 上一版把四个文件名写死在数组里，于是每加一份新资产都要有人记得同时改测试——
+   * `mermaid-theme.json` 就是这么漏过一轮的（它是第 4 份，测试当时只守前 3 份）。
+   * 手工清单守不住「只加到一个 flow 下」这种漏同步，而那正是这道门要防的事。
+   */
+  const assetsOf = (flow: string) =>
+    readdirSync(join(FLOW_ROOT, flow, 'references', 'assets')).sort();
+
+  it('两个 flow 的 assets/ 文件名集合完全相同', () => {
+    expect(assetsOf('grill-flow')).toEqual(assetsOf('feat-flow'));
+  });
+
+  it('assets/ 非空（防止用例空跑成恒绿）', () => {
+    expect(assetsOf('feat-flow').length).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const file of assetsOf('feat-flow')) {
     it(`${file} matches between grill-flow and feat-flow`, () => {
-      expect(assetBody('grill-flow', file)).toBe(assetBody('feat-flow', file));
+      // .json / .css / .js 里只有 .cjs 与 .js/.css 带 flow 专属头注释；JSON 没有注释行，
+      // 砍掉首行等于砍掉 `{`，会把两个坏掉的片段比成相等。
+      if (file.endsWith('.json')) {
+        const read = (flow: string) =>
+          readFileSync(join(FLOW_ROOT, flow, 'references', 'assets', file), 'utf-8');
+        expect(read('grill-flow')).toBe(read('feat-flow'));
+      } else if (file === 'inject-viewer.cjs') {
+        expect(injectorBody('grill-flow')).toBe(injectorBody('feat-flow'));
+      } else {
+        expect(assetBody('grill-flow', file)).toBe(assetBody('feat-flow', file));
+      }
     });
   }
 
-  it('inject-viewer.cjs matches between grill-flow and feat-flow', () => {
-    expect(injectorBody('grill-flow')).toBe(injectorBody('feat-flow'));
+  it('mermaid-theme.json is valid JSON and still carries the two settings the contract promises', () => {
+    const cfg = JSON.parse(
+      readFileSync(join(FLOW_ROOT, 'feat-flow', 'references', 'assets', 'mermaid-theme.json'), 'utf-8'),
+    );
+    // Both contracts state these two verbatim as the reason for passing `-c` at all:
+    // `theme: base` is the only mermaid theme whose themeVariables can be overridden, and
+    // `layout: elk` is what turns "arrows don't cross boxes" from a self-check item into a
+    // layout-engine guarantee. Losing either one is silent — mmdc still exits 0.
+    expect(cfg.theme).toBe('base');
+    expect(cfg.layout).toBe('elk');
+    expect(Object.keys(cfg.themeVariables ?? {}).length).toBeGreaterThan(5);
   });
 
   it('viewer.js is non-empty and still the self-contained IIFE the HTML inlines', () => {

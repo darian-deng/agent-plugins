@@ -17,7 +17,7 @@ import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote } from './prompt-render.js';
+import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, writtenDocLengthNote } from './prompt-render.js';
 
 
 export async function handleSessionStart(
@@ -125,6 +125,22 @@ export async function handleSessionStart(
       recovered: true,
     });
     const isTerminal = expectedNext === null;
+    // The stage prompt is NOT injected on this branch (it would be redundant for the
+    // common case: approve arrives, advance-stage injects the next stage). But a /clear
+    // that lands here leaves the model with no stage instructions at all, and gate-pending
+    // is where /clear is most likely — the developer is reading a large review surface
+    // while the main session sits at its context peak. Two silent losses follow:
+    // edits made ON the gate skip the "regenerate the derived view" rule, and a terminal
+    // stage's post-approve action (amend the knowledge write-up into the squashed commit)
+    // is never seen, because `approve` is a flow command and so bypasses the
+    // UserPromptSubmit resume-guidance layer too. So point at the file instead of
+    // inlining it — the whole branch lands around 700 characters, far under
+    // INLINE_INJECTION_BUDGET, and pointing avoids handing a "go do this stage" document
+    // to a session whose stage is already submitted and merely awaiting approval.
+    // Deliberately no existsSync here (unlike the normal-recovery path further down):
+    // if the flow definition renamed this file, a failed Read is a VISIBLE error, which
+    // beats that path's silent degradation to an empty prompt body. Don't "unify" the two.
+    const stagePromptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
     const lines: string[] = [
       `[ai-flow] 流程 '${flowName}' 恢复中，Stage '${state.current_stage}' 已提交，等待用户确认。`,
       ``,
@@ -133,10 +149,28 @@ export async function handleSessionStart(
         ? `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve（终端阶段，approve 后流程结束）`
         : `提醒用户检查 '${state.current_stage}' 的产物后执行：${flowName} approve`,
       ``,
+      `⚠️ 本次注入**不含**本 stage 的提示词正文。开发者在 gate 上提出任何修改、` +
+        `或你要做 approve 之后的收尾动作之前，**先 Read 这个文件**并照它执行：`,
+      stagePromptPath,
+      isTerminal
+        ? `⛔ 终端 stage 的 approve 后动作只写在上面那份提示词里，引擎的流程完成消息不会重复它` +
+          `（它只说「总结产出、建议下一步」）——不读就动手会静默漏掉。`
+        : `⚠️ 在 gate 上改了上游产物时，从它派生的下游产物 / 视图必须跟着同步，` +
+          `规则写在上面那份提示词与它路由到的 references 里，漏了不会有任何东西报错。`,
+      ``,
       `如需修改，继续讨论，完成后重新写入 signal。`,
       isTerminal ? `不要擅自结束流程，等待开发者 approve。` : `不要开始下一阶段工作。`,
     ];
-    return { additionalContext: pathsPreamble + lines.join('\n'), systemMessage: statusLine };
+    // The stage prompt the model is about to Read off disk does NOT carry what the engine
+    // normally appends at injection time: `renderPrompt()` adds writtenDocLengthNote() on
+    // the injection path only. Editing docs on a gate is exactly when that length
+    // discipline applies, so append it here as well. (gateProtocolNote is deliberately not
+    // added — the lines above already say the signal is in and not to advance, which is
+    // what that note would repeat.)
+    return {
+      additionalContext: pathsPreamble + lines.join('\n') + '\n' + writtenDocLengthNote(),
+      systemMessage: statusLine,
+    };
   }
 
   // S2: flow-complete signal at terminal stage (no gate) — self-heal

@@ -53,6 +53,21 @@ if (htmlText.includes('<!--VIEWER_CSS-->') || htmlText.includes('<!--VIEWER_JS--
   process.exit(FAIL);
 }
 
+// tech-design.html：陌生读者可读性审查必须已跑（spec-view.md 完成判据）。
+//
+// 这道检查和上面那条同形：都是「该做的一步漏了，而产物看着完整」。审查跑在 HTML 生成
+// 之后、呈给开发者之前，漏跑的话方案页该有的章节一节不少，人审兜不住；stage-2 的重入
+// 探测也以这个锚为唯一依据，所以 /clear 落在那个窗口里同样只有它能拦。
+//
+// ⚠️ 这是**保留**锚，与上面那两个占位锚方向相反：那两个「有 = 没做」，这个「没有 = 没做」。
+if (!htmlText.includes('<!--READABILITY-REVIEWED-->')) {
+  err('tech-design.html 末尾缺 <!--READABILITY-REVIEWED--> 锚（陌生读者可读性审查没跑，或跑了没落锚）'
+    + '\n    怎么改：按 references/spec-view.md 的「陌生读者可读性审查」派一个只读这份 HTML'
+    + '（禁读 spec/tickets/代码）的子代理，回改它报出的三类问题，然后在 HTML 末尾写一行该锚。'
+    + '\n    ⚠️ 只重生了某一节时，那一节没被审过——先删掉旧锚、重跑审查，别直接补一个锚糊弄这道门。');
+  process.exit(FAIL);
+}
+
 // spec.md 三个段必须存在且非空（段标题到下一个 ## / 文件尾之间有非空白内容）。
 // 段标题字符串与 stage-2 提示词写死一致（改一处必同步另一处，否则门永远失败）。
 function sectionNonEmpty(text, heading) {

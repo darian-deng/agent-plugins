@@ -174,4 +174,4 @@ design.md 骨架：
 ## Signal
 
 **触发条件**：本阶段「完成条件」全部满足，**或**开发者明确表达本阶段已完成。
-**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词，自动推进）。
+**动作**：用 Write 工具向 `{{flow_root}}/state/signal` 写入 `done`（引擎接受此关键词）。⚠️ **本 stage 有人工 gate，写 done 不会推进**——引擎转入 gate-pending 等开发者执行 `feat-flow approve`。收到引擎「已提交」确认后再向开发者提示 approve，别在写 signal 前就提。

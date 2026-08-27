@@ -2,6 +2,8 @@
 
 > 全部 ticket 完成后，把整轮改动过 AI 组装审 + 开发者 IDE 亲审，最终 squash 成一笔 feat commit。三环节：**A 全量测试 → B AI 组装审 → C 开发者 IDE 人审闭环 + squash**。环节 C 走完前**绝不写 signal**。
 
+⚠️ **本文件里的 `{{flow_root}}` / `{{project_root}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成 stage 提示词 `[ai-flow:paths]` 块里的真实绝对路径。⛔ **sh 里代入失败会报错，Write 不会**——它会在仓库根下建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，而引擎不推进也不报错。下面那条重写 mark-base 的指令正是这个坑的高发点。
+
 `<base>` = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code`（stage-3 的 mark-base 捕获）。不读 active.json（控制面）。若注入块无该行（跨版本续跑，或本 flow 是 `resume` 恢复来的——那条路径曾经每次都丢它）→ 回 stage-3 重写 `{{flow_root}}/state/mark-base` 重新捕获。
 
 ## 环节 A：全量测试（AI 跑）
@@ -93,7 +95,7 @@ grill-flow 全流程只有这一处能做真机 / 鉴权 / 运行时验证——
 5. **开发者明确表示无更多问题前，不进下一步、不写 signal**（即便讨论中说「可以了」，也要先跑完最终 CR + squash）。
 
 ### 最终 CR（条件式）→ squash
-开发者确认无更多问题、且 `## 待真机验证` 无 `rm:pending` 残留（或已明确豁免）后：
+开发者确认无更多问题、且 `## 待真机验证` 段登记的票在**票行**上已全部 `rm:done`（或已明确豁免；⛔ 判据看票行，不是去那个段落里 grep `rm:pending`——段内条目不含这个词）后：
 1. **先做 stage-4.md 的「squash 前工作树 scope 核对」**（`git add -A` 前逐条核 `git status --porcelain`：只有本 flow 代码范围 ∪ `docs/grill-flows/**` 记账 tracking 才纳入；跨子项目 stray 改动别吞、停下问开发者）→ 再 `git add -A` 收尾（index = 本 flow 范围内的全部累积改动）。
 2. **依改动量选择性 CR**——⛔ 这里的「CR」指下面这几行**本 flow 自派的子代理**，**不是**任何叫得出名字的现成命令：不调 Claude Code 内置的 `/code-review`，也不调仓库自带的 `code-review*` 命令 / orchestrator agent（它们按各自的范围和判据跑，产出看着像回事，最难发现错在哪）。（子代理用 `git diff --staged <base>` 看，**勿用 `<base>..HEAD`**——已 reset、HEAD==base，那是空 diff）：
    - 环节 C 零代码改动（只 review 没让改）→ **跳过 CR**（环节 B 已覆盖）。

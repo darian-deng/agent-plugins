@@ -43,6 +43,33 @@ describe('handleResume', () => {
     expect((result as { action: 'deny'; reason: string }).reason).toMatch(/usage|branch/i);
   });
 
+  /**
+   * 已有 active flow 时的拒绝文案。
+   *
+   * 这条分支最常见的到达方式是：开发者刚 `/clear`，以为要敲 resume 才能回来——其实
+   * SessionStart 已经自动恢复了，flow 还 active，所以才走到这里。而这条消息里唯一的
+   * 出路指向 `abort`，那是个会跑 `git add -A` 并把快照提交到新分支的破坏性命令。
+   * 所以文案必须同时说清「你不用做任何事」和「别去 abort」，否则它会把人引去
+   * 销毁一个本来什么都不需要做的 flow。这里 pin 住这三件事，防止被简化回去。
+   */
+  it('flow already active → 拒绝时要说清 /clear 无需命令、且不要 abort', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'r',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-x');
+    expect(result.action).toBe('deny');
+    const reason = (result as { action: 'deny'; reason: string }).reason;
+    expect(reason).toMatch(/already active/i);
+    expect(reason).toContain('/clear');          // 说清最常见的到达方式
+    expect(reason).toContain('不要 abort');       // 拦住那条破坏性出路
+    expect(reason).toContain('status');          // 给一个无害的下一步
+  });
+
   it('branch does not exist → error', async () => {
     const repo = makeRepo();
     const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-nonexistent');

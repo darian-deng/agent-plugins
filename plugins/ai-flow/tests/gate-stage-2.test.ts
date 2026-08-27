@@ -33,7 +33,9 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
       join(docs, 'spec.md'),
       '## Problem\np\n## User Stories\n1. us\n## Testing Decisions\nseam\n## 方案审查\n已审查，无阻塞项\n'
     );
-    writeFileSync(join(docs, 'tech-design.html'), '<html><body>ok</body></html>\n');
+    // 锚必须带上：门要求 <!--READABILITY-REVIEWED--> 存在（可读性审查跑过的唯一痕迹）。
+    // 这批用例测的是依赖图与写集声明，HTML 只是让前置检查放行的占位。
+    writeFileSync(join(docs, 'tech-design.html'), '<html><body>ok</body></html>\n<!--READABILITY-REVIEWED-->\n');
     writeFileSync(join(docs, 'tickets.md'), ticketsBody);
     return flowDir;
   }
@@ -211,5 +213,32 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     const r = runGate(back);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('反斜杠');
+  });
+
+  /**
+   * 可读性审查锚。与 VIEWER 那两个占位锚方向相反：那两个「有 = 注入没跑」，这个「无 = 审查没跑」。
+   *
+   * 为什么要机器门而不是留在完成判据里：审查跑在 HTML 生成之后、呈给开发者之前，漏跑的话
+   * 方案页该有的章节一节不少，人审兜不住；stage-2 的重入探测也以这个锚为唯一依据，
+   * 所以 /clear 落在那个窗口里同样只有它能拦。
+   */
+  describe('可读性审查锚', () => {
+    const OK_TICKETS = '- [ ] T1 t\n  - Blocked by: none\n  - Touches: src/a.ts\n';
+
+    it('HTML 有 <!--READABILITY-REVIEWED--> → 放行', () => {
+      const r = runGate(makeRepo(OK_TICKETS));
+      expect(r.code).toBe(0);
+    });
+
+    it('HTML 缺该锚 → 拦下，并说清怎么补', () => {
+      const flowDir = makeRepo(OK_TICKETS);
+      const html = join(flowDir, '..', '..', 'docs', 'grill-flows', 'f1', 'tech-design.html');
+      writeFileSync(html, '<html><body>ok</body></html>\n'); // 章节看着完整，只是审查没跑
+      const r = runGate(flowDir);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('READABILITY-REVIEWED');
+      // 报错要给出补救动作，否则读到它的模型只会去补一个锚糊弄门
+      expect(r.stderr).toContain('可读性审查');
+    });
   });
 });

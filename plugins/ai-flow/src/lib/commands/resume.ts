@@ -27,9 +27,21 @@ export async function handleResume(
 
   const existing = await readActiveState(repoRoot, flowName);
   if (existing) {
+    // The "run abort first" half of this message points at a DESTRUCTIVE command
+    // (abort snapshots the tree with `git add -A` and commits it to a new branch), so it
+    // must not be the whole answer. The common way to land here is a developer who just
+    // ran `/clear` and thinks `resume` is how you come back — it isn't: SessionStart
+    // restores that automatically, and the flow is still active, which is exactly why
+    // this branch fired. Telling them only "abort first" walks them into destroying a
+    // flow that needed nothing done to it.
     return {
       action: 'deny',
-      reason: `Flow '${existing.flow_name}' is already active. Run '${existing.flow_name} abort' before resuming.`,
+      reason:
+        `Flow '${existing.flow_name}' is already active — nothing to resume.\n\n` +
+        `如果你刚 /clear：flow 已由引擎自动恢复到当前 stage，不需要任何命令，` +
+        `⛔ 也不要 abort（它会跑 git add -A 并把快照提交到新分支）。用 '${existing.flow_name} status' 确认当前进度。\n` +
+        `resume 只用于从 abort 留下的快照分支捡回一个**已中止**的 flow：` +
+        `先 '${existing.flow_name} abort'（确实要放弃当前这个），再 '${existing.flow_name} resume <那个快照分支>'。`,
     };
   }
 

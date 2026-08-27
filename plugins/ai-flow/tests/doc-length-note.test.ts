@@ -6,6 +6,7 @@ import { renderPrompt, writtenDocLengthNote } from '../src/lib/prompt-render.js'
 import {
   createFlowTestRepo,
   writeActiveState,
+  writeSignal,
   MINIMAL_CONFIG,
   GATED_CONFIG,
   SCRIPTED_CONFIG,
@@ -107,6 +108,31 @@ describe('doc length note injection points', () => {
     const result = await advanceStage(repo.repoRoot, 'scripted-flow', 'sess-1');
     expect(result.additionalContext).toContain(LEN_MARKER);
     expect(result.additionalContext).not.toContain('Gate 协议');
+  });
+
+  /**
+   * gate-pending 分支不注入 stage 提示词正文，只给出它的路径让模型自己 Read。
+   * 磁盘上的 `stages/*.md` **不含**这段长度纪律——`renderPrompt()` 只在注入路径上追加它。
+   * 所以这条分支必须自己把它拼上，否则「去 Read 那个文件」这条指路把纪律丢在了半路，
+   * 而 gate 上改文档正是它适用的时刻。这两条断言之外没有任何用例覆盖这条分支的内容：
+   * 删掉那次拼接，其余 570+ 用例照样全绿。
+   */
+  it('gate-pending recovery carries the note AND points at the stage prompt', async () => {
+    const repo = createFlowTestRepo('gated-flow', GATED_CONFIG);
+    cleanups.push(repo.cleanup);
+    writeActiveState(repo.repoRoot, 'gated-flow', {
+      flow_id: 'gated-flow-abc',
+      flow_name: 'gated-flow',
+      requirement: 'r',
+      current_stage: 'review',
+      base_sha: 'abc',
+    });
+    // review 是终端 stage，signal 'flow-complete' + gate → gate pending
+    writeSignal(repo.repoRoot, 'gated-flow', 'flow-complete');
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-gp'));
+    expect(out!.additionalContext).toContain(LEN_MARKER);
+    // 指路本身也没有别的用例盯着：路径丢了，这条分支就退回成「只说等 approve」
+    expect(out!.additionalContext).toContain('stages/review.md');
   });
 
   it('session recovery re-injects the note', async () => {

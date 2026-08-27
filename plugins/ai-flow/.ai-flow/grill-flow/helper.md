@@ -51,18 +51,20 @@ worktree 并行有两种截然不同的用法，本 flow **都支持**，判据�
 ```sh
 grill-flow start <自然语言需求描述>   # 启动，引擎生成 flow_id
 grill-flow approve                    # 通过当前 gate
-grill-flow abort                      # 中止（创建快照）
-grill-flow resume                     # 新 session 恢复
+grill-flow abort                      # 中止（创建快照分支；会跑 git add -A，非日常操作）
+grill-flow resume <branch>            # 从 abort 的快照分支捡回被中止的 flow（要带分支名）
 grill-flow status                     # 查看当前 stage
 grill-flow help                       # 本文档
 ```
+
+⚠️ **`/clear` 之后不需要敲任何命令**：引擎的 SessionStart hook 会自动恢复到当前 stage（注入 `[ai-flow:paths]` + 当前 stage 提示词）。`resume` 是另一回事——它只能从 `abort` 留下的快照分支恢复，且要求当前**没有** active flow；`/clear` 之后 flow 仍然是 active 的，对它敲 `resume` 只会得到「已有 active flow，请先 abort」，⛔ **别照那句去 abort**——你要恢复的东西早就恢复好了，而 abort 会跑一次 `git add -A` 并把快照提交到新分支。
 
 ## 5 Stage 流水线
 
 | ID | 名称 | 完成方式 | 关键机制 |
 |----|------|---------|---------|
 | stage-1 | grill（需求对齐，domain-aware） | **gate** | grilling 一次一问 + wayfinder 迷雾子模式 + research/prototype detour |
-| stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + HTML 方案视图 + tracer-bullet 切片(prefactor 前置) + 每票声明 `Blocked by`(实施先后) 与 `Touches`(预计写集) |
+| stage-2 | spec + tickets | script + **gate** | 散文 spec + seam + User Stories + 对抗方案审查 + tracer-bullet 切片(prefactor 前置) + 每票声明 `Blocked by`(实施先后) 与 `Touches`(预计写集) → **切完票之后**才生成 HTML 方案视图（视图含**代码库改动面**清单、且「方案审查结论」要含切票后补审两项；补审做完写 `### 切票后补审` 小节，那是重入探测判它做没做的唯一锚）+ 呈给开发者前跑一次**陌生读者可读性审查**（只读 HTML、禁读 spec/tickets/代码；跑完在 HTML 末尾落 `<!--READABILITY-REVIEWED-->` 锚，机器门 fail-closed 查它） |
 | stage-3 | implement | script（无 gate，fail-closed） | 主 session 调度：算批次（够格 ∧ `Touches` 不相交，上限 3）→ 落 `batch:` 再派发 → 每票一个 worktree（`scripts/worktree.cjs open`）→ 实施子代理留改动不提交 → 质量链子代理（新上下文）走完质量链并 commit → 回合前自己 `git rebase` 适配 → 主 session `--ff-only` 逐票回合（`close`）→ 批次收口测试一次 → 记账。**历史必须线性**（断言④ 是 `-X ours` 静默丢内容的唯一物理防线）。**执行单位可切换**：`scripts/schedule.cjs` 按主循环同一套准入算法模拟两种模式的轮数，谁少用谁——写集重叠多时「一组一车道」（长驻 worktree `R<n>`、`close --keep` 逐票回合、记 `lane:`）会明显更快。分组来自 `lane:` 字段时它还会校验该分组自己的前提（跨车道写集相交 = 会停等，轮数被低估）并点名「跨车道票」。判据见 `references/execution-unit.md`，车道模式的三条代价与全部动作差异见 `references/lane-mode.md`。`worktree.cjs status <flow_id>` 一屏看全各车道的 `ahead / dirty / 是否 HEAD 后继 / 待补依赖 / 静默时长`（纯读，不 prune；**静默 ≥30 分钟的在飞车道 = 那个子代理已经停了**，这是唯一不依赖自我报告的判据）；**只有主 session 能等待**——子代理结束回合即终止，所以整仓全量回归归收口、纯验证任务不外包（见 `references/subagent-lifecycle.md`）；`sync` / `close` 按「装完时的锁文件指纹」自己检测并补装依赖（`--no-install` 只报不装；补装失败会以非零退出打断命令链，但回合本身已完成、别重跑 close）。记账按票（close 成功即记）、收口测试按轮且有硬上限，两者的落盘锚点分别是 `qc:done` 与 tickets.md 的 `## 收口记录` 段 |
 | stage-4 | code-review | **gate** | A 全量测试 + B 组装审（两轴按规模可跳过）+安全 + C 开发者 IDE 未暂存 diff 亲审闭环**（含真机验证清单收口 rm:pending，全流程唯一真机验证落点）** → squash 一笔 feat commit |
 | stage-5 | 沉淀 | **gate** | optimize-claude-context 集中写 CLAUDE.md/rules/ADR |
@@ -76,7 +78,7 @@ docs/grill-flows/<flow_id>/
 ├── alignment.md         # 需求/范围/决策/术语/暂缓/沉淀候选/功能覆盖缺口(替换迁移型,stage-1)
 ├── wayfinder-map.md     # 迷雾大时的决策地图（stage-1 wayfinder 子模式，可选）
 ├── spec.md              # 散文规格：Problem/Solution/User Stories/Decisions/Testing Decisions/Out of scope/方案审查/跨端跨仓行为契约(涉及时,stage-2)
-├── tech-design.html     # 方案视图：gate 主审面（stage-2，从 spec 生成的单向视图）
+├── tech-design.html     # 方案视图：gate 主审面（stage-2，从 spec + tickets 生成的单向视图；切完票之后才生成）
 ├── diagram/*.svg        # 配图（mermaid→mmdc）
 ├── tickets.md           # tracer-bullet 切片 + 依赖/写集声明（Blocked by / Touches，stage-2 建）+ 进度（stage-3 维护 batch:（车道模式 lane: + 在飞标记 wip:）+ qc:done + [x] + 真机票 rm:pending/rm:done + ## 待真机验证段 + ## 已知碰撞面段（车道模式下机器门⑦ 失效后的替代保护，stage-4 逐行点名）+ ## 收口记录段（收口测试硬上限的计数依据））
 ├── candidates.md        # 沉淀候选（stage-3 累积）
@@ -95,7 +97,8 @@ signal 语义：AI 统一写 `done`，引擎自动计算下一步（非 `done` �
 
 ## 环境要求
 
-- **系统**：Node.js ≥ 18、**git ≥ 2.31**、claude CLI、mermaid-cli（`mmdc`，stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
+- **系统**：Node.js ≥ 18、**git ≥ 2.31**、claude CLI、**mermaid-cli（`mmdc`）≥ 11.14.0**（stage-2 配图：`npm install -g @mermaid-js/mermaid-cli`）。
+  - mmdc 的版本下限来自配图契约用的 `layout: elk`：`@mermaid-js/layout-elk` 从 11.14.0 起才随 mermaid-cli 自带，更旧的版本**不报错、静默退回默认布局**（退出码仍是 0；配图质量门也抓不到，它的自检 PNG 用同一份配置渲染、几何与 SVG 一致）。`mmdc --version` 确认。
   - git 版本下限是 stage-3 并行带来的：引擎判断「某个目录是否位于隔离工作树内」用的是 `git rev-parse --path-format=absolute`（2.31，2021-03 起）。更低的版本上该判断会安全降级为「否」，后果是 worktree 内的写入不再受控制面保护、signal 拦截与 context 统计约束——**并行路径在那种环境下不能用**（串行路径不受影响）。用 `git --version` 确认。
 - **宿主须允许子代理再派子代理**：stage-3 的一票交付契约里，实施子代理自己并行派三个评审子代理、并调用 `comment` skill（后者自身也会 fan-out）。若宿主不给子代理 `Agent` 工具，这套质量链跑不起来。以下四条是这条依赖的**真实边界**，派发前按它们兜底：
   - **嵌套本身是宿主能力，不是必然可用**。Claude Code 在 2026-06 之前明确禁止子代理派子代理，之后开放并给了深度上限（公开说法在 3~5 之间反复过）。所以 dispatch prompt 里**必须带一条降级路径**：派不出嵌套子代理时，就自己按三个轴各审一遍、并在回报里说明是自审。
