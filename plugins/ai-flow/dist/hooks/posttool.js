@@ -262,6 +262,33 @@ function markBasePath(repoRoot, flowName) {
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
+function renderedPromptPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "current-prompt.md");
+}
+function materializeRenderedPrompt(repoRoot, flowName, stageId, rendered) {
+  try {
+    const dest = renderedPromptPath(repoRoot, flowName);
+    const header = `<!-- ai-flow: stage=${stageId} flow=${flowName} -->
+> \u26A0\uFE0F \u8FD9\u662F stage **${stageId}** \u63D0\u793A\u8BCD\u7684\u6E32\u67D3\u526F\u672C\uFF08\u5F15\u64CE\u843D\u76D8\uFF0C\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\uFF09\u3002
+> **\u5B83\u548C\u4F60\u5F53\u524D\u6240\u5904\u7684 stage \u4E0D\u4E00\u81F4\u65F6\uFF0C\u5C31\u662F\u65E7\u4EF6\u2014\u2014\u522B\u7167\u5B83\u6267\u884C**\uFF0C\u53BB\u8BFB\u5F15\u64CE\u672C\u6B21\u6CE8\u5165\u7ED9\u4F60\u7684\u5185\u5BB9\u3002
+
+`;
+    mkdirSync2(dirname(dest), { recursive: true });
+    const tmp = statePath(repoRoot, flowName, `current-prompt.${randomBytes(4).toString("hex")}.tmp`);
+    writeFileSync2(tmp, header + rendered, "utf-8");
+    renameSync2(tmp, dest);
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function clearRenderedPrompt(repoRoot, flowName) {
+  try {
+    const p = renderedPromptPath(repoRoot, flowName);
+    if (existsSync2(p)) unlinkSync2(p);
+  } catch {
+  }
+}
 
 // src/lib/format.ts
 function truncateError(e, max = 120) {
@@ -4464,15 +4491,23 @@ import { join as join6 } from "path";
 // src/lib/prompt-render.ts
 import { join as join5 } from "path";
 var INLINE_INJECTION_BUDGET = 1e4;
-function injectableStagePrompt(rendered, promptPath, overhead = 0) {
+function injectableStagePrompt(rendered, promptPath, overhead, materialize) {
   if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  const readyPath = materialize?.(rendered) ?? null;
+  const target = readyPath ?? promptPath;
   return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
 
 **\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
-${promptPath}
+${target}
 
-\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09
-` + writtenDocLengthNote();
+` + (readyPath ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002Gate \u534F\u8BAE\u4E0D\u5728\u526F\u672C\u91CC\uFF0C\u5B83\u968F\u672C\u6B21\u6CE8\u5165\u53E6\u7ED9\u3002\uFF09
+
+` : `\u26A0\uFE0F \u843D\u76D8\u6E32\u67D3\u526F\u672C\u5931\u8D25\uFF0C\u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u672C\u6B21\u6CE8\u5165\u9876\u90E8 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002
+
+`) + `\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09` + // The materialized copy already carries this note (it is part of `rendered`). Only the
+  // degraded template-pointer path needs it appended, or an oversize stage loses the
+  // length discipline entirely.
+  (readyPath ? "" : "\n" + writtenDocLengthNote());
 }
 function assembledOverhead(assemble) {
   return assemble("").length;
@@ -4527,6 +4562,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     if (existsSync5(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
     if (existsSync5(sig)) unlinkSync3(sig);
+    clearRenderedPrompt(repoRoot, flowName);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4535,6 +4571,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
       terminal: true
     };
   }
+  clearRenderedPrompt(repoRoot, flowName);
   const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
   if (!advanced) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4558,7 +4595,8 @@ ${body}
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead
+        assembledOverhead(assemble) + gateNote.length + callerOverhead,
+        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
       );
     } catch {
     }

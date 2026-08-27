@@ -322,6 +322,33 @@ function signalPath(repoRoot, flowName) {
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
+function renderedPromptPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "current-prompt.md");
+}
+function materializeRenderedPrompt(repoRoot, flowName, stageId, rendered) {
+  try {
+    const dest = renderedPromptPath(repoRoot, flowName);
+    const header = `<!-- ai-flow: stage=${stageId} flow=${flowName} -->
+> \u26A0\uFE0F \u8FD9\u662F stage **${stageId}** \u63D0\u793A\u8BCD\u7684\u6E32\u67D3\u526F\u672C\uFF08\u5F15\u64CE\u843D\u76D8\uFF0C\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\uFF09\u3002
+> **\u5B83\u548C\u4F60\u5F53\u524D\u6240\u5904\u7684 stage \u4E0D\u4E00\u81F4\u65F6\uFF0C\u5C31\u662F\u65E7\u4EF6\u2014\u2014\u522B\u7167\u5B83\u6267\u884C**\uFF0C\u53BB\u8BFB\u5F15\u64CE\u672C\u6B21\u6CE8\u5165\u7ED9\u4F60\u7684\u5185\u5BB9\u3002
+
+`;
+    mkdirSync2(dirname(dest), { recursive: true });
+    const tmp = statePath(repoRoot, flowName, `current-prompt.${randomBytes2(4).toString("hex")}.tmp`);
+    writeFileSync2(tmp, header + rendered, "utf-8");
+    renameSync2(tmp, dest);
+    return dest;
+  } catch {
+    return null;
+  }
+}
+function clearRenderedPrompt(repoRoot, flowName) {
+  try {
+    const p = renderedPromptPath(repoRoot, flowName);
+    if (existsSync2(p)) unlinkSync2(p);
+  } catch {
+  }
+}
 
 // src/lib/format.ts
 function truncateError(e, max = 120) {
@@ -4489,15 +4516,23 @@ import { join as join5 } from "path";
 // src/lib/prompt-render.ts
 import { join as join4 } from "path";
 var INLINE_INJECTION_BUDGET = 1e4;
-function injectableStagePrompt(rendered, promptPath, overhead = 0) {
+function injectableStagePrompt(rendered, promptPath, overhead, materialize) {
   if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+  const readyPath = materialize?.(rendered) ?? null;
+  const target = readyPath ?? promptPath;
   return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
 
 **\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
-${promptPath}
+${target}
 
-\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09
-` + writtenDocLengthNote();
+` + (readyPath ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002Gate \u534F\u8BAE\u4E0D\u5728\u526F\u672C\u91CC\uFF0C\u5B83\u968F\u672C\u6B21\u6CE8\u5165\u53E6\u7ED9\u3002\uFF09
+
+` : `\u26A0\uFE0F \u843D\u76D8\u6E32\u67D3\u526F\u672C\u5931\u8D25\uFF0C\u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u672C\u6B21\u6CE8\u5165\u9876\u90E8 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002
+
+`) + `\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09` + // The materialized copy already carries this note (it is part of `rendered`). Only the
+  // degraded template-pointer path needs it appended, or an oversize stage loses the
+  // length discipline entirely.
+  (readyPath ? "" : "\n" + writtenDocLengthNote());
 }
 function assembledOverhead(assemble) {
   return assemble("").length;
@@ -4552,6 +4587,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     if (existsSync4(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
     if (existsSync4(sig)) unlinkSync3(sig);
+    clearRenderedPrompt(repoRoot, flowName);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
       additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
@@ -4560,6 +4596,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
       terminal: true
     };
   }
+  clearRenderedPrompt(repoRoot, flowName);
   const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
   if (!advanced) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
@@ -4583,7 +4620,8 @@ ${body}
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead
+        assembledOverhead(assemble) + gateNote.length + callerOverhead,
+        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
       );
     } catch {
     }
@@ -4655,7 +4693,16 @@ async function handleSessionStart(input2) {
         recovered: true
       });
       const isTerminal = expectedNext === null;
-      const stagePromptPath = join6(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+      const templatePath = join6(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+      let renderedForRead = null;
+      let templateReadable = true;
+      try {
+        renderedForRead = renderPrompt(readFileSync5(templatePath, "utf-8"), repoRoot, flowName);
+      } catch {
+        templateReadable = false;
+      }
+      const materialized = renderedForRead ? materializeRenderedPrompt(repoRoot, flowName, state.current_stage, renderedForRead) : null;
+      const stagePromptPath = materialized ?? templatePath;
       const lines = [
         `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0CStage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u7528\u6237\u786E\u8BA4\u3002`,
         ``,
@@ -4664,13 +4711,16 @@ async function handleSessionStart(input2) {
         ``,
         `\u26A0\uFE0F \u672C\u6B21\u6CE8\u5165**\u4E0D\u542B**\u672C stage \u7684\u63D0\u793A\u8BCD\u6B63\u6587\u3002\u5F00\u53D1\u8005\u5728 gate \u4E0A\u63D0\u51FA\u4EFB\u4F55\u4FEE\u6539\u3001\u6216\u4F60\u8981\u505A approve \u4E4B\u540E\u7684\u6536\u5C3E\u52A8\u4F5C\u4E4B\u524D\uFF0C**\u5148 Read \u8FD9\u4E2A\u6587\u4EF6**\u5E76\u7167\u5B83\u6267\u884C\uFF1A`,
         stagePromptPath,
+        materialized ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002\uFF09` : templateReadable ? `\u26A0\uFE0F \u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF08\u6E32\u67D3\u526F\u672C\u843D\u76D8\u5931\u8D25\uFF09\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u4E0A\u9762 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002` : `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u6587\u4EF6\u8BFB\u4E0D\u51FA\u6765\uFF08\u53EF\u80FD\u88AB\u6539\u540D\u6216\u5220\u4E86\uFF09\u3002\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84 Read \u4F1A\u5931\u8D25\u2014\u2014\u8FD9\u4E0D\u662F\u78C1\u76D8\u95EE\u9898\uFF0C\u662F flow \u5B9A\u4E49\u4E0E active.json \u91CC\u7684 stage id \u5BF9\u4E0D\u4E0A\u3002\u5148\u628A\u5B83\u4FEE\u597D\uFF0C\u522B\u51ED\u8BB0\u5FC6\u5F80\u4E0B\u505A\u3002`,
         isTerminal ? `\u26D4 \u7EC8\u7AEF stage \u7684 approve \u540E\u52A8\u4F5C\u53EA\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u91CC\uFF0C\u5F15\u64CE\u7684\u6D41\u7A0B\u5B8C\u6210\u6D88\u606F\u4E0D\u4F1A\u91CD\u590D\u5B83\uFF08\u5B83\u53EA\u8BF4\u300C\u603B\u7ED3\u4EA7\u51FA\u3001\u5EFA\u8BAE\u4E0B\u4E00\u6B65\u300D\uFF09\u2014\u2014\u4E0D\u8BFB\u5C31\u52A8\u624B\u4F1A\u9759\u9ED8\u6F0F\u6389\u3002` : `\u26A0\uFE0F \u5728 gate \u4E0A\u6539\u4E86\u4E0A\u6E38\u4EA7\u7269\u65F6\uFF0C\u4ECE\u5B83\u6D3E\u751F\u7684\u4E0B\u6E38\u4EA7\u7269 / \u89C6\u56FE\u5FC5\u987B\u8DDF\u7740\u540C\u6B65\uFF0C\u89C4\u5219\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u4E0E\u5B83\u8DEF\u7531\u5230\u7684 references \u91CC\uFF0C\u6F0F\u4E86\u4E0D\u4F1A\u6709\u4EFB\u4F55\u4E1C\u897F\u62A5\u9519\u3002`,
         ``,
         `\u5982\u9700\u4FEE\u6539\uFF0C\u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u5199\u5165 signal\u3002`,
         isTerminal ? `\u4E0D\u8981\u64C5\u81EA\u7ED3\u675F\u6D41\u7A0B\uFF0C\u7B49\u5F85\u5F00\u53D1\u8005 approve\u3002` : `\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u5DE5\u4F5C\u3002`
       ];
       return {
-        additionalContext: pathsPreamble + lines.join("\n") + "\n" + writtenDocLengthNote(),
+        // The materialized copy already carries writtenDocLengthNote (renderPrompt adds it).
+        // Only the degraded template-pointer path needs it appended here.
+        additionalContext: pathsPreamble + lines.join("\n") + (materialized ? "" : "\n" + writtenDocLengthNote()),
         systemMessage: statusLine2
       };
     }
@@ -4706,7 +4756,8 @@ async function handleSessionStart(input2) {
         promptContent = injectableStagePrompt(
           renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
           promptPath,
-          assembledOverhead(assemble) + gateNote.length
+          assembledOverhead(assemble) + gateNote.length,
+          (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
         );
       } catch {
       }
