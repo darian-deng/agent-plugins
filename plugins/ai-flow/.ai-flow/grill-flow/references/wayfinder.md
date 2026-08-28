@@ -43,7 +43,7 @@ mode: charting | working | clear
 
 **② working（逐决策 resolve，每会话一个）**：
 1. 读 map，取 frontier = `status:open` 且 `blocked-by` 全部 `resolved` 的决策，挑一个。
-2. 用 grilling / research（外部事实起后台子代理）/ prototype（状态机·UI，throwaway、走 Bash 写 repo 外、不 commit）/ **task**（为解锁决策的手动前置：开账号、供权限、搬数据看形状）去 resolve 它。
+2. 用 grilling / research（外部事实起后台子代理）/ prototype（状态机·UI，throwaway、走 Bash 写 repo 外、不 commit，怎么选分支、怎么建见 `prototype.md`）/ **task**（为解锁决策的手动前置：开账号、供权限、搬数据看形状）去 resolve 它。
 3. 写回 结论+依据+被否，标 `resolved`；冒出下游决策 append（带 blocked-by）；新迷雾进 fog 段。
 4. 一个决策告一段落即可 `/clear`（图在盘上，不必背着整段调查史）。
 

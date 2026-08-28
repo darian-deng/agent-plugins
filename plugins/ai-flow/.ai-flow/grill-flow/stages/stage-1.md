@@ -14,6 +14,7 @@
 - `{{flow_root}}/references/adr-scan.md` — 入场读既有 ADR/glossary（grill-with-docs 内核：复用已决、尊重术语）
 - `{{flow_root}}/references/wayfinder.md` — 设计迷雾大时的子模式（**重入时先按它探测 wayfinder-map.md 的四态**）
 - `{{flow_root}}/references/revision-protocol.md` — 开发者异议 / 自查前置错时走它
+- `{{flow_root}}/references/prototype.md` — 非必经，触发 research/prototype detour（下方步骤）时读，讲怎么选分支、logic/UI 两种形状怎么建
 
 ## 步骤
 
@@ -21,7 +22,7 @@
 - **入场读 domain**（adr-scan.md）：复用已决决策、sharpen 模糊词到 canonical 术语、术语冲突当场挑战。
 - **普通 grill**：把模糊需求拆成 alignment.md，**逐条对齐增量写入、不攒到最后**。提问前先查（grep/read 代码、读需求源、外部选型查官方文档）；能查清的不问。每个待定点归类：finding（陈述带来源）/ 问开发者（意图·取舍·业务规则，走 AskUserQuestion 带推荐）/ ⚠假设（给默认值+后果，不卡）。
 - **迷雾浮现 → 提议 wayfinder**：grill 中冒出 ≥3 个互相 blocked、答不出、要调研/原型才能定的架构决策 → 停下向开发者提议升级 wayfinder，同意后按 `wayfinder.md` 建图。**wayfinder 进行中（marker `charting`/`working`）绝不写 signal**——只有 `mode: clear` 且开发者确认对齐后才允许写（误写会冲进 gate-pending、丢 wayfinder 逻辑，见 wayfinder.md 诚实边界）。
-- **research/prototype detour**（非必经）：外部事实起后台 research 子代理；状态机/UI 建 throwaway prototype（走 Bash 写 repo 外）。拿到答案回 grill。
+- **research/prototype detour**（非必经）：外部事实起后台 research 子代理；状态机/UI 建 throwaway prototype（走 Bash 写 repo 外，怎么选分支、怎么建见 `references/prototype.md`）。拿到答案回 grill。
 - **范围外想法** → 记入 alignment.md「暂缓」，拉回当前需求。
 - **替换/迁移型需求**（把旧系统/旧实现搬到新的）：额外产出《相对基线的功能覆盖缺口清单》——做完本次后相对被替换对象还差哪些**用户可见**功能，每条标归本期还是后续。先派接地子代理对照被替换对象的真实行为/代码核实（别凭印象攒清单），再逐条与开发者对齐，写进 alignment.md 的 `## 功能覆盖缺口` 段。
 - **结账（写 signal 前必做）**：用 `AskUserQuestion` 逐条与开发者敲定高杠杆范围，别把范围决策拖到 stage-2/3 才暴露——①功能对等边界（做到什么程度算完）②本次要删除/废弃的东西 ③明确推迟到未来 flow 的项。逐条结论落 alignment.md（对等边界入「需求」、删除/废弃入「关键决策」、推迟项入「暂缓」）。
