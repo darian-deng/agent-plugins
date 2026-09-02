@@ -4,6 +4,7 @@
 // stage-3 无人工 gate——通过即自动进 stage-4，所以这道门尤其必须 fail-closed。
 // 断言：① ≥1 已勾 ticket 且无未勾（只认标准复选框）；
 //       ② 每个 [x] ticket 自己的块里写了 qc:done（不是全文数 qc:done——说明性文字会灌水）；
+//          同趟顺便看 cm:done（注释清理），缺它**只警告不阻断**——见该处注释；
 //       ③ 每个 [x] ticket 在 base_sha_code..HEAD 有**属于自己的一笔非 merge commit**
 //          （subject 含该 ticket 号，且一笔 commit 只能认领一个 ticket；
 //           防"勾了 [x] 却没做 / 没 commit"、防一笔 commit 顶多票）；
@@ -140,17 +141,24 @@ if (done.length === 0) {
 // 单独再走一遍只会让两处边界逻辑漂移）。两者都可缺省：
 //   - Touches 缺 → ⑥ 跳过该票（本次改动之前创建的 tickets.md 没有这一行，向后兼容）
 //   - batch 缺 → 该票是串行执行的，不参与 ⑦
+// 同一趟还顺便看 `cm:done`（注释清理已做）。它**只警告、不 fail**，理由是向后兼容：
+// 注释清理是后来才从质量链子代理上收给主 session 的，在那之前收口的票面上没有这个字段，
+// 硬断言会把一个跑到一半的 flow 整个卡住。缺它的真实防线在 `reentry.md` 的相位表
+// （重入时判得出「已 commit 但注释没清」），这里只负责让漏做**可见**。
 const missingQc = [];
+const missingCm = [];
 for (let k = 0; k < done.length; k++) {
   const start = done[k].line;
   const end = k + 1 < done.length ? done[k + 1].line : lines.length;
   let found = /qc:done/.test(lines[start]);
+  let foundCm = /cm:done/.test(lines[start]);
   const blockLines = [lines[start]];
   for (let i = start + 1; i < end; i++) {
     if (/^#{1,6}\s/.test(lines[i])) break;   // 标题 = 块结束
     if (!/^\s+\S/.test(lines[i])) continue;  // 只认缩进子行
     blockLines.push(lines[i]);
     if (/qc:done/.test(lines[i])) found = true;
+    if (/cm:done/.test(lines[i])) foundCm = true;
   }
   for (const bl of blockLines) {
     const mt = /(?:^|\s)Touches:\s*(.+)$/.exec(bl);
@@ -161,6 +169,15 @@ for (let k = 0; k < done.length; k++) {
     if (mb && done[k].batch === null) done[k].batch = mb[1];
   }
   if (!found) missingQc.push(done[k].num);
+  if (!foundCm) missingCm.push(done[k].num);
+}
+// 只在「这个 flow 已经在用 cm:done、但漏了几张」时才说话。全部已勾票都没有它 = 这一轮跑在
+// 注释清理上收之前的契约上，那时票面本来就没有这个字段 —— 对那种 flow 报一长串票号是纯噪音。
+if (missingCm.length > 0 && missingCm.length < done.length) {
+  process.stderr.write('⚠  这些已勾 ticket 没写 cm:done（注释清理由主 session 在 commit 之后、close 之前另派）: '
+    + missingCm.join(', ')
+    + '\n   不阻断放行。但注释清理一旦漏过 close 就无法 --amend 折回本票那笔了，'
+    + '只能另起一笔或留到 stage-4 组装审一并处理。\n');
 }
 if (missingQc.length > 0) {
   err('这些已勾 ticket 没在自己那条里写 qc:done（写在该 ticket 行上或其缩进子项里，全文别处的 qc:done 不算）: '

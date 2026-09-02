@@ -73,7 +73,11 @@ describe('handlePostTool', () => {
     expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBe('PRESET_SHA');
   });
 
-  it('non-write tool → null', async () => {
+  // Context sampling deliberately runs for EVERY tool: a stage whose main session
+  // "only schedules" edits its docs through Bash heredocs, so a write-tool-only
+  // gate measured almost nothing (three recorded sessions did zero Edit/Write yet
+  // peaked at 65–72.5% against a 60% block threshold).
+  it('non-write tool → context is still sampled (no early return)', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -83,7 +87,57 @@ describe('handlePostTool', () => {
       base_sha: 'abc',
     });
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Read', 80));
-    expect(out).toBeNull();
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('80%');
+  });
+
+  it('non-write tool below warn_at_pct → null', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    expect(await handlePostTool(makeInput(repo.repoRoot, 'Bash', 10))).toBeNull();
+  });
+
+  // The marker paths are matched on tool_input.file_path alone, and Read carries a
+  // file_path too — pretool's own deny text even tells the AI to Read the signal
+  // file. Sampling on every tool must therefore NOT let a read trip either marker.
+  it('Read on the mark-base path does not capture base_sha_code', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const input = makeInput(repo.repoRoot, 'Read', 10);
+    (input.tool_input as Record<string, unknown>)['file_path'] = markBasePath(repo.repoRoot, 'test-flow');
+    expect(await handlePostTool(input)).toBeNull();
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.base_sha_code).toBeUndefined();
+  });
+
+  it('Read on the signal path does not advance the stage', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    const sig = signalPath(repo.repoRoot, 'test-flow');
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+    writeFileSync(sig, 'done');
+    const input = makeInput(repo.repoRoot, 'Read', 10);
+    (input.tool_input as Record<string, unknown>)['file_path'] = sig;
+    expect(await handlePostTool(input)).toBeNull();
+    expect((await readActiveState(repo.repoRoot, 'test-flow'))!.current_stage).toBe('work');
   });
 
   it('write tool + context below warn_at_pct → null', async () => {
@@ -178,8 +232,14 @@ describe('handlePostTool — block_at_pct', () => {
     });
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 65));
     expect(out).not.toBeNull();
-    expect(out!.additionalContext).toContain('write 工具将被自动拒绝');
     expect(out!.additionalContext).toContain('65%');
+    // The brief tells the model to wrap up, not to freeze: one session read the old
+    // "stop calling tools" wording as "every tool is dead", wrote its handoff into a
+    // session-private scratchpad the next session could not find, and lost a
+    // correctness finding that overturned an earlier ruling.
+    expect(out!.additionalContext).toContain('收尾');
+    expect(out!.additionalContext).not.toContain('不要再尝试任何工具调用');
+    expect(out!.additionalContext).toMatch(/仍然放行|仍可写/);
   });
 
   it('context >= block_at_pct → context_blocked saved as true in state', async () => {
@@ -208,7 +268,47 @@ describe('handlePostTool — block_at_pct', () => {
       context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
     });
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 70));
-    expect(out!.additionalContext).toContain('write 工具将被自动拒绝');
+    expect(out).not.toBeNull();
+    expect(out!.additionalContext).toContain('70%');
+    // Already latched → the short nudge, not the full brief again.
+    expect(out!.additionalContext).toContain('收尾窗口');
+    expect(out!.additionalContext.length).toBeLessThan(200);
+  });
+
+  // Sampling on every tool means this branch runs hundreds of times per session.
+  // Replaying the full brief each time would fire 18–63 times (simulated against
+  // three recorded pct series), so it throttles on its own water mark.
+  it('block reminder throttled until pct advances by rewarn_delta', async () => {
+    const repo = makeBlockingRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+      context_blocked: true,
+      context_warning: {
+        warned: true, warned_at_pct: 65, warned_at: new Date().toISOString(),
+        block_reminded_at_pct: 70,
+      },
+    });
+    // BLOCKING_CONFIG's rewarn delta keeps 70 → 70 under the step.
+    expect(await handlePostTool(makeInput(repo.repoRoot, 'Write', 70))).toBeNull();
+  });
+
+  it('block reminder records its own water mark on first fire', async () => {
+    const repo = makeBlockingRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'test',
+      current_stage: 'work',
+      base_sha: 'abc',
+    });
+    await handlePostTool(makeInput(repo.repoRoot, 'Write', 65));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.context_warning.block_reminded_at_pct).toBe(65);
+    expect(state!.context_warning.warned_at_pct).toBe(65);
   });
 
   it('no block_at_pct in config → block never triggers even at 100%', async () => {

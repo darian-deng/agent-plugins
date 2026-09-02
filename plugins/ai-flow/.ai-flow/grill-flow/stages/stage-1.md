@@ -19,6 +19,8 @@
 ## 步骤
 
 - **重入先探测**：若 `wayfinder-map.md` 存在，按 `wayfinder.md` 四态分派（charting/working/clear）；否则读 `alignment.md`（若有）续，或新起普通 grill。
+> **背景怎么传下去**：`/clear` 之后先按 `{{flow_root}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
+
 - **入场读 domain**（adr-scan.md）：复用已决决策、sharpen 模糊词到 canonical 术语、术语冲突当场挑战。
 - **普通 grill**：把模糊需求拆成 alignment.md，**逐条对齐增量写入、不攒到最后**。提问前先查（grep/read 代码、读需求源、外部选型查官方文档）；能查清的不问。每个待定点归类：finding（陈述带来源）/ 问开发者（意图·取舍·业务规则，走 AskUserQuestion 带推荐）/ ⚠假设（给默认值+后果，不卡）。
 - **迷雾浮现 → 提议 wayfinder**：grill 中冒出 ≥3 个互相 blocked、答不出、要调研/原型才能定的架构决策 → 停下向开发者提议升级 wayfinder，同意后按 `wayfinder.md` 建图。**wayfinder 进行中（marker `charting`/`working`）绝不写 signal**——只有 `mode: clear` 且开发者确认对齐后才允许写（误写会冲进 gate-pending、丢 wayfinder 逻辑，见 wayfinder.md 诚实边界）。

@@ -214,10 +214,16 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // response to a degraded one, and this is the branch that punished it.
   //
   // Deliberately NOT extended to Bash. This is a signal to the model, not a security
-  // boundary — `cat >`, `sed -i` and `git commit` have always gone through, and no
-  // run has been observed routing around the block that way. Catching them would mean
-  // parsing shell for write intent, and would refuse `git commit` / test runs / the
-  // flow's own scripts, which the stage prompts hand out by name.
+  // boundary — `cat >`, `sed -i` and `git commit` have always gone through. Catching
+  // them would mean parsing shell for write intent, and would refuse `git commit` /
+  // test runs / the flow's own scripts, which the stage prompts hand out by name.
+  //
+  // This comment used to claim no run had been observed routing around the block that
+  // way. That is no longer true: one session crossed at 61% and then kept editing
+  // `tickets.md` through a heredoc'd python script under Bash for a further 28 minutes,
+  // 614K → 665K. Which is also why the block message now reads as "start wrapping up"
+  // rather than "stop touching tools" — a signal the model can honour while still
+  // landing a handoff beats one it either obeys into paralysis or routes around.
   if (state.context_blocked && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
     const stageCfgForBlock = getStageConfig(config, state.current_stage);
     const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);

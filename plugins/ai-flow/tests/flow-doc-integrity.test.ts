@@ -61,6 +61,7 @@ const PROJECT_ARTIFACTS = new Set([
   'task-reports.md',
   'context-delta.md',
   'research.md',
+  'ledger.md',
   'CLAUDE.md',
   'CONTEXT.md',
   'README.md',
@@ -150,7 +151,13 @@ const SPLIT_STAGES: SplitStage[] = [
       ['一票派两次，不是一次', /一票派两次，不是一次/],
       // 作用域是刻意限定的：子代理不能被唤醒，丢后台只能烧回合空等（实测 422 个空转回合）；
       // 而主 session 会被后台命令唤醒，它必须能丢后台，否则腾不出手做 15 分钟扫描。
-      ['子代理往下派孙代理必须同步', /它自己往下派孙代理.{0,40}必须同步/],
+      //
+      // ⚠️ 这条红线的内容换过一次。原文是「子代理往下派孙代理必须同步（run_in_background: false）」，
+      // 而那个参数在「子代理派孙代理」这一层根本不生效——实测有过对照：显式传 false，工具结果仍是
+      // 「Async agent launched successfully… working in the background」，该参数也不在 Agent 工具的
+      // schema 里。要求一个不存在的开关，实测被违反 9 次（每次约 90K token + 5–6 分钟空转）。
+      // 所以红线改成「不许往下派」——同步既然拿不到，唯一可执行的形态就是自己顺序做完。
+      ['子代理不许再往下派孙代理', /不许再往下派孙代理/],
       ['主 session 自己派子代理可以丢后台', /你自己派子代理反而可以丢后台/],
       ['票面整段内联，不给 tickets.md 路径', /票面整段内联，不给\s*`tickets\.md`\s*路径/],
       // 两段的复核判据方向相反：实施交付后树必须脏，质量链交付后必须干净。

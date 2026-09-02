@@ -29,6 +29,7 @@
 ## 步骤
 
 **先判 /clear 重入**（照 assembly-review.md 重入判据，用 git 状态）：HEAD body 含 `flow-squash` → 补 signal；`HEAD==base_sha_code` 且工作区非空 → 续环节 C 人审循环；否则（HEAD 领先 base）→ 环节 A/B。
+> **背景怎么传下去**：`/clear` 之后先按 `{{flow_root}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
 
 1. **环节 A 全量测试**：AI 跑（假绿检测：测试数>0），失败修代码，原始输出（通过/失败计数 + commit SHA）落 review.md。
 2. **环节 B 组装审 + 安全专项**（组装审一次、不套娃；**安全阻塞项有「修复后一次独立复核」例外**）：`general-purpose` 子代理并行审 `git diff <base>..HEAD`——Standards（携 fowler-smells.md，跨 ticket smell）+ Spec（携 spec.md，User Stories 闭环）+ 安全专项。⚖️ **派几个不是固定的**：先按 `assembly-review.md` 的「派几个先算一次」节走那一节的全部判据——都成立时只派安全专项。⛔ **判据本身以那一节为准，本行不复述**（阈值一改就会漂）；跳过与否连各条依据一起写进 review.md，**跳过时还要把「跨票反向读取对」列成人审点名项**。阻塞项修复 → `fix:` commit。**安全专项的对抗立场 / 扫查类别 / 独立复核例外一律以 `assembly-review.md` 为准，本行不复述细节**（细节复述必漂移）。

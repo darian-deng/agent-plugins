@@ -3,6 +3,13 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import type { FlowConfig } from '../../src/lib/flow-schema.js';
+import type { ActiveState } from '../../src/lib/state.js';
+
+// Re-exported so fixtures stay the single import site for test helpers. These used
+// to be a second, hand-copied declaration of the same two interfaces; it drifted the
+// moment `ContextWarning` grew a field, and the failure surfaced as "property does
+// not exist" on a field that plainly existed in src/. One declaration, one place.
+export type { ActiveState, ContextWarning } from '../../src/lib/state.js';
 
 export interface FlowTestRepo {
   repoRoot: string;
@@ -91,28 +98,6 @@ export function hasPython3(): boolean {
   } catch {
     return false;
   }
-}
-
-export interface ActiveState {
-  flow_id: string;
-  flow_name: string;
-  requirement: string;
-  current_stage: string;
-  base_sha: string;
-  started_at: string;
-  last_session_id: string | null;
-  history_session_ids?: string[];
-  context_size: number;
-  context_warning: ContextWarning;
-  context_blocked: boolean;
-  first_prompt_handled?: boolean;
-  base_sha_code?: string;
-}
-
-export interface ContextWarning {
-  warned: boolean;
-  warned_at_pct: number | null;
-  warned_at: string | null;
 }
 
 export const MINIMAL_CONFIG: FlowConfig = {

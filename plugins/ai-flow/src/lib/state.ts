@@ -22,6 +22,16 @@ export interface ContextWarning {
   warned: boolean;
   warned_at_pct: number | null;
   warned_at: string | null;
+  /**
+   * Water mark of the LAST block-threshold reminder that was actually emitted.
+   * Distinct from `warned_at_pct`, which freezes at the moment the block latched
+   * and never moves again — reusing it for throttling would either spam every
+   * sample or silence every reminder after the first. This one advances, so the
+   * block branch can say the full wrap-up brief once and then a one-liner per
+   * further percent. Absent on flows created before this field existed; treat
+   * undefined as "no block reminder emitted yet".
+   */
+  block_reminded_at_pct?: number | null;
 }
 
 export interface ActiveState {

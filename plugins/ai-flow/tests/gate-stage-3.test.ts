@@ -78,6 +78,37 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(runGate(flowDir).code).toBe(0);
   });
 
+  // cm:done（注释清理已做）是警告级、不阻断，且只在「这个 flow 已经在用它」时才说话——
+  // 注释清理是后来从质量链子代理上收给主 session 的，那之前收口的票面没有这个字段。
+  it('全部已勾票都没有 cm:done → 不警告（上收之前的 flow，报了就是噪音）', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    writeTickets(repo); // 两票都只有 qc:done
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain('cm:done');
+  });
+
+  it('一票有 cm:done 一票没有 → 放行但点名那张漏的', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    writeFileSync(
+      join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '# tickets\n\n- [x] T1 — impl one\n  - qc:done\n  - cm:done\n- [x] T2 — impl two\n  - qc:done\n'
+    );
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).toBe(0);          // 警告级，不阻断
+    // 只看 cm:done 那一行：这份 fixture 的票没有 Touches 声明，stderr 里还有断言⑥ 跳过
+    // 该票的警告，那些行提到 T1/T2 与本条无关。
+    const cmLine = r.stderr.split('\n').find((l) => l.includes('cm:done')) ?? '';
+    expect(cmLine).toContain('T2');
+    expect(cmLine).not.toContain('T1');
+  });
+
   // 并行票的正常回合路径：子代理在自己分支上 commit、rebase 适配，主 session ff-only 回合。
   // 历史保持线性，所以断言 ③ 与 ④ 同时满足。
   it('分支 ff-only 回合、每票各有自己的实施 commit → 放行', () => {

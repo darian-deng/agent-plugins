@@ -76,6 +76,29 @@ Per-Stage field. Either `docs_only` (writes restricted to `docs_paths`) or `unre
 **docs_paths**
 List of allowed write paths when `write_scope` is `docs_only`. Supports `{flow_id}` template substitution.
 
+**context.rewarn_delta_pct**
+How many percent the water mark must climb before the same threshold speaks again. Guards the
+warn branch always; the block branch throttles on `context_warning.block_reminded_at_pct` with
+the same step. `grill-flow` runs it at **1** — deliberately, so the wrap-up window announces
+itself continuously rather than in 10-point jumps once a session is over the line. Cheap because
+the block branch says its full brief once and one line per percent after that; measured over
+three recorded pct series, a session fires the warn line ~10 times between 50% and 60%, which is
+the intended cadence. A pct series that oscillated would spam at this setting — the recorded ones
+do not (4,059 samples, 3 decreases, all of them the `/clear` cliff, which resets the state
+anyway).
+
+**INLINE_INJECTION_BUDGET**
+`prompt-render.ts`, 10,000 **characters** (not bytes — CJK would undercount ~1.9×). A stage
+prompt is injected inline only while `rendered.length + overhead <= budget`; past that it is
+materialised to disk and the model gets a "go Read this file" pointer instead, costing a round
+trip on every entry into that stage — including every `/clear` re-entry. `rendered` counts the
+prompt *after* `{{flow_root}}` / `{{project_root}}` expand to absolute paths, so the same file
+costs more in a deeply nested monorepo. Before growing any `stages/*.md`, measure: expand the
+placeholders against the longest project path you care about, add `writtenDocLengthNote()` plus
+the assembly overhead, and compare. `grill-flow`'s stage-3 runs ~230–320 characters under the
+cap, so it is the one that bites first — put new prose in a `references/*.md` (those are read on
+demand and cost nothing here) and spend stage-page characters only on a pointer.
+
 ## Infrastructure
 
 **`/ai-flow` skill**

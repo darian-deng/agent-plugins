@@ -14,7 +14,7 @@ import {
 } from './state.js';
 import { truncateError } from './format.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
-import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
+import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { advanceStage } from './advance-stage.js';
 import { buildAiFlowPreamble } from './prompt-render.js';
 
@@ -27,7 +27,13 @@ export async function handlePostTool(
 ): Promise<{ additionalContext: string } | null> {
   const { cwd, tool_name, session_id, context_size_pct } = input;
 
-  if (!WRITE_TOOLS.has(tool_name)) return null;
+  // No write-tool gate here: context sampling below has to see every tool call.
+  // Measuring only on Edit/Write missed the water mark almost entirely, because
+  // a stage whose main session "only schedules" edits its docs through
+  // `python3 <<'PY'` and `sed -i` under Bash. Observed across 14 sessions: Bash
+  // carried 45–100% of the writes (three sessions did zero Edit/Write), and four
+  // sessions peaked at 60–72.5% against a 60% block threshold with no warning
+  // ever fired. The marker detection that follows stays write-only — see below.
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
 
@@ -35,9 +41,19 @@ export async function handlePostTool(
 
   try {
 
-  // ─── Signal detection ──────────────────────────────────────────────────────
-  const rawFp = String((input.tool_input as Record<string, unknown>)?.['file_path'] ?? '');
-  const fp = rawFp.startsWith('/') ? rawFp : join(repoRoot, rawFp);
+  // ─── Control-plane markers: write tools only ───────────────────────────────
+  // Signal and mark-base are recognised purely by comparing tool_input.file_path
+  // against two fixed paths. Read carries a file_path too, and pretool's own deny
+  // text tells the AI to `Read` the signal file / active.json — an engine-endorsed
+  // path. So now that this handler runs for every tool, a plain *read* of either
+  // marker would otherwise advance the stage, or capture base_sha_code early;
+  // and because mark-base is first-writer-wins, an early capture makes the real
+  // write a no-op ("already exists, skipping") and leaves Stage 4's diff base
+  // permanently wrong. An empty fp matches neither absolute marker path.
+  const rawFp = WRITE_TOOLS.has(tool_name)
+    ? String((input.tool_input as Record<string, unknown>)?.['file_path'] ?? '')
+    : '';
+  const fp = rawFp === '' ? '' : (rawFp.startsWith('/') ? rawFp : join(repoRoot, rawFp));
 
   // ─── base_sha_code capture (mark-base marker) ───────────────────────────────
   // The AI writes the mark-base file right after committing the Stage 1-3 docs.
@@ -92,6 +108,9 @@ export async function handlePostTool(
           additionalContext:
             `[ai-flow] Stage '${state.current_stage}' 已提交，等待人工确认。\n\n` +
             `向用户呈现本阶段的审查摘要：\n` +
+            `- **本阶段若确定或改动了「第一目标 / 指导思想 / 明确不做的范围」，逐条原文列出**\n` +
+            `  （只列本阶段落盘的，没有就写「本阶段未涉及」。⛔ 不许只说「已写进 xxx.md」——` +
+            `埋在长文档里的目标，开发者在 gate 上批过、执行阶段才发现方向错，是这套流程最贵的一类返工）\n` +
             `- 具体交付了什么（引用实际产物，不要泛泛而谈）\n` +
             `- 做了哪些关键决策或权衡\n` +
             `- 有哪些需要用户特别注意的地方\n\n` +
@@ -128,11 +147,15 @@ export async function handlePostTool(
   // branches on presence and not on any particular value.
   if (input.agent_id !== undefined) return null;
 
-  // Load flow config to get per-flow context thresholds.
+  // Load flow config for the per-flow context thresholds, and for the docs paths
+  // the wrap-up brief has to name (pretool keeps writes to them open precisely so
+  // a handoff can still land — the brief is useless if it can't say where).
   let flowContextCfg: Awaited<ReturnType<typeof loadFlowConfig>>['context'] | undefined;
+  let docsPaths: string[] = [];
   try {
     const config = await loadFlowConfig(repoRoot, flowName);
     flowContextCfg = config.context;
+    docsPaths = resolveDocsPaths(getStageConfig(config, state.current_stage).docs_paths ?? [], state.flow_id);
   } catch { /* non-fatal: fall back to defaults */ }
 
   // Use injected value (tests / future hook support) or compute from transcript.
@@ -149,17 +172,58 @@ export async function handlePostTool(
 
   // ─── Block threshold ───────────────────────────────────────────────────────
   if (blockAt !== undefined && pct >= blockAt) {
-    if (!state.context_blocked) {
-      await patchActiveState(repoRoot, flowName, {
-        context_blocked: true,
-        context_warning: { warned: true, warned_at_pct: pct, warned_at: new Date().toISOString() },
-      });
+    const firstTime = !state.context_blocked;
+    // Throttle. This branch used to return its full text on every sample, which
+    // was survivable only while sampling was write-tool-only. With every tool
+    // sampling, replaying it would fire 18–63 times per session (simulated against
+    // the recorded pct series of three sessions). So: the full brief once, then one
+    // line per further `rewarnDelta` percent. `warned_at_pct` cannot carry this —
+    // it freezes when the block latches, by design, because pretool reports it as
+    // the level the block happened at.
+    const remindedAt = state.context_warning.block_reminded_at_pct ?? 0;
+    if (!firstTime && pct < remindedAt + rewarnDelta) return null;
+
+    const nowIso = new Date().toISOString();
+    await patchActiveState(repoRoot, flowName, (cur) => ({
+      context_blocked: true,
+      context_warning: {
+        warned: true,
+        warned_at_pct: firstTime ? pct : cur.context_warning.warned_at_pct,
+        warned_at: firstTime ? nowIso : cur.context_warning.warned_at,
+        block_reminded_at_pct: pct,
+      },
+    }));
+    await appendLog(
+      repoRoot, flowName, session_id,
+      `CONTEXT_BLOCK pct=${pct} threshold=${blockAt} ${firstTime ? 'first' : 'repeat'}`
+    );
+
+    if (!firstTime) {
+      return {
+        additionalContext:
+          `[ai-flow] Context ${pct}%（已过 block 阈值 ${blockAt}%），收尾窗口在继续关闭。` +
+          `已经在收尾就不用管这条，接着做完；还没开始就现在开始。`,
+      };
     }
+
+    const docsList = docsPaths.join('、') || '本 flow 自己的 docs 目录';
     return {
       additionalContext:
-        `[ai-flow] Context 已达 ${pct}%（block 阈值 ${blockAt}%）。` +
-        `后续所有 write 工具将被自动拒绝（context 保护已激活），不要再尝试任何工具调用。` +
-        `请立即停止当前工作，向开发者说明原因：context 已超过 block 阈值，请运行 /clear 后重入继续（ai-flow 进度已持久化）。`,
+        `[ai-flow] Context 已达 ${pct}%（block 阈值 ${blockAt}%）。\n\n` +
+        `**现在开始做本 session 的收尾，不是立刻停手。** 挑一个不撕裂工作的时机` +
+        `（一票刚回合、一轮子代理刚回报完），把手上这一轮收干净再交班。\n\n` +
+        `⚠️ **写权限只收窄了一半**：对代码的写会被拒，但**对 ${docsList} 的写仍然放行**，` +
+        `正是为了让你能把交班落盘。⛔ 不要因为看到本条就认定「所有工具都不能用了」——` +
+        `实测有过一次：某 session 撞线后自己判定写盘已被拒，把交接文档写进了 session 私有 scratchpad，` +
+        `新 session 根本找不到；同时一条推翻既有裁定的正确性发现整个丢失。Bash 也没有被拦。\n\n` +
+        `**/clear 会带走什么**：flow 状态和已 commit 的东西在磁盘上，活得下来；` +
+        `**在飞子代理的回报活不下来**——它的 findings、真机待验项、安全自检，` +
+        `从它留下的那笔 commit 里重建不出来。所以有子代理在飞时，优先等它回来，` +
+        `或者先把它那棵树的状态摘进交接文档再走。\n\n` +
+        `**交接里只写后来的 session 重建不出来的东西**：哪棵树/哪条车道在做哪票、` +
+        `哪些子代理还在飞（在哪棵树上）、当前测试基线、以及你已经拍了但还没落盘的决策。\n\n` +
+        `收尾做完后告知开发者可以 /clear。并且**现在**就向开发者输出一条醒目提醒` +
+        `（用 > 引用块或加粗）："⚠️ Context 已达 ${pct}%，我开始做收尾交接，完成后你可以 /clear。"`,
     };
   }
 
@@ -169,9 +233,18 @@ export async function handlePostTool(
   const prevPct = warning.warned_at_pct ?? 0;
   if (warning.warned && pct < prevPct + rewarnDelta) return null;
 
-  await patchActiveState(repoRoot, flowName, {
-    context_warning: { warned: true, warned_at_pct: pct, warned_at: new Date().toISOString() },
-  });
+  // Carry `block_reminded_at_pct` through: a full object patch would drop it, and
+  // if pct ever dips back under blockAt and climbs again the block branch would
+  // lose its throttle baseline.
+  await patchActiveState(repoRoot, flowName, (cur) => ({
+    context_warning: {
+      warned: true,
+      warned_at_pct: pct,
+      warned_at: new Date().toISOString(),
+      block_reminded_at_pct: cur.context_warning.block_reminded_at_pct ?? null,
+    },
+  }));
+  await appendLog(repoRoot, flowName, session_id, `CONTEXT_WARN pct=${pct} threshold=${warnAt}`);
 
   return {
     additionalContext:

@@ -15,6 +15,7 @@
 ## 步骤
 
 **重入子产物级探测**（stage-2 密度高，逐产物续跑防重跑/覆盖）：spec.md 无 / `## Testing Decisions` 空 → 从 alignment 综合 spec；spec 全但 `## 方案审查` 空 → 派方案审查；spec+审查全但 tickets 缺 → 切 tickets；tickets 全但 `## 方案审查` 里没有 `### 切票后补审` 小节 → **补做那两项审查**（⛔ 别因为 `## 方案审查` 非空就判「审查已完成」跳过去——非空只说明切票前那部分做过了，而补审两项按设计发生在切票之后，/clear 恰好落在中间时这一跳是静默的）；补审已在但 HTML 缺 → 生成 HTML；HTML 在但末尾无 `<!--READABILITY-REVIEWED-->` → 补跑可读性审查（同一个静默跳过：审查在 HTML 生成之后、呈给开发者之前，没有这个锚就判不出它跑没跑）；全在 → 去 gate。
+> **背景怎么传下去**：`/clear` 之后先按 `{{flow_root}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
 
 1. **散文 spec**（照 to-spec，从 alignment 综合）→ `spec.md`，段标题**建议用这些字面量**（机器门按 `## <标题>` 前缀匹配、容忍后缀，但用纯字面量最稳）：`## Problem` / `## Solution` / `## User Stories` / `## Decisions` / `## Testing Decisions` / `## Out of scope` / `## 方案审查`（User Stories 用编号列表；Testing Decisions 写 seam）。**禁文件路径与 typed 代码**；例外：prototype 产出的、比散文更精确的 snippet（状态机/reducer/schema/type shape）可 inline；**接口契约用散文**（描述行为契约，非签名）。**跨端/跨仓行为契约**（若涉及）：把稳定的跨端/跨仓行为约定沉淀成附录段 `## 跨端/跨仓行为契约`（散文，写清各端/各仓的稳定行为与边界），供 stage-3 读一份定稿、免去每 ticket 现场逆向推导。
 2. **seam 与开发者确认**：在探索代码库、选最高现有 seam 之后提，写进 `## Testing Decisions`。
