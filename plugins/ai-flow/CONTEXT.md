@@ -42,6 +42,9 @@ The git commit SHA recorded at `{flow-name} start` time. Represents the clean ba
 **active.json**
 The runtime state file for the current Flow Instance, at `.ai-flow/{flow-name}/state/active.json`. Gitignored. Contains: flow_id, flow_name, requirement, current_stage, base_sha, started_at, last_session_id, context_size, context_warning. Gate status is NOT stored here — it is inferred from whether `gate-token` exists.
 
+**ResolvedFlow.viaSibling**
+Set when the active flow was found in a DIFFERENT checkout of the same git repository than the caller's cwd. `hasActiveFlow` falls back to scanning every checkout (`git worktree list`) because a flow's own ticket worktrees carry a *tracked* copy of `.ai-flow/` with no `state/` of their own — without the fallback every subagent working in one resolves no flow at all, and `handlePreTool` then bails before any guard runs (fail-OPEN: no control-plane protection, no signal interception, no context accounting). git cannot distinguish a ticket tree from a worktree the developer created by hand for an unrelated branch, so the same fallback also resolves checkout A's flow for a session sitting in checkout B — observed in practice as "every session in B is read-only and nothing explains why". The resolution stays deliberately wide; the flag exists so callers that **mutate or explain** can behave differently: flow commands are refused (a `<flow> abort` typed in B would destroy A's flow state), and both the read-only notice and the owner-branch injection name both checkouts. Narrowing the resolution instead — e.g. only trusting paths under `<repo>.ai-flow-worktrees/` — reintroduces the fail-OPEN for any flow that names its worktrees differently.
+
 **Gate status inference**
 Whether a Gate is active is determined solely by `existsSync(gate-token path)`. No boolean field in active.json. Eliminates redundant state that could become inconsistent.
 

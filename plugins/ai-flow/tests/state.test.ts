@@ -408,6 +408,72 @@ describe('hasActiveFlow', () => {
       execFileSync('git', ['worktree', 'remove', '--force', outside], { cwd: gitRoot });
     });
 
+    // 跨检出解析必须**自报**，因为它是唯一会落到「别的检出」的路由。实测事故：开发者手建
+    // 两条 worktree 当两条独立开发线（分支互不相同），A 里跑着一个 flow，于是在 B 里什么
+    // flow 都起不来——B 被判成 A 那个 flow 的非 owner、整个 session 只读，而所有提示都说
+    // 「当前工程已在进行流程」，读起来像 B 自己在跑流程；`start` 的拒绝还建议 `<flow> abort`，
+    // 在 B 里执行会销毁 A 的流程状态。定位花了一整个 session。
+    //
+    // ⚠️ 标记不改解析宽度：收紧它（比如只认落在 `<repo>.ai-flow-worktrees/` 下的目录）会让
+    // 用别的落点名的票树里的子代理 fail-OPEN，而本 describe 上面那几个用例正是为那类事故写的、
+    // 全部刻意用任意落点名。改的是拿到结果的调用方——能不能说清「flow 在哪个检出」、能不能
+    // 拦住作用在错误检出上的命令。
+    it('跨检出解析到的 flow 带 viaSibling 标记（两条独立开发线互锁的那个形态）', async () => {
+      const main = makeTmp();
+      gitInit(main);
+      writeFlowAt(main, false);                    // 主检出：只有被追踪的 config，没有活跃 flow
+      writeFileSync(join(main, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: main });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: main });
+
+      // A：开发者手建的第一条开发线，flow 跑在这里。
+      const a = join(makeTmp(), 'checkouts', 'a');
+      execFileSync('git', ['worktree', 'add', '-q', a, '-b', 'feat/line-a'], { cwd: main });
+      mkdirSync(join(a, '.ai-flow', 'parent-flow', 'state'), { recursive: true });
+      writeFileSync(
+        join(a, '.ai-flow', 'parent-flow', 'state', 'active.json'),
+        JSON.stringify(makeActiveState({ flow_name: 'parent-flow', flow_id: 'line-a-flow' }))
+      );
+
+      // B：另一条独立开发线——分支不同、工作区独立、没有自己的 flow。
+      const b = join(makeTmp(), 'checkouts', 'b');
+      execFileSync('git', ['worktree', 'add', '-q', b, '-b', 'feat/line-b'], { cwd: main });
+
+      const result = await hasActiveFlow(b);
+      expect(result).not.toBeNull();
+      expect(result!.state.flow_id).toBe('line-a-flow');            // 确实解析到了 A 的 flow
+      expect(realpathSync(result!.repoRoot)).toBe(realpathSync(a));
+      expect(result!.viaSibling).toBe(true);                        // 且自报「这是跨检出来的」
+
+      execFileSync('git', ['worktree', 'remove', '--force', a], { cwd: main });
+      execFileSync('git', ['worktree', 'remove', '--force', b], { cwd: main });
+    });
+
+    // 反面：worktree 里有自己的 active.json 时是**同检出**命中，不能带标记——否则调用方
+    // 会把一个完全正常的「在自己检出里跑 flow」当成跨检出误锁去拦。
+    it('worktree 里有自己的 flow → 同检出命中，不带 viaSibling', async () => {
+      const gitRoot = makeTmp();
+      gitInit(gitRoot);
+      writeFlowAt(gitRoot, true);
+      writeFileSync(join(gitRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+      execFileSync('git', ['add', '-A'], { cwd: gitRoot });
+      execFileSync('git', ['commit', '-qm', 'base'], { cwd: gitRoot });
+
+      const own = join(makeTmp(), 'checkouts', 'own');
+      execFileSync('git', ['worktree', 'add', '-q', own, '-b', 'wt/own'], { cwd: gitRoot });
+      mkdirSync(join(own, '.ai-flow', 'parent-flow', 'state'), { recursive: true });
+      writeFileSync(
+        join(own, '.ai-flow', 'parent-flow', 'state', 'active.json'),
+        JSON.stringify(makeActiveState({ flow_name: 'parent-flow', flow_id: 'its-own' }))
+      );
+
+      const result = await hasActiveFlow(own);
+      expect(result!.state.flow_id).toBe('its-own');
+      expect(result!.viaSibling).toBeUndefined();
+
+      execFileSync('git', ['worktree', 'remove', '--force', own], { cwd: gitRoot });
+    });
+
     // 同一条路径的 fail-closed 边界：worktree 外、主仓那侧锚点是**空闲**的（没有
     // active.json）时必须仍然返回 null，别因为「在 worktree 里」就放宽成解析父项目的 flow。
     it('worktree 落在仓库外、主仓对应锚点空闲 → null', async () => {

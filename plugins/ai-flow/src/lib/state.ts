@@ -349,7 +349,32 @@ function siblingCheckoutAnchors(dir: string): string[] {
   }
 }
 
-export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
+/**
+ * A resolved active flow, plus how it was found.
+ *
+ * `viaSibling` marks the one resolution route that can land on a flow living in a
+ * DIFFERENT checkout of this repository than the caller's cwd: the cross-checkout
+ * fallback in `hasActiveFlow`. It exists for the flow's own ticket worktrees, whose
+ * `.ai-flow/` is a tracked copy with no state of its own — without it every subagent
+ * in one fails OPEN. But `git worktree list` cannot tell a ticket tree apart from a
+ * worktree the developer made by hand for an unrelated branch, so the same fallback
+ * also resolves flow A (checkout A) for a session working in checkout B.
+ *
+ * Resolution must stay that wide — narrowing it brings back the fail-OPEN. What must
+ * NOT stay wide is what callers then DO with it: a flow command typed in B must not
+ * act on A's anchor, and any message about the lock must name both checkouts, or the
+ * developer cannot tell an ordinary "another session owns this" from a cross-checkout
+ * mismatch. Callers that mutate or explain use this flag; the rest ignore it.
+ */
+export type ResolvedFlow = {
+  flowName: string;
+  state: ActiveState;
+  repoRoot: string;
+  /** Set only when the flow was found in another checkout of this repository. */
+  viaSibling?: boolean;
+};
+
+export async function hasActiveFlow(cwd: string): Promise<ResolvedFlow | null> {
   // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
   let dir = cwd;
   while (true) {
@@ -378,7 +403,8 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
         for (const cand of candidates) {
           if (!existsSync(join(cand, '.ai-flow'))) continue;
           const over = await anchorFlow(cand);
-          if (over) return over;
+          // Tagged: this flow lives in a different checkout than `cwd`. See `ResolvedFlow`.
+          if (over) return { ...over, viaSibling: true };
         }
         return null;
       }
@@ -409,7 +435,7 @@ export async function hasActiveFlow(cwd: string): Promise<{ flowName: string; st
 export async function resolveActiveFlow(
   cwd: string,
   sessionId?: string
-): Promise<{ flowName: string; state: ActiveState; repoRoot: string } | null> {
+): Promise<ResolvedFlow | null> {
   if (sessionId) {
     const binding = lookupSession(sessionId);
     if (binding) {

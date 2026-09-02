@@ -8,6 +8,13 @@
 //       ③ 每个 [x] ticket 在 base_sha_code..HEAD 有**属于自己的一笔非 merge commit**
 //          （subject 含该 ticket 号，且一笔 commit 只能认领一个 ticket；
 //           防"勾了 [x] 却没做 / 没 commit"、防一笔 commit 顶多票）；
+//       ③附 区间内**每一笔** commit 都归属某一票（没有 orphan commit）。
+//          ⚠️ **它故意不占编号**：①–⑦ 的编号被大量文档与交接文引用，插一个进去会让后面全体改号。
+//          ⚠️ **但它和其它条一样 fail-closed、一样阻断**，不是警告。之所以在这里点明：按
+//          「①②③④…」去数断言的读者会整条漏掉它——实测有过一次，据「③⑥ 都是从票出发找
+//          commit」推出「不含票号的 commit 是安全的」，照此产生了 3 笔；而门在 ① （尚有未勾票）
+//          就退出、根本报不到它 ⇒ 那 3 笔要到收口那一刻才炸，而 stage-3 没有人工 gate。
+//          它为什么必须存在：见下面 ③ 的 err 之后那段注释（⑥⑦ 对不归属任何票的 commit 全盲）。
 //       ④ base_sha_code..HEAD **无 merge commit**（历史线性）；
 //       ⑤ 本 flow 落点下无残留 worktree（并行票已全部收口；新旧两个落点都查）；
 //       ⑥ 每个 [x] ticket 那笔 commit 实际改的文件 ⊆ 它声明的 Touches；
@@ -300,6 +307,7 @@ if (noCommit.length > 0 || contested.length > 0) {
   process.exit(FAIL);
 }
 
+// ── ③附 无 orphan commit：区间内每一笔都归属某一票（fail-closed；不占编号，理由见文件头）──
 // 配对成立之后才查"有没有多余的 commit"：上面那两条（该票压根没有 commit / 争用）是更
 // 根本的诊断，先报它们，避免作者看到一条不相干的"某笔 commit 不归属任何票"。
 //

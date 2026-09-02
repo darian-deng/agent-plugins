@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { handleSessionStart } from '../src/lib/session-handler.js';
 import { readActiveState } from '../src/lib/state.js';
@@ -409,5 +410,95 @@ describe('handleSessionStart', () => {
     // Stage should NOT have advanced
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.current_stage).toBe('work');
+  });
+});
+
+// 同一 git 仓库的两个检出互锁的那个形态（实测事故：开发者手建两条独立开发线，A 里跑着 flow，
+// 于是 B 里整个 session 只读，而消息说的是「当前工程已在进行流程」——读起来像 B 自己在跑）。
+describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）', () => {
+  function makeCrossCheckout(ownerOfA: string | null) {
+    const repo = makeRepo();
+    const parent = mkdtempSync(join(tmpdir(), 'ai-flow-xco-sess-'));
+    const a = join(parent, 'line-a');
+    const b = join(parent, 'line-b');
+    execSync(`git worktree add -q "${a}" -b feat/line-a`, { cwd: repo.repoRoot });
+    execSync(`git worktree add -q "${b}" -b feat/line-b`, { cwd: repo.repoRoot });
+    writeActiveState(a, 'test-flow', {
+      flow_id: 'flow-in-a',
+      flow_name: 'test-flow',
+      requirement: 'A 那条开发线的需求',
+      current_stage: 'work',
+      base_sha: 'aaa111',
+      last_session_id: ownerOfA,
+    });
+    // 只删目录：makeRepo 的清理排在前面，已经把主检出删了（见 userprompt.test.ts 同处注释）。
+    cleanups.push(() => execSync(`rm -rf "${parent}"`));
+    return { a, b };
+  }
+
+  it('A 有主 → B 只读，消息点名两个检出并给出可执行出路（不再说「当前工程」）', async () => {
+    const { a, b } = makeCrossCheckout('owner-in-a');
+    const out = await handleSessionStart(makeInput(b, 'sess-in-b'));
+    expect(out).not.toBeNull();
+    const ctx = out!.additionalContext;
+    expect(ctx).toContain(a);                       // flow 的锚点
+    expect(ctx).toContain(b);                       // 本 session 的 cwd
+    expect(ctx).toContain('mv ');                   // 出路可执行，不是「请自行处理」
+    expect(ctx).toMatch(/误锁|不在你现在这个检出/);
+    // 「当前工程」在这个形态下是错的：它读起来像 B 自己在跑流程。
+    expect(ctx).not.toContain('当前工程已在进行流程');
+    // ⛔ 不能建议在本检出 abort——那会销毁 A 的流程状态。
+    expect(ctx).toMatch(/不要在本检出执行|去它自己的检出/);
+    expect(out!.systemMessage).toMatch(/另一个检出/);
+    // 仍然不注入 stage 提示词，也不动 A 的状态。
+    expect(ctx).not.toContain('Do the work.');
+    const st = await readActiveState(a, 'test-flow');
+    expect(st!.last_session_id).toBe('owner-in-a');
+  });
+
+  it('A 无主 → B 接管时注入必须先说「锚点不在这个检出」（否则产物静默写到 A）', async () => {
+    const { a, b } = makeCrossCheckout(null);
+    const out = await handleSessionStart(makeInput(b, 'sess-in-b'));
+    expect(out).not.toBeNull();
+    const ctx = out!.additionalContext;
+    expect(ctx).toContain('锚点');
+    expect(ctx).toContain(a);
+    expect(ctx).toContain(b);
+    expect(ctx).toMatch(/先停下告知|别在这个 flow 上动手/);
+    // 接管本身仍然发生（这一轮只加告知，不改接管行为）
+    const st = await readActiveState(a, 'test-flow');
+    expect(st!.last_session_id).toBe('sess-in-b');
+  });
+
+  // `viaSibling` 在 flow 自己的票树里同样会命中——那是这条解析路由存在的**理由**（票树的
+  // `.ai-flow/` 是被追踪的副本、没有自己的 state/，不放行则票树里每个子代理都 fail-OPEN）。
+  // 但票树里「锚点在别处」是预期形态，那段「先停下告知、考虑把状态挪走」的提示在那里是有害的：
+  // 要挪的正是打开这棵树的那条 flow 的状态。所以判据是两半——跨检出 **且** 不在票树里。
+  it('flow 自己的票树里不打这段警告，但仍必须解析到 flow（fail-OPEN 保护不能丢）', async () => {
+    const repo = makeRepo();
+    // 落点命名由 worktree.cjs 决定：`<repo 同级>/<repo 名>.ai-flow-worktrees/<flow_id>-<name>`
+    const lanes = repo.repoRoot + '.ai-flow-worktrees';
+    const t = join(lanes, 'flow-abc-T1');
+    execSync(`git worktree add -q "${t}" -b wt/t1`, { cwd: repo.repoRoot });
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'flow-abc', flow_name: 'test-flow', requirement: 'r',
+      current_stage: 'work', base_sha: 'ccc333', last_session_id: null,
+    });
+    cleanups.push(() => execSync(`rm -rf "${lanes}"`));
+
+    const out = await handleSessionStart(makeInput(t, 'sess-in-ticket-tree'));
+    expect(out).not.toBeNull();                                   // 解析到了 flow（没 fail-OPEN）
+    expect(out!.additionalContext).not.toContain('不在你现在这个检出里');
+    expect(out!.additionalContext).not.toContain('先停下告知');
+  });
+
+  it('同检出不带这段警告（别把正常路径也灌上跨检出噪音）', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'f-here', flow_name: 'test-flow', requirement: 'r',
+      current_stage: 'work', base_sha: 'bbb222', last_session_id: null,
+    });
+    const out = await handleSessionStart(makeInput(repo.repoRoot, 'sess-here'));
+    expect(out!.additionalContext).not.toContain('不在你现在这个检出里');
   });
 });

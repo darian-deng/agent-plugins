@@ -73,6 +73,33 @@ export async function handleStart(
 
   const active = await hasActiveFlow(repoRoot);
   if (active) {
+    // The cross-checkout case needs a different refusal. `hasActiveFlow` also resolves
+    // a flow living in ANOTHER checkout of this repository (see `ResolvedFlow.viaSibling`),
+    // and the generic wording below then suggested `<flow> abort` for a flow the developer
+    // cannot see from where they stand — running it here would destroy that other
+    // checkout's flow state. Name both ends and give the route that actually applies.
+    //
+    // Second line of defence, not the main path: a `start` typed at the prompt is already
+    // refused upstream by handleUserPrompt's cross-checkout guard, which has the session's
+    // real cwd to name. This branch covers every other caller of the exported handleStart —
+    // its own contract admits a viaSibling result, so answering it correctly belongs here
+    // rather than being assumed away.
+    if (active.viaSibling) {
+      return {
+        action: 'deny',
+        reason:
+          `流程 '${active.flowName}' 正在运行，但它的**锚点在本仓库的另一个检出**：${active.repoRoot}
+` +
+          `（本次 start 的目标锚点是 ${repoRoot}）
+` +
+          `⛔ 不要在这里 abort 它——命令会作用在那个检出上。要停它就去它自己的检出里停。
+` +
+          `⇒ 想在本检出跑自己的 flow：先把它的流程状态挪走（代码一行不动），再重启本 session 上下文：
+` +
+          `     mv ${join(active.repoRoot, '.ai-flow', active.flowName, 'state')} ` +
+          `${join(active.repoRoot, '.ai-flow', active.flowName, 'state')}.parked`,
+      };
+    }
     return {
       action: 'deny',
       reason: `Flow '${active.flowName}' is already active. Run '${active.flowName} abort' before starting a new flow.`,

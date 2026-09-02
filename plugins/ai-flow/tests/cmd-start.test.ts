@@ -4,7 +4,9 @@ import { execSync } from 'child_process';
 import { handleStart } from '../src/lib/commands/start.js';
 import { readActiveState } from '../src/lib/state.js';
 import { createFlowTestRepo, MINIMAL_CONFIG } from './fixtures/helpers.js';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { writeActiveState } from './fixtures/helpers.js';
 
 let cleanups: Array<() => void> = [];
 
@@ -122,5 +124,31 @@ describe('handleStart', () => {
     expect(result.action).toBe('allow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
     expect(ctx).toContain('Stage: work');
+  });
+});
+
+// `hasActiveFlow` 会解析到本仓库**另一个检出**里的 flow（`ResolvedFlow.viaSibling`）。原先那条
+// 通用拒绝在这种情况下建议 `<flow> abort`——在当前检出执行会销毁另一条开发线的流程状态。
+describe('handleStart — 跨检出', () => {
+  it('解析到的 flow 在另一个检出 → 拒绝，且⛔不再建议 abort', async () => {
+    const repo = makeRepo();
+    const parent = mkdtempSync(join(tmpdir(), 'ai-flow-xco-start-'));
+    const a = join(parent, 'line-a');
+    const b = join(parent, 'line-b');
+    execSync(`git worktree add -q "${a}" -b feat/line-a`, { cwd: repo.repoRoot });
+    execSync(`git worktree add -q "${b}" -b feat/line-b`, { cwd: repo.repoRoot });
+    writeActiveState(a, 'test-flow', {
+      flow_id: 'flow-in-a', flow_name: 'test-flow', requirement: 'A 的需求',
+      current_stage: 'work', base_sha: 'aaa111',
+    });
+    cleanups.push(() => execSync(`rm -rf "${parent}"`));
+
+    const result = await handleStart(b, 'test-flow', '在 B 上做另一件事', 'sess-in-b', 0, b);
+    expect(result.action).toBe('deny');
+    const reason = (result as { action: 'deny'; reason: string }).reason;
+    expect(reason).toContain(a);                        // 点名那个检出
+    expect(reason).toContain('mv ');                    // 给可执行出路
+    expect(reason).not.toMatch(/Run 'test-flow abort'/); // ⛔ 这条建议会销毁 A 的状态
+    expect(await readActiveState(b, 'test-flow')).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { discoverFlows, loadFlowConfig } from './flow-config-loader.js';
 import { flowStatusLine } from './format.js';
 import { commandOutputPrefix } from './prompt-render.js';
@@ -121,6 +121,56 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
         `  2. 保存完成后，在本 session 执行 /clear。`,
     });
   }
+
+  // ── Cross-checkout guard for MUTATING commands ────────────────────────────────
+  // `active` came from the cross-checkout fallback, so `repoRoot` is an anchor in a
+  // DIFFERENT checkout of this repository than `cwd` (see `ResolvedFlow.viaSibling`).
+  // Every mutating command below is routed with that repoRoot, so typing `abort` here
+  // destroys the OTHER checkout's flow state — and until this guard existed, `start`'s
+  // own refusal actively suggested it ("Run '<flow> abort' before starting a new flow"),
+  // naming a flow the developer could not see from where they stood. Refuse instead and
+  // say where both ends are.
+  //
+  // Only the mutating four are refused. `status` / `help` are read-only, and their
+  // output prints the anchor path, so the mismatch is visible there rather than acted on.
+  //
+  // This cannot strand the flow's own ticket worktrees: the session driving a flow is
+  // bound to its anchor (session→anchor binding, resolved BEFORE walk-up and never
+  // tagged viaSibling), so an owner keeps issuing commands even after `cd`-ing into a
+  // ticket tree. What this does refuse is a flow command from a session that only found
+  // the flow by scanning sibling checkouts — a subagent in a ticket tree (which drives
+  // the flow through the signal file, not through commands) or a session in an unrelated
+  // developer worktree.
+  const MUTATING: readonly string[] = ['start', 'abort', 'approve', 'resume'];
+  if (active?.viaSibling && subCmd && MUTATING.includes(subCmd)) {
+    const ownerState = dirname(activeJsonPath(active.repoRoot, active.flowName));
+    return resultToHookOutput({
+      action: 'deny',
+      reason:
+        `[ai-flow] 拒绝执行 '${flowName} ${subCmd}'：本 session 解析到的流程 '${active.flowName}' ` +
+        `**锚点在本仓库的另一个检出**，命令会作用在那里而不是你现在这个目录。
+` +
+        `    本 session 的 cwd：${cwd}
+` +
+        `    解析到的锚点：    ${active.repoRoot}
+` +
+        `两者是同一 git 仓库的不同检出（git worktree）。引擎在当前检出找不到流程状态时会去同仓库其它检出` +
+        `找同路径的锚点（为了让 flow 给票开的临时工作树能找回真正的锚点），它分辨不出那是「票树」还是` +
+        `「你手建的另一条独立开发线」。
+
+` +
+        `⇒ 想操作 '${active.flowName}' → 到 ${active.repoRoot} 的 session 里去操作。
+` +
+        `⇒ 想在本检出跑自己的 flow → 先把那条 flow 的状态挪走（代码一行不动），再重启本 session 上下文：
+` +
+        `     mv ${ownerState} ${ownerState}.parked
+` +
+        `   之后可以挪回来——两个检出各有自己的 active.json 是被支持的形态，只是**起步**这一刻会被这个锁挡住。
+` +
+        `   ⚠️ 挪回后它的 "last_session_id" 仍指向那个已不在的 session，要接管得先把该字段改成 null。`,
+    });
+  }
+  // ──────────────────────────────────────────────────────────────────────────────
 
   // non-command message: unknown subcommand
   if (!subCmd || !VALID_COMMANDS.includes(subCmd as typeof VALID_COMMANDS[number])) {
