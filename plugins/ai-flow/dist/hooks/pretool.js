@@ -151,7 +151,7 @@ async function hasActiveFlow(cwd) {
         for (const cand of candidates) {
           if (!existsSync2(join2(cand, ".ai-flow"))) continue;
           const over = await anchorFlow(cand);
-          if (over) return over;
+          if (over) return { ...over, viaSibling: true };
         }
         return null;
       }
