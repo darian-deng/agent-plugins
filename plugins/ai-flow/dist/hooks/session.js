@@ -4668,7 +4668,12 @@ async function handleSessionStart(input2) {
         ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
       };
       if (isNewSession || isClear) {
-        patch.context_warning = { warned: false, warned_at_pct: null, warned_at: null };
+        patch.context_warning = {
+          warned: false,
+          warned_at_pct: null,
+          warned_at: null,
+          block_reminded_at_pct: null
+        };
         patch.context_blocked = false;
         patch.first_prompt_handled = false;
       }

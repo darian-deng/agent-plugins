@@ -4483,6 +4483,9 @@ function getStageConfig(config, stageId) {
   if (!stage) throw new Error(`Stage '${stageId}' not found in flow '${config.name}'`);
   return stage;
 }
+function resolveDocsPaths(paths, flowId) {
+  return paths.map((p) => p.replace(/\{flow_id\}/g, flowId));
+}
 
 // src/lib/advance-stage.ts
 import { existsSync as existsSync5, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
@@ -4611,13 +4614,12 @@ var DEFAULT_WARN_AT_PCT = 50;
 var DEFAULT_REWARN_DELTA_PCT = 5;
 async function handlePostTool(input2) {
   const { cwd, tool_name, session_id, context_size_pct } = input2;
-  if (!WRITE_TOOLS.has(tool_name)) return null;
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
   try {
-    const rawFp = String(input2.tool_input?.["file_path"] ?? "");
-    const fp = rawFp.startsWith("/") ? rawFp : join7(repoRoot, rawFp);
+    const rawFp = WRITE_TOOLS.has(tool_name) ? String(input2.tool_input?.["file_path"] ?? "") : "";
+    const fp = rawFp === "" ? "" : rawFp.startsWith("/") ? rawFp : join7(repoRoot, rawFp);
     const markBase = markBasePath(repoRoot, flowName);
     if (fp === markBase) {
       try {
@@ -4663,6 +4665,8 @@ async function handlePostTool(input2) {
             additionalContext: `[ai-flow] Stage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u3002
 
 \u5411\u7528\u6237\u5448\u73B0\u672C\u9636\u6BB5\u7684\u5BA1\u67E5\u6458\u8981\uFF1A
+- **\u672C\u9636\u6BB5\u82E5\u786E\u5B9A\u6216\u6539\u52A8\u4E86\u300C\u7B2C\u4E00\u76EE\u6807 / \u6307\u5BFC\u601D\u60F3 / \u660E\u786E\u4E0D\u505A\u7684\u8303\u56F4\u300D\uFF0C\u9010\u6761\u539F\u6587\u5217\u51FA**
+  \uFF08\u53EA\u5217\u672C\u9636\u6BB5\u843D\u76D8\u7684\uFF0C\u6CA1\u6709\u5C31\u5199\u300C\u672C\u9636\u6BB5\u672A\u6D89\u53CA\u300D\u3002\u26D4 \u4E0D\u8BB8\u53EA\u8BF4\u300C\u5DF2\u5199\u8FDB xxx.md\u300D\u2014\u2014\u57CB\u5728\u957F\u6587\u6863\u91CC\u7684\u76EE\u6807\uFF0C\u5F00\u53D1\u8005\u5728 gate \u4E0A\u6279\u8FC7\u3001\u6267\u884C\u9636\u6BB5\u624D\u53D1\u73B0\u65B9\u5411\u9519\uFF0C\u662F\u8FD9\u5957\u6D41\u7A0B\u6700\u8D35\u7684\u4E00\u7C7B\u8FD4\u5DE5\uFF09
 - \u5177\u4F53\u4EA4\u4ED8\u4E86\u4EC0\u4E48\uFF08\u5F15\u7528\u5B9E\u9645\u4EA7\u7269\uFF0C\u4E0D\u8981\u6CDB\u6CDB\u800C\u8C08\uFF09
 - \u505A\u4E86\u54EA\u4E9B\u5173\u952E\u51B3\u7B56\u6216\u6743\u8861
 - \u6709\u54EA\u4E9B\u9700\u8981\u7528\u6237\u7279\u522B\u6CE8\u610F\u7684\u5730\u65B9
@@ -4685,9 +4689,11 @@ async function handlePostTool(input2) {
     }
     if (input2.agent_id !== void 0) return null;
     let flowContextCfg;
+    let docsPaths = [];
     try {
       const config = await loadFlowConfig(repoRoot, flowName);
       flowContextCfg = config.context;
+      docsPaths = resolveDocsPaths(getStageConfig(config, state.current_stage).docs_paths ?? [], state.flow_id);
     } catch {
     }
     const contextWindow = state.context_size > 0 ? state.context_size : DEFAULT_CONTEXT_WINDOW;
@@ -4697,22 +4703,57 @@ async function handlePostTool(input2) {
     const rewarnDelta = flowContextCfg?.rewarn_delta_pct ?? DEFAULT_REWARN_DELTA_PCT;
     const blockAt = flowContextCfg?.block_at_pct;
     if (blockAt !== void 0 && pct >= blockAt) {
-      if (!state.context_blocked) {
-        await patchActiveState(repoRoot, flowName, {
-          context_blocked: true,
-          context_warning: { warned: true, warned_at_pct: pct, warned_at: (/* @__PURE__ */ new Date()).toISOString() }
-        });
+      const firstTime = !state.context_blocked;
+      const remindedAt = state.context_warning.block_reminded_at_pct ?? 0;
+      if (!firstTime && pct < remindedAt + rewarnDelta) return null;
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      await patchActiveState(repoRoot, flowName, (cur) => ({
+        context_blocked: true,
+        context_warning: {
+          warned: true,
+          warned_at_pct: firstTime ? pct : cur.context_warning.warned_at_pct,
+          warned_at: firstTime ? nowIso : cur.context_warning.warned_at,
+          block_reminded_at_pct: pct
+        }
+      }));
+      await appendLog(
+        repoRoot,
+        flowName,
+        session_id,
+        `CONTEXT_BLOCK pct=${pct} threshold=${blockAt} ${firstTime ? "first" : "repeat"}`
+      );
+      if (!firstTime) {
+        return {
+          additionalContext: `[ai-flow] Context ${pct}%\uFF08\u5DF2\u8FC7 block \u9608\u503C ${blockAt}%\uFF09\uFF0C\u6536\u5C3E\u7A97\u53E3\u5728\u7EE7\u7EED\u5173\u95ED\u3002\u5DF2\u7ECF\u5728\u6536\u5C3E\u5C31\u4E0D\u7528\u7BA1\u8FD9\u6761\uFF0C\u63A5\u7740\u505A\u5B8C\uFF1B\u8FD8\u6CA1\u5F00\u59CB\u5C31\u73B0\u5728\u5F00\u59CB\u3002`
+        };
       }
+      const docsList = docsPaths.join("\u3001") || "\u672C flow \u81EA\u5DF1\u7684 docs \u76EE\u5F55";
       return {
-        additionalContext: `[ai-flow] Context \u5DF2\u8FBE ${pct}%\uFF08block \u9608\u503C ${blockAt}%\uFF09\u3002\u540E\u7EED\u6240\u6709 write \u5DE5\u5177\u5C06\u88AB\u81EA\u52A8\u62D2\u7EDD\uFF08context \u4FDD\u62A4\u5DF2\u6FC0\u6D3B\uFF09\uFF0C\u4E0D\u8981\u518D\u5C1D\u8BD5\u4EFB\u4F55\u5DE5\u5177\u8C03\u7528\u3002\u8BF7\u7ACB\u5373\u505C\u6B62\u5F53\u524D\u5DE5\u4F5C\uFF0C\u5411\u5F00\u53D1\u8005\u8BF4\u660E\u539F\u56E0\uFF1Acontext \u5DF2\u8D85\u8FC7 block \u9608\u503C\uFF0C\u8BF7\u8FD0\u884C /clear \u540E\u91CD\u5165\u7EE7\u7EED\uFF08ai-flow \u8FDB\u5EA6\u5DF2\u6301\u4E45\u5316\uFF09\u3002`
+        additionalContext: `[ai-flow] Context \u5DF2\u8FBE ${pct}%\uFF08block \u9608\u503C ${blockAt}%\uFF09\u3002
+
+**\u73B0\u5728\u5F00\u59CB\u505A\u672C session \u7684\u6536\u5C3E\uFF0C\u4E0D\u662F\u7ACB\u523B\u505C\u624B\u3002** \u6311\u4E00\u4E2A\u4E0D\u6495\u88C2\u5DE5\u4F5C\u7684\u65F6\u673A\uFF08\u4E00\u7968\u521A\u56DE\u5408\u3001\u4E00\u8F6E\u5B50\u4EE3\u7406\u521A\u56DE\u62A5\u5B8C\uFF09\uFF0C\u628A\u624B\u4E0A\u8FD9\u4E00\u8F6E\u6536\u5E72\u51C0\u518D\u4EA4\u73ED\u3002
+
+\u26A0\uFE0F **\u5199\u6743\u9650\u53EA\u6536\u7A84\u4E86\u4E00\u534A**\uFF1A\u5BF9\u4EE3\u7801\u7684\u5199\u4F1A\u88AB\u62D2\uFF0C\u4F46**\u5BF9 ${docsList} \u7684\u5199\u4ECD\u7136\u653E\u884C**\uFF0C\u6B63\u662F\u4E3A\u4E86\u8BA9\u4F60\u80FD\u628A\u4EA4\u73ED\u843D\u76D8\u3002\u26D4 \u4E0D\u8981\u56E0\u4E3A\u770B\u5230\u672C\u6761\u5C31\u8BA4\u5B9A\u300C\u6240\u6709\u5DE5\u5177\u90FD\u4E0D\u80FD\u7528\u4E86\u300D\u2014\u2014\u5B9E\u6D4B\u6709\u8FC7\u4E00\u6B21\uFF1A\u67D0 session \u649E\u7EBF\u540E\u81EA\u5DF1\u5224\u5B9A\u5199\u76D8\u5DF2\u88AB\u62D2\uFF0C\u628A\u4EA4\u63A5\u6587\u6863\u5199\u8FDB\u4E86 session \u79C1\u6709 scratchpad\uFF0C\u65B0 session \u6839\u672C\u627E\u4E0D\u5230\uFF1B\u540C\u65F6\u4E00\u6761\u63A8\u7FFB\u65E2\u6709\u88C1\u5B9A\u7684\u6B63\u786E\u6027\u53D1\u73B0\u6574\u4E2A\u4E22\u5931\u3002Bash \u4E5F\u6CA1\u6709\u88AB\u62E6\u3002
+
+**/clear \u4F1A\u5E26\u8D70\u4EC0\u4E48**\uFF1Aflow \u72B6\u6001\u548C\u5DF2 commit \u7684\u4E1C\u897F\u5728\u78C1\u76D8\u4E0A\uFF0C\u6D3B\u5F97\u4E0B\u6765\uFF1B**\u5728\u98DE\u5B50\u4EE3\u7406\u7684\u56DE\u62A5\u6D3B\u4E0D\u4E0B\u6765**\u2014\u2014\u5B83\u7684 findings\u3001\u771F\u673A\u5F85\u9A8C\u9879\u3001\u5B89\u5168\u81EA\u68C0\uFF0C\u4ECE\u5B83\u7559\u4E0B\u7684\u90A3\u7B14 commit \u91CC\u91CD\u5EFA\u4E0D\u51FA\u6765\u3002\u6240\u4EE5\u6709\u5B50\u4EE3\u7406\u5728\u98DE\u65F6\uFF0C\u4F18\u5148\u7B49\u5B83\u56DE\u6765\uFF0C\u6216\u8005\u5148\u628A\u5B83\u90A3\u68F5\u6811\u7684\u72B6\u6001\u6458\u8FDB\u4EA4\u63A5\u6587\u6863\u518D\u8D70\u3002
+
+**\u4EA4\u63A5\u91CC\u53EA\u5199\u540E\u6765\u7684 session \u91CD\u5EFA\u4E0D\u51FA\u6765\u7684\u4E1C\u897F**\uFF1A\u54EA\u68F5\u6811/\u54EA\u6761\u8F66\u9053\u5728\u505A\u54EA\u7968\u3001\u54EA\u4E9B\u5B50\u4EE3\u7406\u8FD8\u5728\u98DE\uFF08\u5728\u54EA\u68F5\u6811\u4E0A\uFF09\u3001\u5F53\u524D\u6D4B\u8BD5\u57FA\u7EBF\u3001\u4EE5\u53CA\u4F60\u5DF2\u7ECF\u62CD\u4E86\u4F46\u8FD8\u6CA1\u843D\u76D8\u7684\u51B3\u7B56\u3002
+
+\u6536\u5C3E\u505A\u5B8C\u540E\u544A\u77E5\u5F00\u53D1\u8005\u53EF\u4EE5 /clear\u3002\u5E76\u4E14**\u73B0\u5728**\u5C31\u5411\u5F00\u53D1\u8005\u8F93\u51FA\u4E00\u6761\u9192\u76EE\u63D0\u9192\uFF08\u7528 > \u5F15\u7528\u5757\u6216\u52A0\u7C97\uFF09\uFF1A"\u26A0\uFE0F Context \u5DF2\u8FBE ${pct}%\uFF0C\u6211\u5F00\u59CB\u505A\u6536\u5C3E\u4EA4\u63A5\uFF0C\u5B8C\u6210\u540E\u4F60\u53EF\u4EE5 /clear\u3002"`
       };
     }
     if (pct < warnAt) return null;
     const prevPct = warning.warned_at_pct ?? 0;
     if (warning.warned && pct < prevPct + rewarnDelta) return null;
-    await patchActiveState(repoRoot, flowName, {
-      context_warning: { warned: true, warned_at_pct: pct, warned_at: (/* @__PURE__ */ new Date()).toISOString() }
-    });
+    await patchActiveState(repoRoot, flowName, (cur) => ({
+      context_warning: {
+        warned: true,
+        warned_at_pct: pct,
+        warned_at: (/* @__PURE__ */ new Date()).toISOString(),
+        block_reminded_at_pct: cur.context_warning.block_reminded_at_pct ?? null
+      }
+    }));
+    await appendLog(repoRoot, flowName, session_id, `CONTEXT_WARN pct=${pct} threshold=${warnAt}`);
     return {
       additionalContext: `[ai-flow] Context \u5F53\u524D ${pct}%\uFF08warn \u9608\u503C ${warnAt}%\uFF09\u3002\u8BF7\u5411\u5F00\u53D1\u8005\u8F93\u51FA\u4E00\u6761\u9192\u76EE\u63D0\u9192\uFF08\u7528 > \u5F15\u7528\u5757\u6216\u52A0\u7C97\uFF09\uFF0C\u5185\u5BB9\uFF1A"\u26A0\uFE0F Context \u5DF2\u8FBE ${pct}%\u3002\u5982\u9700\u9AD8\u8D28\u91CF\u6267\u884C\uFF0C\u53EF Ctrl+C \u505C\u6B62\u4EFB\u52A1 \u2192 /clear \u2192 \u91CD\u5165\u540E\u4ECE\u65AD\u70B9\u7EE7\u7EED\uFF08ai-flow \u8FDB\u5EA6\u5DF2\u6301\u4E45\u5316\uFF09\u3002"\u8F93\u51FA\u63D0\u9192\u540E\u7EE7\u7EED\u6B63\u5E38\u6267\u884C\u5F53\u524D\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u4E2D\u65AD\u6216\u505C\u6B62\u3002`
     };
