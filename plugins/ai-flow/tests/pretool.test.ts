@@ -5,6 +5,7 @@ import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { readActiveState } from '../src/lib/state.js';
 import { bindSession, unbindSession } from '../src/lib/session-registry.js';
+import { PLUGIN_FLOWS_DIR } from '../src/lib/flow-paths.js';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG, NO_ESCAPE_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
 
@@ -596,6 +597,93 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
   // `node {{flow_root}}/scripts/worktree.cjs open …` (at least once per ticket) and
   // a bare fragment match refused the very command the flow just instructed, with a
   // message about reads/writes that pointed nowhere near the real cause.
+  // Observed two minutes into the first migrated resume: a session restored across
+  // the 0.69.0 migration composed subagent dispatch prompts from its scrollback and
+  // handed out the project-side references path that `legacy-cleanup` had just
+  // deleted. `Read` answered "File does not exist" and said nothing about where the
+  // file went; one subagent recovered by reading its worktree's stale copy, another
+  // by running `find /`.
+  describe('指向 0.69.0 之前定义位置的路径 → 重定向到插件那份', () => {
+    // `grill-flow`, not the usual `test-flow`: the guard only has anything to say
+    // about a flow the PLUGIN ships. For one it does not, `flowDefDir` falls back to
+    // the project directory and the "stale" path IS the live one — which the last
+    // test in this block pins.
+    function builtinRepo() {
+      const repo = createFlowTestRepo('grill-flow', MINIMAL_CONFIG);
+      cleanups.push(repo.cleanup);
+      writeActiveState(repo.repoRoot, 'grill-flow', {
+        flow_id: 'grill-flow-abc',
+        flow_name: 'grill-flow',
+        requirement: 'test',
+        current_stage: 'work',
+        base_sha: 'abc',
+      });
+      return repo;
+    }
+
+    it('项目侧 references 路径 → DENY,并给出 flow_def 下的正确路径', async () => {
+      const repo = builtinRepo();
+      const stale = join(repo.repoRoot, '.ai-flow', 'grill-flow', 'references', 'fowler-smells.md');
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: stale }));
+      expect(out?.permissionDecision).toBe('deny');
+      // The redirect is the whole point — a bare refusal would be no better than ENOENT.
+      expect(out?.permissionDecisionReason).toContain(join(PLUGIN_FLOWS_DIR, 'grill-flow', 'references', 'fowler-smells.md'));
+      expect(out?.permissionDecisionReason).toContain('flow_def');
+    });
+
+    it('worktree 里那份陈旧副本同样拦下(读到过期内容比读不到更糟)', async () => {
+      const repo = builtinRepo();
+      const wt = '/tmp/some-repo.ai-flow-worktrees/f1-T1/.ai-flow/grill-flow/references/quality-chain.md';
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: wt }));
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('Bash 里 cat 同一条路径不在此列(Bash 有自己那套守卫,再叠一层会撞掉脚本执行豁免)', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const stale = join(repo.repoRoot, '.ai-flow', 'test-flow', 'references', 'handoff.md');
+      const out = await handlePreTool(makeBashInput(repo.repoRoot, `cat ${stale}`));
+      // It just ENOENTs, which is the pre-existing behaviour. Accepted: `Read` is the
+      // shape the dispatch prompts and every observed instance actually used.
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('写入这些路径仍归控制面守卫,不被本条抢走(它的报错更该说控制面)', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const stage = join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'work.md');
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: stage, content: 'x' }));
+      expect(out?.permissionDecision).toBe('deny');
+      expect(out?.permissionDecisionReason ?? '').not.toContain('0.69.0');
+    });
+
+    it('子代理同样拦(每次实测到的都发生在子代理里)', async () => {
+      const repo = builtinRepo();
+      const stale = join(repo.repoRoot, '.ai-flow', 'grill-flow', 'references', 'x.md');
+      const input = makeInput(repo.repoRoot, 'Read', { file_path: stale });
+      (input as unknown as Record<string, unknown>)['agent_id'] = 'sub-1';
+      const out = await handlePreTool(input);
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('state/ 和 config.json 不在此列(它们本来就该留在项目里)', async () => {
+      const repo = builtinRepo();
+      const cfg = join(repo.repoRoot, '.ai-flow', 'grill-flow', 'config.json');
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: cfg }));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('定义目录自己那份放行(自定义 flow 的定义就在项目里,拦了等于拦掉它自己)', async () => {
+      // For a flow the plugin does not ship, flowDefDir falls back to the project
+      // directory — the very path this guard would otherwise call stale.
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const own = join(repo.repoRoot, '.ai-flow', 'test-flow', 'stages', 'work.md');
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: own }));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+  });
+
   describe('执行 flow 自己的脚本', () => {
     const script = (repoRoot: string) =>
       join(repoRoot, '.ai-flow', 'test-flow', 'scripts', 'worktree.cjs');

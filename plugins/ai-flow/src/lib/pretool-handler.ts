@@ -162,6 +162,53 @@ function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): 
   return null;
 }
 
+/**
+ * A path that names this flow's definition somewhere it no longer lives.
+ *
+ * Since 0.69.0 `stages/` `references/` `scripts/` ship with the plugin; the project
+ * keeps only `config.json` and `state/`. Two populations of stale paths outlive that
+ * move and neither is hypothetical — both were observed within two minutes of the
+ * first migrated resume:
+ *
+ *  - the project's own `<repo>/.ai-flow/<flow>/references/…`, which `legacy-cleanup`
+ *    has just deleted. A session resumed across the migration composes these from its
+ *    restored scrollback, and `Read` answers with a bare "File does not exist" that
+ *    says nothing about where the file went.
+ *  - a ticket worktree's tracked COPY of the same path, which still resolves. That is
+ *    the worse one: it succeeds, silently, against whatever revision the flow branch
+ *    happened to carry — the exact drift this move removed. It is also temporary
+ *    cover: once the deletion is committed, `worktree.cjs sync` rebases it away and
+ *    every such read starts failing instead.
+ *
+ * Left alone, the end state is a subagent told to "review against fowler-smells.md"
+ * that cannot read it, reviews from memory, and reports as though the rubric applied.
+ * So this is a redirect, not a fence: it costs a denied read and hands back the one
+ * path that is correct for the running plugin version.
+ */
+function staleDefinitionPath(repoRoot: string, flowName: string, candidate: string): string | null {
+  const norm = candidate.replace(/\\/g, '/');
+  const marker = `/.ai-flow/${flowName}/`;
+  const idx = norm.lastIndexOf(marker);
+  if (idx === -1) return null;
+  const rest = norm.slice(idx + marker.length);
+  // `scripts/` is excluded on purpose: the dominant use of those paths is EXECUTION,
+  // which the Bash control-plane carve-out already admits and which must keep
+  // working. Reading a gate script is something the stage prompts explicitly tell
+  // agents not to do anyway (~10K tokens), so there is nothing here to rescue.
+  if (!/^(references|stages)\//.test(rest)) return null;
+  // The plugin's own copy IS the definition — and for a flow the plugin does not
+  // ship, `flowDefDir` falls back to the project directory, so the "stale" location
+  // and the live one are the same path. Compare RESOLVED paths, not spellings: the
+  // candidate comes from the agent while `repoRoot` comes from flow resolution,
+  // which answers with git's real path. A literal mismatch (`/var/…` vs
+  // `/private/var/…`) would read as "not the definition" and refuse the definition
+  // itself — measured: 11 tests, all of them legitimate reads and script executions.
+  const defDir = flowDefDir(repoRoot, flowName);
+  const candidateDir = norm.slice(0, idx + marker.length - 1);
+  if (realPath(candidateDir) === realPath(defDir)) return null;
+  return `${defDir.replace(/\\/g, '/')}/${rest}`;
+}
+
 export async function handlePreTool(input: PreToolInput): Promise<PreToolResult | null> {
   const { cwd, tool_name, tool_input, session_id } = input;
 
@@ -191,6 +238,31 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       `如需修改：请在控制该流程的 session 中进行；若需由本 session 接管，执行 /clear 接管` +
       `（原 session 已不存在却仍被锁定时，先将 ${activeFile} 的 "last_session_id" 改为 null 再 /clear）。`
     );
+  }
+
+  // Redirect reads of the flow definition at its pre-0.69.0 location. Runs before
+  // `loadFlowConfig` so a broken config cannot fail it open, and is deliberately NOT
+  // gated on `agent_id`: every observed instance was a subagent, which is where the
+  // dispatch prompt's remembered absolute paths land.
+  // `Read` only, and only its `file_path`. Widening it to every path-shaped input
+  // collided with two guards that were already right: writes to these paths are
+  // `controlPlaneRole`'s job (its refusal explains the control plane, which is the
+  // more useful thing to say about a write), and Bash needs the script-execution
+  // carve-out to keep working. Measured: the wider version turned 11 correct
+  // outcomes into refusals, including a vendored template copy that is ordinary
+  // content by design.
+  if (tool_name === 'Read') {
+    const moved = staleDefinitionPath(repoRoot, activeFlowName, String(tool_input['file_path'] ?? ''));
+    if (moved) {
+    await appendLog(repoRoot, activeFlowName, session_id, `STALE_DEF_PATH tool=${tool_name}`);
+    return deny(
+      `这条路径指的是 flow 定义在 0.69.0 之前的位置,那份已经不在项目里了。\n` +
+      `定义(stages / references / scripts)现在随插件版本走,项目里只剩 config.json 和 state/。\n\n` +
+      `改用:${moved}\n\n` +
+      `⚠️ 派子代理时别从上文里抄这个绝对路径——它带插件版本号,插件一升级就变。` +
+      `每次从注入 context 顶部 \`[ai-flow:paths]\` 的 \`flow_def:\` 行现取。`
+    );
+    }
   }
 
   const config = await loadFlowConfig(repoRoot, activeFlowName);
