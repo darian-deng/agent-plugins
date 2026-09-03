@@ -9,7 +9,7 @@ var __export = (target, all) => {
 import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
-import { join as join4, relative as relative2, resolve as resolve2 } from "path";
+import { join as join5, relative as relative2, resolve as resolve3 } from "path";
 
 // src/lib/state.ts
 import {
@@ -61,11 +61,18 @@ function lookupSession(sessionId) {
 function statePath(repoRoot, flowName, file) {
   return join2(repoRoot, ".ai-flow", flowName, "state", file);
 }
+function normalizeActiveState(parsed) {
+  const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
+  if (rest.context_wrap_up && typeof rest.context_wrap_up === "object") return rest;
+  const latched = legacyLatched === true;
+  const atPct = latched ? legacy?.warned_at_pct ?? null : null;
+  return { ...rest, context_wrap_up: { at_pct: atPct } };
+}
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
   if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync2(path, "utf-8"));
+    return normalizeActiveState(JSON.parse(readFileSync2(path, "utf-8")));
   } catch {
     return null;
   }
@@ -188,8 +195,8 @@ function activeJsonPath(repoRoot, flowName) {
 }
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
+import { join as join4 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4250,11 +4257,14 @@ var StageConfigSchema = external_exports.object({
    * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
    *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
    *  2. Whatever the write scope, these paths stay writable while the session is
-   *     context-blocked — the block stops new work, it must not also block the safe
-   *     exit. A flow whose contract is "everything a later session needs is on disk"
-   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
-   *     leaves this unset gets no such escape and the handoff cannot be written.
-   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   *     wrapping up for a `/clear` — the refusal stops new work, it must not also
+   *     block the safe exit. A flow whose contract is "everything a later session
+   *     needs is on disk" has to be able to put it there before `/clear`.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it
+   * there: an `unrestricted` stage that leaves this unset is the one shape where the
+   * wrap-up cannot be enforced at all. Refusing the codebase there would leave the
+   * session with nowhere to write its handoff, so pretool-handler refuses nothing on
+   * such a stage and the wrap-up degrades to the injected brief.
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
@@ -4267,10 +4277,33 @@ var StageConfigSchema = external_exports.object({
   }
 );
 var ContextConfigSchema = external_exports.object({
-  warn_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  block_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  rewarn_delta_pct: external_exports.number().int().min(1).optional()
+  /**
+   * Context occupancy (percent of the window) at which this flow's session starts
+   * wrapping up FOR a `/clear`: the engine refuses further writes to the codebase
+   * while leaving the flow's own `docs_paths` open, so the handoff can still land
+   * (pretool-handler enforces both halves — on a stage that declares no `docs_paths`
+   * there is no safe exit to keep open, so it refuses nothing and the wrap-up is the
+   * injected brief alone). Absent → `DEFAULT_WRAP_UP_AT_PCT`.
+   *
+   * Replaces the earlier two-level `warn_at_pct` / `block_at_pct` pair, and the
+   * `rewarn_delta_pct` that throttled the repeat reminder between them (the brief
+   * now fires exactly once, at the crossing — see posttool-handler.ts). All three
+   * keys are DROPPED rather than rejected, which is deliberate: a validation error
+   * makes `loadFlowConfig` throw, and pretool-handler's catch-all turns that into
+   * `return null` — i.e. every guard that runs AFTER the config load fails OPEN.
+   * Installed flow copies still carrying the old keys (including live per-ticket
+   * worktrees this change cannot reach) would lose the write-scope guard, the
+   * control-plane Bash interception (signal / active.json / scripts / stages) and
+   * the wrap-up refusal itself, along with the threshold. The non-owner write guard
+   * is NOT among them: it depends only on state plus tool name and is deliberately
+   * placed before `loadFlowConfig`, precisely so a broken config cannot fail open
+   * into letting a foreign session write. Both shipped flows set `block_at_pct: 60`,
+   * the same number the default lands on, so a stale copy keeps behaving as
+   * configured until `/ai-flow:update` rewrites its config.json.
+   */
+  wrap_up_at_pct: external_exports.number().int().min(1).max(99).optional()
 });
+var LIVE_CONTEXT_KEYS = new Set(Object.keys(ContextConfigSchema.shape));
 var FlowConfigSchema = external_exports.object({
   schema_version: external_exports.literal("1.0"),
   name: external_exports.string().min(1),
@@ -4278,6 +4311,23 @@ var FlowConfigSchema = external_exports.object({
   context: ContextConfigSchema.optional(),
   stages: external_exports.array(StageConfigSchema).min(1, "at least one stage is required")
 });
+
+// src/lib/flow-paths.ts
+import { existsSync as existsSync3 } from "fs";
+import { join as join3, dirname as dirname2, resolve as resolve2 } from "path";
+import { fileURLToPath } from "url";
+var __dirname = dirname2(fileURLToPath(import.meta.url));
+var PLUGIN_ROOT = resolve2(__dirname, "..", "..");
+var PLUGIN_FLOWS_DIR = join3(PLUGIN_ROOT, ".ai-flow");
+function isBuiltinFlow(flowName) {
+  return existsSync3(join3(PLUGIN_FLOWS_DIR, flowName, "config.json"));
+}
+function flowDefDir(repoRoot, flowName) {
+  return isBuiltinFlow(flowName) ? join3(PLUGIN_FLOWS_DIR, flowName) : join3(repoRoot, ".ai-flow", flowName);
+}
+function flowAnchorDir(repoRoot, flowName) {
+  return join3(repoRoot, ".ai-flow", flowName);
+}
 
 // src/lib/flow-config-loader.ts
 var FlowNotFoundError = class extends Error {
@@ -4299,15 +4349,32 @@ ${details}`);
     this.name = "FlowConfigValidationError";
   }
 };
-async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join3(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName);
-  let raw2;
+function readJson(path) {
   try {
-    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
+    const v = JSON.parse(readFileSync3(path, "utf-8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v)) {
+      throw new Error("config.json must contain a JSON object");
+    }
+    return v;
   } catch (e) {
-    throw new FlowConfigParseError(configPath, e);
+    throw new FlowConfigParseError(path, e);
   }
+}
+function mergeConfig(defaults, overrides) {
+  const merged = { ...defaults, ...overrides };
+  const dCtx = defaults["context"];
+  const oCtx = overrides["context"];
+  if (dCtx && typeof dCtx === "object" && !Array.isArray(dCtx) && oCtx && typeof oCtx === "object" && !Array.isArray(oCtx)) {
+    merged["context"] = { ...dCtx, ...oCtx };
+  }
+  return merged;
+}
+async function loadFlowConfig(repoRoot, flowName) {
+  const configPath = join4(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync4(configPath)) throw new FlowNotFoundError(flowName);
+  const defPath = join4(flowDefDir(repoRoot, flowName), "config.json");
+  const overrides = readJson(configPath);
+  const raw2 = defPath === configPath ? overrides : mergeConfig(readJson(defPath), overrides);
   const result = FlowConfigSchema.safeParse(raw2);
   if (!result.success) {
     const details = result.error.issues.map((i) => `  [${i.path.join(".")}] ${i.message}`).join("\n");
@@ -4343,6 +4410,7 @@ async function runScript(command, cwd, opts) {
   const timeout = opts?.timeout_ms ?? 3e4;
   const result = spawnSync(command, {
     cwd,
+    ...opts?.env && { env: { ...process.env, ...opts.env } },
     timeout,
     encoding: "utf-8",
     maxBuffer: 1024 * 1024,
@@ -4379,7 +4447,7 @@ function allow(systemMessage) {
 }
 function resolvePath(repoRoot, filePath) {
   if (filePath.startsWith("/")) return filePath;
-  return join4(repoRoot, filePath);
+  return join5(repoRoot, filePath);
 }
 function isFlowScriptExecution(segment, scriptFragments, stateFragments) {
   if (stateFragments.some((f) => segment.includes(f))) return false;
@@ -4405,7 +4473,8 @@ function controlPlaneRole(repoRoot, flowName, absPath) {
   const anchor = norm.slice(0, idx) || "/";
   const rest = norm.slice(idx + marker.length);
   const sameAnchor = realPath(anchor) === realPath(repoRoot);
-  if (!sameAnchor && !isInsideLinkedWorktree(anchor)) return null;
+  const isShippedDefinition = isBuiltinFlow(flowName) && realPath(anchor) === realPath(PLUGIN_ROOT);
+  if (!sameAnchor && !isShippedDefinition && !isInsideLinkedWorktree(anchor)) return null;
   if (rest === "state/active.json") return "active.json";
   if (rest === "config.json") return "config.json";
   if (rest.startsWith("stages/")) return "stages";
@@ -4429,20 +4498,19 @@ async function handlePreTool(input2) {
       );
     }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
-    if (state.context_blocked && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
+    if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
       const stageCfgForBlock = getStageConfig(config, state.current_stage);
       const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
       const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
       const relForBlock = relative2(repoRoot, blockAbs);
       const isFlowDocs = docsPaths.some((p) => {
         const norm = p.endsWith("/") ? p : p + "/";
-        return relForBlock.startsWith(norm) || blockAbs.startsWith(join4(repoRoot, norm));
+        return relForBlock.startsWith(norm) || blockAbs.startsWith(join5(repoRoot, norm));
       });
-      if (!isFlowDocs) {
-        const blockedPct = state.context_warning.warned_at_pct;
-        const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : "";
+      if (docsPaths.length > 0 && !isFlowDocs) {
+        const wrapUpPct = state.context_wrap_up.at_pct;
         return deny(
-          `Context blocked${pctInfo}. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ") || "none configured"}) are still allowed so you can land a handoff.
+          `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ")}) are still allowed so you can land a handoff.
 
 Before /clear: write whatever a later session cannot reconstruct into those docs \u2014 which lane is where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any decision you have made but not recorded.
 What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report does not** \u2014 its findings, real-machine items and security self-check cannot be reconstructed from the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree state into the docs first.`
@@ -4451,22 +4519,22 @@ What /clear costs: flow state and commits are on disk and survive; **an in-fligh
     }
     if (tool_name === "Bash") {
       const command = String(tool_input["command"] ?? "");
-      const flowRel = join4(".ai-flow", activeFlowName);
+      const flowRel = join5(".ai-flow", activeFlowName);
       const stateFragments = [
         signalPath(repoRoot, activeFlowName),
-        join4(repoRoot, flowRel, "state", "active.json"),
-        join4(flowRel, "state", "signal"),
-        join4(flowRel, "state", "active.json")
+        join5(repoRoot, flowRel, "state", "active.json"),
+        join5(flowRel, "state", "signal"),
+        join5(flowRel, "state", "active.json")
       ];
       const scriptFragments = [
-        join4(repoRoot, flowRel, "scripts"),
-        join4(flowRel, "scripts")
+        join5(repoRoot, flowRel, "scripts"),
+        join5(flowRel, "scripts")
       ];
       const docFragments = [
-        join4(repoRoot, flowRel, "stages"),
-        join4(flowRel, "stages"),
-        join4(repoRoot, flowRel, "config.json"),
-        join4(flowRel, "config.json")
+        join5(repoRoot, flowRel, "stages"),
+        join5(flowRel, "stages"),
+        join5(repoRoot, flowRel, "config.json"),
+        join5(flowRel, "config.json")
       ];
       const exemptFragments = [...scriptFragments, ...docFragments];
       const cpFragments = [...stateFragments, ...exemptFragments];
@@ -4498,12 +4566,12 @@ What /clear costs: flow state and commits are on disk and survive; **an in-fligh
     if (!WRITE_TOOLS.has(tool_name)) return null;
     const fp = String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? "");
     if (!fp) return null;
-    if (!fp.startsWith("/") && resolve2(cwd) !== resolve2(repoRoot)) {
+    if (!fp.startsWith("/") && resolve3(cwd) !== resolve3(repoRoot)) {
       await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
       return deny(
         `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a relative path \u2014 the Write tool would resolve it against the current cwd and silently create it there. Re-issue the write with an absolute path to the location you actually intend:
-  \u2022 a file in the tree you are working in (a worktree checkout, if you are in one): ${resolve2(cwd, fp)}
-  \u2022 a flow artifact that belongs to the main checkout: ${join4(repoRoot, fp)}
+  \u2022 a file in the tree you are working in (a worktree checkout, if you are in one): ${resolve3(cwd, fp)}
+  \u2022 a flow artifact that belongs to the main checkout: ${join5(repoRoot, fp)}
 Neither is "the right one" by default \u2014 pick by what the file IS. Code and tests belong to the tree you are working in; flow bookkeeping under docs/ belongs to the main checkout.`
       );
     }
@@ -4520,9 +4588,13 @@ Neither is "the right one" by default \u2014 pick by what the file IS. Code and 
       }
       let gateNotes;
       if (stageCfg2.completion.script) {
-        const flowDir = join4(repoRoot, ".ai-flow", activeFlowName);
+        const defDir = flowDefDir(repoRoot, activeFlowName);
+        const anchorDir = flowAnchorDir(repoRoot, activeFlowName);
         const scriptOpts = stageCfg2.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg2.completion.script.timeout_ms } : void 0;
-        const scriptResult = await runScript(stageCfg2.completion.script.command, flowDir, scriptOpts);
+        const scriptResult = await runScript(stageCfg2.completion.script.command, defDir, {
+          ...scriptOpts,
+          env: { AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: repoRoot }
+        });
         if (!scriptResult.ok) {
           await appendLog(repoRoot, activeFlowName, session_id, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, " ").slice(0, 80)}`);
           return deny(`Script validation failed:
@@ -4566,7 +4638,7 @@ signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${si
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
       const allowed = docsPaths.some((p) => {
         const norm = p.endsWith("/") ? p : p + "/";
-        return rel.startsWith(norm) || absPath.startsWith(join4(repoRoot, norm));
+        return rel.startsWith(norm) || absPath.startsWith(join5(repoRoot, norm));
       });
       if (!allowed) {
         await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);

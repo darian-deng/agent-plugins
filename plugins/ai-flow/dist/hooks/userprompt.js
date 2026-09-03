@@ -6,14 +6,14 @@ var __export = (target, all) => {
 };
 
 // src/hooks/userprompt.ts
-import { readFileSync as readFileSync8 } from "fs";
+import { readFileSync as readFileSync9 } from "fs";
 
 // src/lib/userprompt-handler.ts
-import { join as join13, dirname as dirname3 } from "path";
+import { join as join11, dirname as dirname4 } from "path";
 
 // src/lib/flow-config-loader.ts
-import { existsSync, readdirSync, readFileSync } from "fs";
-import { join } from "path";
+import { existsSync as existsSync2, readdirSync, readFileSync } from "fs";
+import { join as join2 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4074,11 +4074,14 @@ var StageConfigSchema = external_exports.object({
    * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
    *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
    *  2. Whatever the write scope, these paths stay writable while the session is
-   *     context-blocked — the block stops new work, it must not also block the safe
-   *     exit. A flow whose contract is "everything a later session needs is on disk"
-   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
-   *     leaves this unset gets no such escape and the handoff cannot be written.
-   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   *     wrapping up for a `/clear` — the refusal stops new work, it must not also
+   *     block the safe exit. A flow whose contract is "everything a later session
+   *     needs is on disk" has to be able to put it there before `/clear`.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it
+   * there: an `unrestricted` stage that leaves this unset is the one shape where the
+   * wrap-up cannot be enforced at all. Refusing the codebase there would leave the
+   * session with nowhere to write its handoff, so pretool-handler refuses nothing on
+   * such a stage and the wrap-up degrades to the injected brief.
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
@@ -4091,10 +4094,33 @@ var StageConfigSchema = external_exports.object({
   }
 );
 var ContextConfigSchema = external_exports.object({
-  warn_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  block_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  rewarn_delta_pct: external_exports.number().int().min(1).optional()
+  /**
+   * Context occupancy (percent of the window) at which this flow's session starts
+   * wrapping up FOR a `/clear`: the engine refuses further writes to the codebase
+   * while leaving the flow's own `docs_paths` open, so the handoff can still land
+   * (pretool-handler enforces both halves — on a stage that declares no `docs_paths`
+   * there is no safe exit to keep open, so it refuses nothing and the wrap-up is the
+   * injected brief alone). Absent → `DEFAULT_WRAP_UP_AT_PCT`.
+   *
+   * Replaces the earlier two-level `warn_at_pct` / `block_at_pct` pair, and the
+   * `rewarn_delta_pct` that throttled the repeat reminder between them (the brief
+   * now fires exactly once, at the crossing — see posttool-handler.ts). All three
+   * keys are DROPPED rather than rejected, which is deliberate: a validation error
+   * makes `loadFlowConfig` throw, and pretool-handler's catch-all turns that into
+   * `return null` — i.e. every guard that runs AFTER the config load fails OPEN.
+   * Installed flow copies still carrying the old keys (including live per-ticket
+   * worktrees this change cannot reach) would lose the write-scope guard, the
+   * control-plane Bash interception (signal / active.json / scripts / stages) and
+   * the wrap-up refusal itself, along with the threshold. The non-owner write guard
+   * is NOT among them: it depends only on state plus tool name and is deliberately
+   * placed before `loadFlowConfig`, precisely so a broken config cannot fail open
+   * into letting a foreign session write. Both shipped flows set `block_at_pct: 60`,
+   * the same number the default lands on, so a stale copy keeps behaving as
+   * configured until `/ai-flow:update` rewrites its config.json.
+   */
+  wrap_up_at_pct: external_exports.number().int().min(1).max(99).optional()
 });
+var LIVE_CONTEXT_KEYS = new Set(Object.keys(ContextConfigSchema.shape));
 var FlowConfigSchema = external_exports.object({
   schema_version: external_exports.literal("1.0"),
   name: external_exports.string().min(1),
@@ -4102,6 +4128,26 @@ var FlowConfigSchema = external_exports.object({
   context: ContextConfigSchema.optional(),
   stages: external_exports.array(StageConfigSchema).min(1, "at least one stage is required")
 });
+
+// src/lib/flow-paths.ts
+import { existsSync } from "fs";
+import { join, dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+var __dirname = dirname(fileURLToPath(import.meta.url));
+var PLUGIN_ROOT = resolve(__dirname, "..", "..");
+var PLUGIN_FLOWS_DIR = join(PLUGIN_ROOT, ".ai-flow");
+function isBuiltinFlow(flowName) {
+  return existsSync(join(PLUGIN_FLOWS_DIR, flowName, "config.json"));
+}
+function flowDefDir(repoRoot, flowName) {
+  return isBuiltinFlow(flowName) ? join(PLUGIN_FLOWS_DIR, flowName) : join(repoRoot, ".ai-flow", flowName);
+}
+function flowAnchorDir(repoRoot, flowName) {
+  return join(repoRoot, ".ai-flow", flowName);
+}
+function stagePromptPath(repoRoot, flowName, promptRel) {
+  return join(flowDefDir(repoRoot, flowName), promptRel);
+}
 
 // src/lib/flow-config-loader.ts
 var FlowNotFoundError = class extends Error {
@@ -4123,15 +4169,32 @@ ${details}`);
     this.name = "FlowConfigValidationError";
   }
 };
-async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync(configPath)) throw new FlowNotFoundError(flowName);
-  let raw2;
+function readJson(path) {
   try {
-    raw2 = JSON.parse(readFileSync(configPath, "utf-8"));
+    const v = JSON.parse(readFileSync(path, "utf-8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v)) {
+      throw new Error("config.json must contain a JSON object");
+    }
+    return v;
   } catch (e) {
-    throw new FlowConfigParseError(configPath, e);
+    throw new FlowConfigParseError(path, e);
   }
+}
+function mergeConfig(defaults, overrides) {
+  const merged = { ...defaults, ...overrides };
+  const dCtx = defaults["context"];
+  const oCtx = overrides["context"];
+  if (dCtx && typeof dCtx === "object" && !Array.isArray(dCtx) && oCtx && typeof oCtx === "object" && !Array.isArray(oCtx)) {
+    merged["context"] = { ...dCtx, ...oCtx };
+  }
+  return merged;
+}
+async function loadFlowConfig(repoRoot, flowName) {
+  const configPath = join2(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync2(configPath)) throw new FlowNotFoundError(flowName);
+  const defPath = join2(flowDefDir(repoRoot, flowName), "config.json");
+  const overrides = readJson(configPath);
+  const raw2 = defPath === configPath ? overrides : mergeConfig(readJson(defPath), overrides);
   const result = FlowConfigSchema.safeParse(raw2);
   if (!result.success) {
     const details = result.error.issues.map((i) => `  [${i.path.join(".")}] ${i.message}`).join("\n");
@@ -4140,15 +4203,18 @@ async function loadFlowConfig(repoRoot, flowName) {
   return result.data;
 }
 async function discoverFlows(repoRoot) {
-  const aiFlowDir = join(repoRoot, ".ai-flow");
-  if (!existsSync(aiFlowDir)) return [];
+  const aiFlowDir = join2(repoRoot, ".ai-flow");
+  if (!existsSync2(aiFlowDir)) return [];
   const entries = readdirSync(aiFlowDir, { withFileTypes: true });
-  return entries.filter((e) => e.isDirectory() && existsSync(join(aiFlowDir, e.name, "config.json"))).map((e) => e.name);
+  return entries.filter((e) => e.isDirectory() && existsSync2(join2(aiFlowDir, e.name, "config.json"))).map((e) => e.name);
 }
 function getStageConfig(config, stageId) {
   const stage = config.stages.find((s) => s.id === stageId);
   if (!stage) throw new Error(`Stage '${stageId}' not found in flow '${config.name}'`);
   return stage;
+}
+function resolveDocsPaths(paths, flowId) {
+  return paths.map((p) => p.replace(/\{flow_id\}/g, flowId));
 }
 
 // src/lib/format.ts
@@ -4159,7 +4225,6 @@ function flowStatusLine(opts) {
 }
 
 // src/lib/prompt-render.ts
-import { join as join2 } from "path";
 var INLINE_INJECTION_BUDGET = 1e4;
 function commandOutputPrefix(flowName) {
   return `[ai-flow system] Hook intercepted this command for flow '${flowName}'. Do NOT invoke a skill named '${flowName}' \u2014 proceed directly with the instructions below.
@@ -4188,16 +4253,15 @@ function assembledOverhead(assemble) {
   return assemble("").length;
 }
 function renderPrompt(content, repoRoot, flowName) {
-  const flowRoot = join2(repoRoot, ".ai-flow", flowName);
-  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_def\s*\}\}/g, flowDefDir(repoRoot, flowName)).replace(/\{\{\s*flow_root\s*\}\}/g, flowAnchorDir(repoRoot, flowName));
   return substituted + "\n" + writtenDocLengthNote();
 }
 function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
-  const flowRoot = join2(repoRoot, ".ai-flow", flowName);
   const lines = [
     `[ai-flow:paths]`,
     `project_root: ${repoRoot}`,
-    `flow_root: ${flowRoot}`
+    `flow_root: ${flowAnchorDir(repoRoot, flowName)}`,
+    `flow_def: ${flowDefDir(repoRoot, flowName)}`
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
@@ -4259,13 +4323,13 @@ function parseFlowCommand(prompt, knownFlows) {
 }
 
 // src/lib/commands/start.ts
-import { existsSync as existsSync6, readFileSync as readFileSync4 } from "fs";
-import { join as join7 } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync5 } from "fs";
+import { join as join8 } from "path";
 import { execSync } from "child_process";
 
 // src/lib/state.ts
 import {
-  existsSync as existsSync3,
+  existsSync as existsSync4,
   mkdirSync as mkdirSync2,
   writeFileSync as writeFileSync2,
   readFileSync as readFileSync3,
@@ -4280,10 +4344,10 @@ import {
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join4, dirname, resolve, relative } from "path";
+import { join as join4, dirname as dirname2, resolve as resolve2, relative } from "path";
 
 // src/lib/session-registry.ts
-import { existsSync as existsSync2, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
+import { existsSync as existsSync3, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
 import { join as join3 } from "path";
 import { homedir } from "os";
@@ -4316,7 +4380,7 @@ function bindSession(sessionId, projectRoot, flowName) {
 function lookupSession(sessionId) {
   try {
     const p = bindingPath(sessionId);
-    if (!existsSync2(p)) return null;
+    if (!existsSync3(p)) return null;
     const parsed = JSON.parse(readFileSync2(p, "utf-8"));
     if (!parsed || typeof parsed.projectRoot !== "string" || typeof parsed.flowName !== "string") {
       return null;
@@ -4334,11 +4398,18 @@ function statePath(repoRoot, flowName, file) {
 function stateDir(repoRoot, flowName) {
   return join4(repoRoot, ".ai-flow", flowName, "state");
 }
+function normalizeActiveState(parsed) {
+  const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
+  if (rest.context_wrap_up && typeof rest.context_wrap_up === "object") return rest;
+  const latched = legacyLatched === true;
+  const atPct = latched ? legacy?.warned_at_pct ?? null : null;
+  return { ...rest, context_wrap_up: { at_pct: atPct } };
+}
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
-  if (!existsSync3(path)) return null;
+  if (!existsSync4(path)) return null;
   try {
-    return JSON.parse(readFileSync3(path, "utf-8"));
+    return normalizeActiveState(JSON.parse(readFileSync3(path, "utf-8")));
   } catch {
     return null;
   }
@@ -4392,8 +4463,8 @@ async function patchActiveState(repoRoot, flowName, patch) {
 function findRepoRoot(cwd) {
   let dir = cwd;
   while (true) {
-    if (existsSync3(join4(dir, ".ai-flow"))) return dir;
-    const parent = dirname(dir);
+    if (existsSync4(join4(dir, ".ai-flow"))) return dir;
+    const parent = dirname2(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -4407,7 +4478,7 @@ function isInsideLinkedWorktree(dir) {
     );
     const [gitDir, commonDir] = out.trim().split("\n");
     if (!gitDir || !commonDir) return false;
-    return resolve(gitDir) !== resolve(commonDir);
+    return resolve2(gitDir) !== resolve2(commonDir);
   } catch {
     return false;
   }
@@ -4416,12 +4487,12 @@ function realPath(p) {
   try {
     return realpathSync(p);
   } catch {
-    return resolve(p);
+    return resolve2(p);
   }
 }
 async function anchorFlow(dir) {
   const aiFlowDir = join4(dir, ".ai-flow");
-  if (!existsSync3(aiFlowDir)) return null;
+  if (!existsSync4(aiFlowDir)) return null;
   for (const entry of readdirSync3(aiFlowDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const state = await readActiveState(dir, entry.name);
@@ -4439,25 +4510,25 @@ function siblingCheckoutAnchors(dir) {
     const [commonDir, wtRoot] = out.trim().split("\n");
     if (!commonDir || !wtRoot) return [];
     const self = realPath(dir);
-    const rel = relative(resolve(wtRoot), self);
+    const rel = relative(resolve2(wtRoot), self);
     if (rel.startsWith("..")) return [];
     const roots = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"]
     }).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length).trim()).filter(Boolean);
-    const mainRoot = dirname(resolve(commonDir));
+    const mainRoot = dirname2(resolve2(commonDir));
     const sharedPrefix = (a, b) => {
       const x = a.split("/"), y = b.split("/");
       let n = 0;
       while (n < x.length && n < y.length && x[n] === y[n]) n++;
       return n;
     };
-    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const ordered = [mainRoot, ...roots.filter((r) => resolve2(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve2(b), self) - sharedPrefix(resolve2(a), self));
     const seen = /* @__PURE__ */ new Set();
     const out2 = [];
     for (const root of ordered) {
       const cand = rel ? join4(root, rel) : root;
-      const key = resolve(cand);
+      const key = resolve2(cand);
       if (key === self || seen.has(key)) continue;
       seen.add(key);
       out2.push(cand);
@@ -4470,21 +4541,21 @@ function siblingCheckoutAnchors(dir) {
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
-    if (existsSync3(join4(dir, ".ai-flow"))) {
+    if (existsSync4(join4(dir, ".ai-flow"))) {
       const here = await anchorFlow(dir);
       if (here) return here;
       if (!isInsideLinkedWorktree(dir)) return null;
       const candidates = siblingCheckoutAnchors(dir);
       if (candidates.length > 0) {
         for (const cand of candidates) {
-          if (!existsSync3(join4(cand, ".ai-flow"))) continue;
+          if (!existsSync4(join4(cand, ".ai-flow"))) continue;
           const over = await anchorFlow(cand);
           if (over) return { ...over, viaSibling: true };
         }
         return null;
       }
     }
-    const parent = dirname(dir);
+    const parent = dirname2(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -4503,7 +4574,7 @@ async function resolveActiveFlow(cwd, sessionId) {
 }
 function readSignal(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "signal");
-  if (!existsSync3(path)) return null;
+  if (!existsSync4(path)) return null;
   try {
     return readFileSync3(path, "utf-8").trim();
   } catch {
@@ -4524,7 +4595,7 @@ function isGatePending(signal, config, currentStageId) {
 }
 async function appendLog(repoRoot, flowName, sessionId, message) {
   const logPath = statePath(repoRoot, flowName, "flow.log");
-  mkdirSync2(dirname(logPath), { recursive: true });
+  mkdirSync2(dirname2(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
@@ -4551,7 +4622,7 @@ function materializeRenderedPrompt(repoRoot, flowName, stageId, rendered) {
 > **\u5B83\u548C\u4F60\u5F53\u524D\u6240\u5904\u7684 stage \u4E0D\u4E00\u81F4\u65F6\uFF0C\u5C31\u662F\u65E7\u4EF6\u2014\u2014\u522B\u7167\u5B83\u6267\u884C**\uFF0C\u53BB\u8BFB\u5F15\u64CE\u672C\u6B21\u6CE8\u5165\u7ED9\u4F60\u7684\u5185\u5BB9\u3002
 
 `;
-    mkdirSync2(dirname(dest), { recursive: true });
+    mkdirSync2(dirname2(dest), { recursive: true });
     const tmp = statePath(repoRoot, flowName, `current-prompt.${randomBytes2(4).toString("hex")}.tmp`);
     writeFileSync2(tmp, header + rendered, "utf-8");
     renameSync2(tmp, dest);
@@ -4563,21 +4634,21 @@ function materializeRenderedPrompt(repoRoot, flowName, stageId, rendered) {
 function clearRenderedPrompt(repoRoot, flowName) {
   try {
     const p = renderedPromptPath(repoRoot, flowName);
-    if (existsSync3(p)) unlinkSync2(p);
+    if (existsSync4(p)) unlinkSync2(p);
   } catch {
   }
 }
 
 // src/lib/preflight.ts
-import { existsSync as existsSync4 } from "fs";
+import { existsSync as existsSync5 } from "fs";
 import { join as join5 } from "path";
 function findPreflightCommand(flowDir) {
   for (const ext of ["cjs", "mjs"]) {
     const p = join5(flowDir, `preflight.${ext}`);
-    if (existsSync4(p)) return `node "${p}"`;
+    if (existsSync5(p)) return `node "${p}"`;
   }
   const sh = join5(flowDir, "preflight.sh");
-  if (existsSync4(sh)) return `sh "${sh}"`;
+  if (existsSync5(sh)) return `sh "${sh}"`;
   return null;
 }
 
@@ -4587,6 +4658,7 @@ async function runScript(command, cwd, opts) {
   const timeout = opts?.timeout_ms ?? 3e4;
   const result = spawnSync(command, {
     cwd,
+    ...opts?.env && { env: { ...process.env, ...opts.env } },
     timeout,
     encoding: "utf-8",
     maxBuffer: 1024 * 1024,
@@ -4607,7 +4679,7 @@ async function runScript(command, cwd, opts) {
 }
 
 // src/lib/context.ts
-import { existsSync as existsSync5, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "fs";
+import { existsSync as existsSync6, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "fs";
 import { join as join6 } from "path";
 import { homedir as homedir2 } from "os";
 var TAIL_WINDOW_BYTES = 256 * 1024;
@@ -4617,7 +4689,7 @@ function transcriptPathFor(sessionId, cwd) {
 }
 function readTokenCount(sessionId, cwd, transcriptPath) {
   const p = transcriptPath && transcriptPath.length > 0 ? transcriptPath : transcriptPathFor(sessionId, cwd);
-  if (!existsSync5(p)) return 0;
+  if (!existsSync6(p)) return 0;
   let fd = null;
   try {
     fd = openSync2(p, "r");
@@ -4660,6 +4732,71 @@ function contextPct(sessionId, cwd, contextWindowSize, transcriptPath) {
 }
 var DEFAULT_CONTEXT_WINDOW = 1e6;
 
+// src/lib/legacy-cleanup.ts
+import { existsSync as existsSync7, readFileSync as readFileSync4, writeFileSync as writeFileSync3, rmSync } from "fs";
+import { join as join7 } from "path";
+var LEGACY_ENTRIES = [
+  "stages",
+  "references",
+  "scripts",
+  "helper.md",
+  "preflight.cjs",
+  "preflight.mjs",
+  "preflight.sh"
+];
+function readJsonObject(path) {
+  try {
+    const v = JSON.parse(readFileSync4(path, "utf-8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+function pruneLegacyInstall(repoRoot, flowName) {
+  if (!isBuiltinFlow(flowName)) return null;
+  const anchorDir = join7(repoRoot, ".ai-flow", flowName);
+  const configPath = join7(anchorDir, "config.json");
+  if (!existsSync7(configPath)) return null;
+  const removed = [];
+  for (const entry of LEGACY_ENTRIES) {
+    const p = join7(anchorDir, entry);
+    if (!existsSync7(p)) continue;
+    rmSync(p, { recursive: true, force: true });
+    removed.push(entry);
+  }
+  const configKeysDropped = [];
+  const project = readJsonObject(configPath);
+  const defaults = readJsonObject(join7(flowDefDir(repoRoot, flowName), "config.json"));
+  if (project && defaults) {
+    const kept = {};
+    const defaultContext = defaults["context"] ?? {};
+    for (const [key, value] of Object.entries(project)) {
+      if (key !== "context") {
+        configKeysDropped.push(key);
+        continue;
+      }
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        configKeysDropped.push("context");
+        continue;
+      }
+      const keptContext = {};
+      for (const [ck, cv] of Object.entries(value)) {
+        const isDead = !LIVE_CONTEXT_KEYS.has(ck);
+        const isInheritedDefault = JSON.stringify(cv) === JSON.stringify(defaultContext[ck]);
+        if (isDead || isInheritedDefault) configKeysDropped.push(`context.${ck}`);
+        else keptContext[ck] = cv;
+      }
+      if (Object.keys(keptContext).length > 0) kept["context"] = keptContext;
+    }
+    if (configKeysDropped.length > 0) {
+      writeFileSync3(configPath, JSON.stringify(kept, null, 2) + "\n");
+    }
+  }
+  if (removed.length === 0 && configKeysDropped.length === 0) return null;
+  return { removed, configKeysDropped };
+}
+
 // src/lib/commands/start.ts
 var BLOCK_START_IF_ABOVE_PCT = 95;
 function generateFlowId() {
@@ -4693,6 +4830,10 @@ async function handleStart(repoRoot, flowName, requirement, sessionId, contextSi
       reason: `Context is at ${effectivePct}%. Run /clear before starting a new flow to free up context space.`
     };
   }
+  try {
+    pruneLegacyInstall(repoRoot, flowName);
+  } catch {
+  }
   let config;
   try {
     config = await loadFlowConfig(repoRoot, flowName);
@@ -4708,7 +4849,7 @@ async function handleStart(repoRoot, flowName, requirement, sessionId, contextSi
 \uFF08\u672C\u6B21 start \u7684\u76EE\u6807\u951A\u70B9\u662F ${repoRoot}\uFF09
 \u26D4 \u4E0D\u8981\u5728\u8FD9\u91CC abort \u5B83\u2014\u2014\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728\u90A3\u4E2A\u68C0\u51FA\u4E0A\u3002\u8981\u505C\u5B83\u5C31\u53BB\u5B83\u81EA\u5DF1\u7684\u68C0\u51FA\u91CC\u505C\u3002
 \u21D2 \u60F3\u5728\u672C\u68C0\u51FA\u8DD1\u81EA\u5DF1\u7684 flow\uFF1A\u5148\u628A\u5B83\u7684\u6D41\u7A0B\u72B6\u6001\u632A\u8D70\uFF08\u4EE3\u7801\u4E00\u884C\u4E0D\u52A8\uFF09\uFF0C\u518D\u91CD\u542F\u672C session \u4E0A\u4E0B\u6587\uFF1A
-     mv ${join7(active.repoRoot, ".ai-flow", active.flowName, "state")} ${join7(active.repoRoot, ".ai-flow", active.flowName, "state")}.parked`
+     mv ${join8(active.repoRoot, ".ai-flow", active.flowName, "state")} ${join8(active.repoRoot, ".ai-flow", active.flowName, "state")}.parked`
       };
     }
     return {
@@ -4722,7 +4863,7 @@ async function handleStart(repoRoot, flowName, requirement, sessionId, contextSi
       reason: "Working tree has uncommitted changes. Run git stash or commit your changes before starting a flow."
     };
   }
-  const preflightCmd = findPreflightCommand(join7(repoRoot, ".ai-flow", flowName));
+  const preflightCmd = findPreflightCommand(flowDefDir(repoRoot, flowName));
   if (preflightCmd) {
     const result = await runScript(preflightCmd, repoRoot);
     if (!result.ok) {
@@ -4749,14 +4890,13 @@ ${result.reason}`
     // owns last_session_id here, so without seeding it would never be recorded.
     history_session_ids: [sessionId],
     context_size: DEFAULT_CONTEXT_WINDOW,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
     first_prompt_handled: false
   };
   await writeActiveState(repoRoot, flowName, state);
   bindSession(sessionId, repoRoot, flowName);
   await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
-  const promptPath = join7(repoRoot, ".ai-flow", flowName, firstStage.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, firstStage.prompt);
   const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
 
 flow_id: ${flowId}
@@ -4766,9 +4906,9 @@ current_stage: ${firstStage.id}
 ` + body;
   const gateNote = firstStage.completion.gate ? "\n" + gateProtocolNote() : "";
   let stageContent = "";
-  if (existsSync6(promptPath)) {
+  if (existsSync8(promptPath)) {
     stageContent = injectableStagePrompt(
-      renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
+      renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
       promptPath,
       assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
       (text) => materializeRenderedPrompt(repoRoot, flowName, firstStage.id, text)
@@ -4778,12 +4918,8 @@ current_stage: ${firstStage.id}
   return { action: "allow", additionalContext: assemble(stageContent) };
 }
 
-// src/lib/commands/approve.ts
-import { join as join9 } from "path";
-
 // src/lib/advance-stage.ts
-import { existsSync as existsSync7, readFileSync as readFileSync5, unlinkSync as unlinkSync3 } from "fs";
-import { join as join8 } from "path";
+import { existsSync as existsSync9, readFileSync as readFileSync6, unlinkSync as unlinkSync3 } from "fs";
 async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const state = await readActiveState(repoRoot, flowName);
   if (!state) {
@@ -4794,9 +4930,9 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync7(activeJson)) unlinkSync3(activeJson);
+    if (existsSync9(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync7(sig)) unlinkSync3(sig);
+    if (existsSync9(sig)) unlinkSync3(sig);
     clearRenderedPrompt(repoRoot, flowName);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
@@ -4812,7 +4948,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
   }
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync7(sigFile)) unlinkSync3(sigFile);
+  if (existsSync9(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const assemble = (body) => `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
@@ -4822,13 +4958,13 @@ ${body}
 \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 
 \u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
-  const promptPath = join8(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, nextStageCfg.prompt);
   const gateNote = nextStageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
   let promptContent = "";
-  if (existsSync7(promptPath)) {
+  if (existsSync9(promptPath)) {
     try {
       promptContent = injectableStagePrompt(
-        renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
+        renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
         assembledOverhead(assemble) + gateNote.length + callerOverhead,
         (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
@@ -4860,9 +4996,13 @@ async function handleApprove(repoRoot, flowName, sessionId, _args) {
   }
   let gateNotes;
   if (stageCfg.completion.script) {
-    const flowDir = join9(repoRoot, ".ai-flow", flowName);
+    const defDir = flowDefDir(repoRoot, flowName);
+    const anchorDir = flowAnchorDir(repoRoot, flowName);
     const scriptOpts = stageCfg.completion.script.timeout_ms !== void 0 ? { timeout_ms: stageCfg.completion.script.timeout_ms } : void 0;
-    const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
+    const scriptResult = await runScript(stageCfg.completion.script.command, defDir, {
+      ...scriptOpts,
+      env: { AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: repoRoot }
+    });
     if (!scriptResult.ok) {
       await appendLog(repoRoot, flowName, sessionId, `APPROVE_SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, " ").slice(0, 80)}`);
       return {
@@ -4899,8 +5039,8 @@ ${systemMessage}` : systemMessage,
 
 // src/lib/commands/abort.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { existsSync as existsSync8, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3, unlinkSync as unlinkSync4, realpathSync as realpathSync2 } from "fs";
-import { join as join10, dirname as dirname2, basename } from "path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync3, writeFileSync as writeFileSync4, unlinkSync as unlinkSync4, realpathSync as realpathSync2 } from "fs";
+import { join as join9, dirname as dirname3, basename } from "path";
 function git(args, cwd) {
   return execFileSync2("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
 }
@@ -4917,8 +5057,8 @@ function flowWorktrees(repoRoot, flowId) {
   } catch {
   }
   const prefixes = [
-    join10(base, ".worktrees") + "/" + flowId + "-",
-    join10(dirname2(base), basename(base) + ".ai-flow-worktrees") + "/" + flowId + "-"
+    join9(base, ".worktrees") + "/" + flowId + "-",
+    join9(dirname3(base), basename(base) + ".ai-flow-worktrees") + "/" + flowId + "-"
   ];
   const found = [];
   let cur = null;
@@ -4984,10 +5124,10 @@ ${worktreeList}
   let snapshotCommitted = false;
   try {
     git(["checkout", "-b", branchName], repoRoot);
-    const snapshotDir = join10(repoRoot, "docs", flowName, state.flow_id);
+    const snapshotDir = join9(repoRoot, "docs", flowName, state.flow_id);
     mkdirSync3(snapshotDir, { recursive: true });
-    writeFileSync3(
-      join10(snapshotDir, "state-snapshot.json"),
+    writeFileSync4(
+      join9(snapshotDir, "state-snapshot.json"),
       JSON.stringify(state, null, 2)
     );
     git(["add", "-A"], repoRoot);
@@ -5012,8 +5152,8 @@ Error: ${String(err)}
 Flow remains active \u2014 active.json was NOT deleted.`;
     return { action: "deny", reason };
   }
-  const activeJsonPath2 = join10(repoRoot, ".ai-flow", flowName, "state", "active.json");
-  if (existsSync8(activeJsonPath2)) unlinkSync4(activeJsonPath2);
+  const activeJsonPath2 = join9(repoRoot, ".ai-flow", flowName, "state", "active.json");
+  if (existsSync10(activeJsonPath2)) unlinkSync4(activeJsonPath2);
   await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
   const headNote = !originalBranch || originalBranch === "HEAD" ? `
 Note: you were in detached HEAD state; HEAD is now on '${branchName}'.` : "";
@@ -5026,8 +5166,7 @@ To resume: ${flowName} resume ${branchName}`
 
 // src/lib/commands/resume.ts
 import { execFileSync as execFileSync3 } from "child_process";
-import { existsSync as existsSync9, readFileSync as readFileSync6 } from "fs";
-import { join as join11 } from "path";
+import { existsSync as existsSync11, readFileSync as readFileSync7 } from "fs";
 async function handleResume(repoRoot, flowName, sessionId, branch) {
   const trimmedBranch = branch.trim();
   if (!trimmedBranch) {
@@ -5091,18 +5230,23 @@ resume \u53EA\u7528\u4E8E\u4ECE abort \u7559\u4E0B\u7684\u5FEB\u7167\u5206\u652F
     // block, finds no `base_sha_code`, and is told that case is "extremely rare".
     ...snapshot.base_sha_code ? { base_sha_code: snapshot.base_sha_code } : {},
     last_session_id: null,
-    // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
+    // Append the resuming session to the audit trail instead of replacing it.
+    // `history_session_ids` is declared append-only (state.ts) and its scope is the flow
+    // instance, which survives abort/resume — `flow_id` and `started_at` above are carried
+    // over from the same snapshot. `start.ts` can write `[sessionId]` because a brand-new
+    // flow has no history to keep; copying that shape here dropped every earlier owner,
+    // even though `abort` serialises the whole state and so hands the old list back.
+    // Deduplicated to match the append side in session-handler.ts. Ownership
     // (last_session_id) is left null so the next SessionStart binds normally.
-    history_session_ids: [sessionId],
+    history_session_ids: [.../* @__PURE__ */ new Set([...snapshot.history_session_ids ?? [], sessionId])],
     context_size: 0,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
     first_prompt_handled: false
   };
   await writeActiveState(repoRoot, flowName, restored);
   await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
   const stageCfg = getStageConfig(config, currentStage);
-  const promptPath = join11(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
   const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
 current_stage: ${currentStage}
 requirement: ${restored.requirement}
@@ -5110,9 +5254,9 @@ requirement: ${restored.requirement}
 ` + body;
   const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
   let stageContent = "";
-  if (existsSync9(promptPath)) {
+  if (existsSync11(promptPath)) {
     stageContent = injectableStagePrompt(
-      renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
+      renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName),
       promptPath,
       assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
       (text) => materializeRenderedPrompt(repoRoot, flowName, currentStage, text)
@@ -5136,30 +5280,35 @@ async function handleStatus(repoRoot, flowName) {
   ];
   let gateActive = false;
   let gateTerminal = false;
+  let wrapUpDocs = [];
   try {
     const config = await loadFlowConfig(repoRoot, flowName);
     const signal = readSignal(repoRoot, flowName);
     gateActive = isGatePending(signal, config, state.current_stage);
     gateTerminal = nextStage(config, state.current_stage) === null;
+    wrapUpDocs = resolveDocsPaths(
+      getStageConfig(config, state.current_stage).docs_paths ?? [],
+      state.flow_id
+    );
   } catch {
   }
   if (gateActive) {
     lines.push("", gateTerminal ? `Gate pending \u2014 run '${flowName} approve' to confirm and end the flow.` : `Gate pending \u2014 run '${flowName} approve' to advance to the next stage.`);
   }
-  if (state.context_warning.warned) {
-    lines.push("", `Context warning: ${state.context_warning.warned_at_pct}% used`);
+  if (state.context_wrap_up.at_pct !== null) {
+    lines.push("", wrapUpDocs.length > 0 ? `Context wrap-up started at ${state.context_wrap_up.at_pct}% used \u2014 writes to the codebase are refused; writes to ${wrapUpDocs.join(", ")} stay open so a handoff can land.` : `Context wrap-up started at ${state.context_wrap_up.at_pct}% used \u2014 stage '${state.current_stage}' declares no docs_paths, so no write is being refused (refusing them would leave nowhere to write the handoff). Land the handoff in the repo and /clear.`);
   }
   return { action: "allow", additionalContext: lines.join("\n") };
 }
 
 // src/lib/commands/help.ts
-import { existsSync as existsSync10, readFileSync as readFileSync7 } from "fs";
-import { join as join12 } from "path";
+import { existsSync as existsSync12, readFileSync as readFileSync8 } from "fs";
+import { join as join10 } from "path";
 async function handleHelp(repoRoot, flowName) {
   if (flowName) {
-    const helperPath = join12(repoRoot, ".ai-flow", flowName, "helper.md");
-    if (existsSync10(helperPath)) {
-      const content = readFileSync7(helperPath, "utf-8");
+    const helperPath = join10(flowDefDir(repoRoot, flowName), "helper.md");
+    if (existsSync12(helperPath)) {
+      const content = readFileSync8(helperPath, "utf-8");
       return { action: "allow", additionalContext: content };
     }
     try {
@@ -5256,7 +5405,7 @@ async function handleUserPrompt(input2) {
       } catch {
       }
       await patchActiveState(active.repoRoot, active.flowName, { first_prompt_handled: true });
-      const flowRoot = join13(active.repoRoot, ".ai-flow", active.flowName);
+      const flowRoot = join11(active.repoRoot, ".ai-flow", active.flowName);
       const statusLine = flowStatusLine({
         flowName: active.flowName,
         stageId: active.state.current_stage,
@@ -5294,7 +5443,7 @@ async function handleUserPrompt(input2) {
   }
   const MUTATING = ["start", "abort", "approve", "resume"];
   if (active?.viaSibling && subCmd && MUTATING.includes(subCmd)) {
-    const ownerState = dirname3(activeJsonPath(active.repoRoot, active.flowName));
+    const ownerState = dirname4(activeJsonPath(active.repoRoot, active.flowName));
     return resultToHookOutput({
       action: "deny",
       reason: `[ai-flow] \u62D2\u7EDD\u6267\u884C '${flowName} ${subCmd}'\uFF1A\u672C session \u89E3\u6790\u5230\u7684\u6D41\u7A0B '${active.flowName}' **\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA**\uFF0C\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728\u90A3\u91CC\u800C\u4E0D\u662F\u4F60\u73B0\u5728\u8FD9\u4E2A\u76EE\u5F55\u3002
@@ -5347,7 +5496,7 @@ Valid commands: ${VALID_COMMANDS.join(", ")}`
 // src/hooks/userprompt.ts
 var raw = (() => {
   try {
-    return readFileSync8(0, "utf-8");
+    return readFileSync9(0, "utf-8");
   } catch {
     return "{}";
   }

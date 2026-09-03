@@ -4,9 +4,7 @@ import {
   readFileSync,
   readdirSync,
   mkdirSync,
-  cpSync,
-  rmSync,
-  chmodSync,
+  writeFileSync,
   appendFileSync,
   realpathSync
 } from "fs";
@@ -29,13 +27,6 @@ var PROJECT_MARKERS = [
   "Gemfile",
   "pnpm-workspace.yaml"
 ];
-var ENGINE_OWNED_ENTRIES = /* @__PURE__ */ new Set(["state"]);
-function wipeTemplateEntries(dest) {
-  for (const entry of readdirSync(dest)) {
-    if (ENGINE_OWNED_ENTRIES.has(entry)) continue;
-    rmSync(join(dest, entry), { recursive: true, force: true });
-  }
-}
 function liveFlowAt(dest) {
   const p = join(dest, "state", "active.json");
   if (!existsSync(p)) return null;
@@ -46,27 +37,6 @@ function liveFlowAt(dest) {
   } catch {
     return null;
   }
-}
-function stageIdsOf(flowDir) {
-  try {
-    const cfg = JSON.parse(readFileSync(join(flowDir, "config.json"), "utf-8"));
-    return (cfg.stages ?? []).map((s) => String(s.id ?? "")).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-function checkForceReinstall(src, dest, flowName) {
-  const live = liveFlowAt(dest);
-  if (!live) return { ok: true, live: null };
-  const incoming = stageIdsOf(src);
-  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { ok: true, live };
-  return {
-    ok: false,
-    reason: `\u62D2\u7EDD\u8986\u76D6:\u8FD9\u91CC\u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow\uFF08${live.flow_id}\uFF09\uFF0C\u5B83\u505C\u5728 stage '${live.current_stage}'\uFF0C
-\u800C\u65B0\u6A21\u677F\u7684 config.json \u91CC\u6CA1\u6709\u8FD9\u4E2A stage\uFF08\u65B0\u7684\u662F:${incoming.join(", ")}\uFF09\u3002
-\u76F4\u63A5\u8986\u76D6\u4F1A\u8BA9\u5B83\u5728\u4E0B\u4E00\u6B21\u5DE5\u5177\u8C03\u7528\u65F6\u629B\u5F02\u5E38\u3001\u65E0\u6CD5\u7EE7\u7EED,\u800C\u4E14 state/ \u4E0D\u5728 git \u91CC\u3001\u6551\u4E0D\u56DE\u6765\u3002
-\u5148\u9009\u4E00\u6761:\u2460 \u7B49\u5B83\u8DD1\u5B8C\u518D\u5347\u7EA7;\u2461 \`${flowName} abort\` \u5B58\u5FEB\u7167\u540E\u518D\u5347\u7EA7;\u2462 \u624B\u5DE5\u628A state/active.json \u7684 current_stage \u6539\u6210\u65B0\u914D\u7F6E\u91CC\u7684\u5BF9\u5E94 stage id,\u518D\u91CD\u8DD1\u672C\u547D\u4EE4\u3002`
-  };
 }
 function builtinFlows() {
   if (!existsSync(PLUGIN_FLOWS_DIR)) return [];
@@ -166,18 +136,41 @@ function fail(msg) {
   process.stderr.write(msg + "\n");
   process.exit(1);
 }
+function overrideKeys(configPath) {
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    return Object.keys(parsed);
+  } catch {
+    return [];
+  }
+}
+function stageIdsOf(configPath) {
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+    return (cfg.stages ?? []).map((s) => String(s.id ?? "")).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+function forceWouldStrandFlow(defConfigPath, overridePath, live) {
+  if (!live) return { stranded: false };
+  if (!overrideKeys(overridePath).includes("stages")) return { stranded: false };
+  const incoming = stageIdsOf(defConfigPath);
+  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { stranded: false };
+  return { stranded: true, incoming };
+}
 function install(flow, dir, force) {
-  const src = join(PLUGIN_FLOWS_DIR, flow);
-  if (!existsSync(join(src, "config.json"))) {
+  const defDir = join(PLUGIN_FLOWS_DIR, flow);
+  if (!existsSync(join(defDir, "config.json"))) {
     fail(`\u5185\u7F6E flow '${flow}' \u4E0D\u5B58\u5728\u3002\u53EF\u7528:${builtinFlows().map((f) => f.name).join(", ") || "(\u65E0)"}`);
   }
   const target = resolve(dir);
   if (!existsSync(target)) fail(`\u76EE\u6807\u76EE\u5F55\u4E0D\u5B58\u5728:${target}`);
   const dest = join(target, ".ai-flow", flow);
+  const overridePath = join(dest, "config.json");
+  const alreadyInstalled = existsSync(overridePath);
   const lines = [];
-  if (existsSync(join(dest, "config.json")) && !force) {
-    fail(`'${flow}' \u5DF2\u5B89\u88C5\u5728 ${target}/.ai-flow/${flow}\u3002\u5982\u9700\u8986\u76D6,\u91CD\u8DD1\u5E76\u52A0 --force\u3002`);
-  }
   const outer = outerAiFlow(target);
   if (outer) {
     lines.push(`\u26A0\uFE0F  \u5916\u5C42\u76EE\u5F55\u5DF2\u5B58\u5728 .ai-flow:${outer}`);
@@ -185,42 +178,65 @@ function install(flow, dir, force) {
     lines.push(`    **\u5B8C\u5168\u5C4F\u853D** ${outer}/.ai-flow \u7684 flow(\u8FD9\u662F\u9879\u76EE\u9694\u79BB\u7684\u9884\u671F\u884C\u4E3A)\u3002\u786E\u8BA4\u8FD9\u662F\u4F60\u8981\u7684\u3002`);
     lines.push("");
   }
-  if (force && existsSync(dest)) {
-    const check = checkForceReinstall(src, dest, flow);
-    if (!check.ok) fail(`${check.reason}
-\u4F4D\u7F6E:${dest}`);
-    if (check.live) {
-      lines.push(`\u26A0\uFE0F  ${dest} \u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow:${check.live.flow_id}\uFF08\u5F53\u524D stage:${check.live.current_stage}\uFF09`);
-      lines.push(`    \u8986\u76D6\u4F1A**\u7ACB\u5373\u6362\u6389\u5B83\u540E\u7EED\u8981\u7528\u7684 stage \u63D0\u793A\u8BCD / references / scripts**;`);
-      lines.push(`    \u8FD0\u884C\u72B6\u6001(state/)\u539F\u6837\u4FDD\u7559,flow \u4E0D\u4F1A\u4E2D\u65AD\u3002\u82E5\u8BE5 session \u8FD8\u5F00\u7740,\`/reload-plugins\` \u540E\u7EE7\u7EED\u5373\u53EF\u3002`);
-      lines.push("");
-    }
-    wipeTemplateEntries(dest);
+  const live = liveFlowAt(dest);
+  if (live) {
+    lines.push(`\u2139\uFE0F  ${dest} \u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow:${live.flow_id}(\u5F53\u524D stage:${live.current_stage})`);
+    lines.push(`    \u5B83\u7684 stage \u63D0\u793A\u8BCD / references / scripts \u88C5\u5728\u63D2\u4EF6\u91CC\u3001\u968F\u63D2\u4EF6\u7248\u672C\u8D70,\u672C\u547D\u4EE4\u4E00\u4E2A\u5B57\u90FD\u4E0D\u4F1A\u52A8;`);
+    lines.push(`    \u8FD0\u884C\u72B6\u6001(state/)\u539F\u6837\u4FDD\u7559,flow \u4E0D\u4F1A\u4E2D\u65AD\u3002`);
+    lines.push("");
   }
   mkdirSync(dest, { recursive: true });
-  cpSync(src, dest, { recursive: true });
-  const preflightSh = join(dest, "preflight.sh");
-  if (existsSync(preflightSh)) {
-    try {
-      chmodSync(preflightSh, 493);
-    } catch {
+  if (!alreadyInstalled) {
+    writeFileSync(overridePath, "{}\n");
+    lines.push(`\u2705 \u5DF2\u5B89\u88C5 '${flow}' \u2192 ${dest}`);
+  } else if (!force) {
+    lines.push(`\u2705 '${flow}' \u5DF2\u88C5\u5728 ${dest},\u672C\u6B21\u53EA\u8865\u9F50\u7F3A\u5931\u7684\u90E8\u5206\u3002`);
+    lines.push(`    config.json(\u9879\u76EE\u4FA7\u7A00\u758F\u8986\u76D6\u5C42)\u4FDD\u6301\u539F\u6837\u672A\u52A8\u2014\u2014\u8981\u628A\u5B83\u91CD\u7F6E\u6210 {} \u8BF7\u91CD\u8DD1\u5E76\u52A0 --force\u3002`);
+  } else {
+    const strand = forceWouldStrandFlow(join(defDir, "config.json"), overridePath, live);
+    if (strand.stranded) {
+      fail(
+        `\u62D2\u7EDD\u91CD\u7F6E:\u8FD9\u91CC\u6709\u4E00\u4E2A\u6B63\u5728\u8DD1\u7684 flow(${live.flow_id}),\u5B83\u505C\u5728 stage '${live.current_stage}',
+\u800C\u9879\u76EE\u4FA7 config.json \u7528\u81EA\u5DF1\u7684 stages \u8986\u76D6\u4E86\u63D2\u4EF6\u7684\u9636\u6BB5\u8868\u3002\u91CD\u7F6E\u6210 {} \u4E4B\u540E\u9636\u6BB5\u8868\u6362\u6210\u63D2\u4EF6\u90A3\u4EFD
+(${strand.incoming.join(", ")}),\u91CC\u9762\u6CA1\u6709 '${live.current_stage}'\u3002
+\u540E\u679C\u4E0D\u662F\u62A5\u9519\u800C\u662F**\u9759\u9ED8\u5931\u6548**:\u5F15\u64CE\u4E24\u6761\u70ED\u8DEF\u5F84\u90FD\u4F1A\u6355\u83B7\u5F02\u5E38\u5E76\u653E\u884C,\u4E8E\u662F\u65B0 session \u4E0D\u518D\u6CE8\u5165
+stage \u63D0\u793A\u8BCD\u3001PreToolUse \u7684\u5B88\u536B\u5168\u90E8 fail open\u3001signal \u4E5F\u4E0D\u518D\u88AB\u62E6\u622A,flow \u6C38\u8FDC\u63A8\u8FDB\u4E0D\u4E0B\u53BB,
+\u53EA\u5728 flow.log \u7559\u4E00\u884C ERROR\u3002
+\u5148\u9009\u4E00\u6761:\u2460 \u7B49\u5B83\u8DD1\u5B8C\u518D\u91CD\u7F6E;\u2461 \`${flow} abort\` \u5B58\u5FEB\u7167\u540E\u518D\u91CD\u7F6E;\u2462 \u624B\u5DE5\u628A state/active.json \u7684 current_stage \u6539\u6210\u63D2\u4EF6\u9636\u6BB5\u8868\u91CC\u7684\u5BF9\u5E94 id,\u518D\u91CD\u8DD1\u672C\u547D\u4EE4\u3002
+\u4F4D\u7F6E:${dest}`
+      );
     }
+    const kept = overrideKeys(overridePath);
+    if (kept.length > 0) {
+      lines.push(`\u26A0\uFE0F  --force:\u4E0B\u9762\u8FD9\u4EFD\u9879\u76EE\u4FA7 config.json \u88AB\u91CD\u7F6E\u6210\u4E86 {},\u539F\u5185\u5BB9\u5728\u6B64(git \u91CC\u4E5F\u8FD8\u80FD\u627E\u56DE):`);
+      lines.push("```json");
+      lines.push(readFileSync(overridePath, "utf-8").trimEnd());
+      lines.push("```");
+      lines.push(`    \u91CD\u7F6E\u540E\u672C flow \u5168\u90E8\u4F7F\u7528\u63D2\u4EF6\u9ED8\u8BA4\u503C(${join(defDir, "config.json")})\u3002`);
+      if (kept.includes("stages")) {
+        lines.push(`    \u26A0\uFE0F \u4E22\u6389\u7684\u952E\u91CC\u6709 stages:\u9636\u6BB5\u8868\u5C06\u6362\u56DE\u63D2\u4EF6\u9ED8\u8BA4\u7684\u90A3\u4E00\u4EFD\u3002`);
+      }
+      lines.push("");
+    }
+    writeFileSync(overridePath, "{}\n");
+    lines.push(`\u2705 \u5DF2\u91CD\u7F6E '${flow}' \u7684\u9879\u76EE\u4FA7\u8986\u76D6\u5C42 \u2192 ${overridePath}`);
   }
+  mkdirSync(join(dest, "state"), { recursive: true });
   ensureGitignore(target);
-  lines.push(`\u2705 \u5DF2\u5B89\u88C5 '${flow}' \u2192 ${dest}`);
   lines.push("");
-  const preflightResult = runPreflight(dest, target);
+  const preflightResult = runPreflight(defDir, target, dest);
   if (preflightResult !== null) {
-    lines.push(preflightResult.ok ? "\u2705 preflight \u901A\u8FC7" : "\u274C preflight \u672A\u901A\u8FC7(flow \u5DF2\u5B89\u88C5,\u8865\u9F50\u4E0B\u5217\u4F9D\u8D56\u540E\u5373\u53EF\u542F\u52A8):");
+    lines.push(preflightResult.ok ? "\u2705 preflight \u901A\u8FC7" : "\u274C preflight \u672A\u901A\u8FC7(\u951A\u70B9\u5DF2\u5EFA\u597D,\u8865\u9F50\u4E0B\u5217\u4F9D\u8D56\u540E\u5373\u53EF\u542F\u52A8):");
     if (preflightResult.output.trim()) lines.push(preflightResult.output.trimEnd());
     lines.push("");
   }
   let desc = "";
   try {
-    desc = String(JSON.parse(readFileSync(join(dest, "config.json"), "utf-8")).description ?? "");
+    desc = String(JSON.parse(readFileSync(join(defDir, "config.json"), "utf-8")).description ?? "");
   } catch {
   }
   lines.push(`\u{1F4CB} ${flow}${desc ? " \u2014 " + desc : ""}`);
+  lines.push(`\u6D41\u7A0B\u5B9A\u4E49(\u968F\u63D2\u4EF6\u7248\u672C\u8D70,\u4E0D\u590D\u5236\u5230\u9879\u76EE):${defDir}`);
   lines.push(`\u951A\u70B9(\u9879\u76EE\u6839):${target}`);
   lines.push(`\u542F\u52A8:\u5728 ${target} \u76EE\u5F55\u7684 session \u91CC\u8F93\u5165  ${flow} start <\u9700\u6C42\u63CF\u8FF0>`);
   lines.push(`\u67E5\u770B\u6D41\u7A0B:${flow} help`);
@@ -245,14 +261,16 @@ function ensureGitignore(target) {
   } catch {
   }
 }
-function runPreflight(flowDir, cwd) {
+function runPreflight(defDir, cwd, anchorDir) {
   let res;
-  const cjs = join(flowDir, "preflight.cjs");
-  const mjs = join(flowDir, "preflight.mjs");
-  const sh = join(flowDir, "preflight.sh");
-  if (existsSync(cjs)) res = spawnSync(process.execPath, [cjs], { cwd, encoding: "utf-8", timeout: 3e4 });
-  else if (existsSync(mjs)) res = spawnSync(process.execPath, [mjs], { cwd, encoding: "utf-8", timeout: 3e4 });
-  else if (existsSync(sh)) res = spawnSync("sh", [sh], { cwd, encoding: "utf-8", timeout: 3e4 });
+  const env = { ...process.env, AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: cwd };
+  const opts = { cwd, env, encoding: "utf-8", timeout: 3e4 };
+  const cjs = join(defDir, "preflight.cjs");
+  const mjs = join(defDir, "preflight.mjs");
+  const sh = join(defDir, "preflight.sh");
+  if (existsSync(cjs)) res = spawnSync(process.execPath, [cjs], opts);
+  else if (existsSync(mjs)) res = spawnSync(process.execPath, [mjs], opts);
+  else if (existsSync(sh)) res = spawnSync("sh", [sh], opts);
   else return null;
   const output = [res.stdout, res.stderr].filter(Boolean).join("\n");
   return { ok: res.status === 0, output };
@@ -288,9 +306,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 export {
   builtinFlows,
-  checkForceReinstall,
   detect,
   ensureGitignore,
-  nearestProjectRoot,
-  wipeTemplateEntries
+  forceWouldStrandFlow,
+  install,
+  nearestProjectRoot
 };

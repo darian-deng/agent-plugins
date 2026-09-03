@@ -6,11 +6,11 @@ var __export = (target, all) => {
 };
 
 // src/hooks/session.ts
-import { readFileSync as readFileSync6 } from "fs";
+import { readFileSync as readFileSync7 } from "fs";
 
 // src/lib/session-handler.ts
-import { readFileSync as readFileSync5, existsSync as existsSync5 } from "fs";
-import { join as join6, dirname as dirname2 } from "path";
+import { readFileSync as readFileSync6, existsSync as existsSync7 } from "fs";
+import { dirname as dirname3 } from "path";
 
 // src/lib/state.ts
 import {
@@ -113,11 +113,18 @@ function statePath(repoRoot, flowName, file) {
 function stateDir(repoRoot, flowName) {
   return join2(repoRoot, ".ai-flow", flowName, "state");
 }
+function normalizeActiveState(parsed) {
+  const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
+  if (rest.context_wrap_up && typeof rest.context_wrap_up === "object") return rest;
+  const latched = legacyLatched === true;
+  const atPct = latched ? legacy?.warned_at_pct ?? null : null;
+  return { ...rest, context_wrap_up: { at_pct: atPct } };
+}
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
   if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync2(path, "utf-8"));
+    return normalizeActiveState(JSON.parse(readFileSync2(path, "utf-8")));
   } catch {
     return null;
   }
@@ -362,8 +369,8 @@ function flowStatusLine(opts) {
 }
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
+import { join as join4 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -4424,11 +4431,14 @@ var StageConfigSchema = external_exports.object({
    * The flow's own documents. Two jobs, and the second one applies to EVERY stage:
    *  1. When `write_scope` is `docs_only`, this is the allow-list (required, non-empty).
    *  2. Whatever the write scope, these paths stay writable while the session is
-   *     context-blocked — the block stops new work, it must not also block the safe
-   *     exit. A flow whose contract is "everything a later session needs is on disk"
-   *     has to be able to put it there before `/clear`; an `unrestricted` stage that
-   *     leaves this unset gets no such escape and the handoff cannot be written.
-   * So set it on unrestricted stages too, even though scope enforcement ignores it there.
+   *     wrapping up for a `/clear` — the refusal stops new work, it must not also
+   *     block the safe exit. A flow whose contract is "everything a later session
+   *     needs is on disk" has to be able to put it there before `/clear`.
+   * So set it on unrestricted stages too, even though scope enforcement ignores it
+   * there: an `unrestricted` stage that leaves this unset is the one shape where the
+   * wrap-up cannot be enforced at all. Refusing the codebase there would leave the
+   * session with nowhere to write its handoff, so pretool-handler refuses nothing on
+   * such a stage and the wrap-up degrades to the injected brief.
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
@@ -4441,10 +4451,33 @@ var StageConfigSchema = external_exports.object({
   }
 );
 var ContextConfigSchema = external_exports.object({
-  warn_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  block_at_pct: external_exports.number().int().min(1).max(99).optional(),
-  rewarn_delta_pct: external_exports.number().int().min(1).optional()
+  /**
+   * Context occupancy (percent of the window) at which this flow's session starts
+   * wrapping up FOR a `/clear`: the engine refuses further writes to the codebase
+   * while leaving the flow's own `docs_paths` open, so the handoff can still land
+   * (pretool-handler enforces both halves — on a stage that declares no `docs_paths`
+   * there is no safe exit to keep open, so it refuses nothing and the wrap-up is the
+   * injected brief alone). Absent → `DEFAULT_WRAP_UP_AT_PCT`.
+   *
+   * Replaces the earlier two-level `warn_at_pct` / `block_at_pct` pair, and the
+   * `rewarn_delta_pct` that throttled the repeat reminder between them (the brief
+   * now fires exactly once, at the crossing — see posttool-handler.ts). All three
+   * keys are DROPPED rather than rejected, which is deliberate: a validation error
+   * makes `loadFlowConfig` throw, and pretool-handler's catch-all turns that into
+   * `return null` — i.e. every guard that runs AFTER the config load fails OPEN.
+   * Installed flow copies still carrying the old keys (including live per-ticket
+   * worktrees this change cannot reach) would lose the write-scope guard, the
+   * control-plane Bash interception (signal / active.json / scripts / stages) and
+   * the wrap-up refusal itself, along with the threshold. The non-owner write guard
+   * is NOT among them: it depends only on state plus tool name and is deliberately
+   * placed before `loadFlowConfig`, precisely so a broken config cannot fail open
+   * into letting a foreign session write. Both shipped flows set `block_at_pct: 60`,
+   * the same number the default lands on, so a stale copy keeps behaving as
+   * configured until `/ai-flow:update` rewrites its config.json.
+   */
+  wrap_up_at_pct: external_exports.number().int().min(1).max(99).optional()
 });
+var LIVE_CONTEXT_KEYS = new Set(Object.keys(ContextConfigSchema.shape));
 var FlowConfigSchema = external_exports.object({
   schema_version: external_exports.literal("1.0"),
   name: external_exports.string().min(1),
@@ -4452,6 +4485,26 @@ var FlowConfigSchema = external_exports.object({
   context: ContextConfigSchema.optional(),
   stages: external_exports.array(StageConfigSchema).min(1, "at least one stage is required")
 });
+
+// src/lib/flow-paths.ts
+import { existsSync as existsSync3 } from "fs";
+import { join as join3, dirname as dirname2, resolve as resolve2 } from "path";
+import { fileURLToPath } from "url";
+var __dirname = dirname2(fileURLToPath(import.meta.url));
+var PLUGIN_ROOT = resolve2(__dirname, "..", "..");
+var PLUGIN_FLOWS_DIR = join3(PLUGIN_ROOT, ".ai-flow");
+function isBuiltinFlow(flowName) {
+  return existsSync3(join3(PLUGIN_FLOWS_DIR, flowName, "config.json"));
+}
+function flowDefDir(repoRoot, flowName) {
+  return isBuiltinFlow(flowName) ? join3(PLUGIN_FLOWS_DIR, flowName) : join3(repoRoot, ".ai-flow", flowName);
+}
+function flowAnchorDir(repoRoot, flowName) {
+  return join3(repoRoot, ".ai-flow", flowName);
+}
+function stagePromptPath(repoRoot, flowName, promptRel) {
+  return join3(flowDefDir(repoRoot, flowName), promptRel);
+}
 
 // src/lib/flow-config-loader.ts
 var FlowNotFoundError = class extends Error {
@@ -4473,15 +4526,32 @@ ${details}`);
     this.name = "FlowConfigValidationError";
   }
 };
-async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join3(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName);
-  let raw2;
+function readJson(path) {
   try {
-    raw2 = JSON.parse(readFileSync3(configPath, "utf-8"));
+    const v = JSON.parse(readFileSync3(path, "utf-8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v)) {
+      throw new Error("config.json must contain a JSON object");
+    }
+    return v;
   } catch (e) {
-    throw new FlowConfigParseError(configPath, e);
+    throw new FlowConfigParseError(path, e);
   }
+}
+function mergeConfig(defaults, overrides) {
+  const merged = { ...defaults, ...overrides };
+  const dCtx = defaults["context"];
+  const oCtx = overrides["context"];
+  if (dCtx && typeof dCtx === "object" && !Array.isArray(dCtx) && oCtx && typeof oCtx === "object" && !Array.isArray(oCtx)) {
+    merged["context"] = { ...dCtx, ...oCtx };
+  }
+  return merged;
+}
+async function loadFlowConfig(repoRoot, flowName) {
+  const configPath = join4(repoRoot, ".ai-flow", flowName, "config.json");
+  if (!existsSync4(configPath)) throw new FlowNotFoundError(flowName);
+  const defPath = join4(flowDefDir(repoRoot, flowName), "config.json");
+  const overrides = readJson(configPath);
+  const raw2 = defPath === configPath ? overrides : mergeConfig(readJson(defPath), overrides);
   const result = FlowConfigSchema.safeParse(raw2);
   if (!result.success) {
     const details = result.error.issues.map((i) => `  [${i.path.join(".")}] ${i.message}`).join("\n");
@@ -4510,11 +4580,9 @@ function contextWindowForModel(model) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
-import { join as join5 } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
 
 // src/lib/prompt-render.ts
-import { join as join4 } from "path";
 var INLINE_INJECTION_BUDGET = 1e4;
 function injectableStagePrompt(rendered, promptPath, overhead, materialize) {
   if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
@@ -4538,16 +4606,15 @@ function assembledOverhead(assemble) {
   return assemble("").length;
 }
 function renderPrompt(content, repoRoot, flowName) {
-  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
-  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_def\s*\}\}/g, flowDefDir(repoRoot, flowName)).replace(/\{\{\s*flow_root\s*\}\}/g, flowAnchorDir(repoRoot, flowName));
   return substituted + "\n" + writtenDocLengthNote();
 }
 function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
-  const flowRoot = join4(repoRoot, ".ai-flow", flowName);
   const lines = [
     `[ai-flow:paths]`,
     `project_root: ${repoRoot}`,
-    `flow_root: ${flowRoot}`
+    `flow_root: ${flowAnchorDir(repoRoot, flowName)}`,
+    `flow_def: ${flowDefDir(repoRoot, flowName)}`
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join("\n") + "\n\n";
@@ -4584,9 +4651,9 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const next = nextStage(config, current);
   if (!next) {
     const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync4(activeJson)) unlinkSync3(activeJson);
+    if (existsSync5(activeJson)) unlinkSync3(activeJson);
     const sig = signalPath(repoRoot, flowName);
-    if (existsSync4(sig)) unlinkSync3(sig);
+    if (existsSync5(sig)) unlinkSync3(sig);
     clearRenderedPrompt(repoRoot, flowName);
     await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
     return {
@@ -4602,7 +4669,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
   }
   const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync4(sigFile)) unlinkSync3(sigFile);
+  if (existsSync5(sigFile)) unlinkSync3(sigFile);
   await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
   const nextStageCfg = getStageConfig(config, next);
   const assemble = (body) => `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
@@ -4612,10 +4679,10 @@ ${body}
 \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
 
 \u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
-  const promptPath = join5(repoRoot, ".ai-flow", flowName, nextStageCfg.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, nextStageCfg.prompt);
   const gateNote = nextStageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
   let promptContent = "";
-  if (existsSync4(promptPath)) {
+  if (existsSync5(promptPath)) {
     try {
       promptContent = injectableStagePrompt(
         renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
@@ -4628,6 +4695,71 @@ ${body}
   }
   promptContent += gateNote;
   return { additionalContext: assemble(promptContent) };
+}
+
+// src/lib/legacy-cleanup.ts
+import { existsSync as existsSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync3, rmSync } from "fs";
+import { join as join5 } from "path";
+var LEGACY_ENTRIES = [
+  "stages",
+  "references",
+  "scripts",
+  "helper.md",
+  "preflight.cjs",
+  "preflight.mjs",
+  "preflight.sh"
+];
+function readJsonObject(path) {
+  try {
+    const v = JSON.parse(readFileSync5(path, "utf-8"));
+    if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+function pruneLegacyInstall(repoRoot, flowName) {
+  if (!isBuiltinFlow(flowName)) return null;
+  const anchorDir = join5(repoRoot, ".ai-flow", flowName);
+  const configPath = join5(anchorDir, "config.json");
+  if (!existsSync6(configPath)) return null;
+  const removed = [];
+  for (const entry of LEGACY_ENTRIES) {
+    const p = join5(anchorDir, entry);
+    if (!existsSync6(p)) continue;
+    rmSync(p, { recursive: true, force: true });
+    removed.push(entry);
+  }
+  const configKeysDropped = [];
+  const project = readJsonObject(configPath);
+  const defaults = readJsonObject(join5(flowDefDir(repoRoot, flowName), "config.json"));
+  if (project && defaults) {
+    const kept = {};
+    const defaultContext = defaults["context"] ?? {};
+    for (const [key, value] of Object.entries(project)) {
+      if (key !== "context") {
+        configKeysDropped.push(key);
+        continue;
+      }
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        configKeysDropped.push("context");
+        continue;
+      }
+      const keptContext = {};
+      for (const [ck, cv] of Object.entries(value)) {
+        const isDead = !LIVE_CONTEXT_KEYS.has(ck);
+        const isInheritedDefault = JSON.stringify(cv) === JSON.stringify(defaultContext[ck]);
+        if (isDead || isInheritedDefault) configKeysDropped.push(`context.${ck}`);
+        else keptContext[ck] = cv;
+      }
+      if (Object.keys(keptContext).length > 0) kept["context"] = keptContext;
+    }
+    if (configKeysDropped.length > 0) {
+      writeFileSync3(configPath, JSON.stringify(kept, null, 2) + "\n");
+    }
+  }
+  if (removed.length === 0 && configKeysDropped.length === 0) return null;
+  return { removed, configKeysDropped };
 }
 
 // src/lib/session-handler.ts
@@ -4645,7 +4777,7 @@ async function handleSessionStart(input2) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_READONLY owner=${state.last_session_id}`);
       const activeFile = activeJsonPath(repoRoot, flowName);
       const statusLine2 = crossCheckout ? `[ai-flow:${flowName}] \u672C session \u53EA\u8BFB \u2014\u2014 \u4F46\u8BE5 flow \u7684\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA\uFF0C\u53EF\u80FD\u662F\u8BEF\u9501\uFF08\u8BE6\u89C1\u6CE8\u5165\u8BF4\u660E\uFF09` : `[ai-flow:${flowName}] \u5DE5\u7A0B\u8FDB\u884C\u4E2D\uFF0C\u672C session \u53EA\u8BFB\uFF08\u7981\u6B62\u4FEE\u6539\u9879\u76EE\u4E0E\u6D41\u7A0B\u547D\u4EE4\uFF09`;
-      const stateDirOfOwner = dirname2(activeFile);
+      const stateDirOfOwner = dirname3(activeFile);
       const lines = [
         crossCheckout ? `[ai-flow] \u672C\u4ED3\u5E93\u5DF2\u5728\u8FDB\u884C\u6D41\u7A0B '${flowName}'\uFF08\u7531\u53E6\u4E00 session \u63A7\u5236\uFF09\uFF0C\u4F46**\u5B83\u7684\u951A\u70B9\u4E0D\u5728\u4F60\u73B0\u5728\u8FD9\u4E2A\u68C0\u51FA\u91CC**\u3002` : `[ai-flow] \u5F53\u524D\u5DE5\u7A0B\u5DF2\u5728\u8FDB\u884C\u6D41\u7A0B '${flowName}'\uFF08\u7531\u53E6\u4E00 session \u63A7\u5236\uFF09\u3002`,
         ``,
@@ -4686,6 +4818,18 @@ async function handleSessionStart(input2) {
       }
       return { additionalContext: lines.join("\n"), systemMessage: statusLine2 };
     }
+    try {
+      const pruned = pruneLegacyInstall(repoRoot, flowName);
+      if (pruned) {
+        await appendLog(
+          repoRoot,
+          flowName,
+          session_id,
+          `LEGACY_PRUNED entries=${pruned.removed.join(",") || "none"} config_dropped=${pruned.configKeysDropped.join(",") || "none"}`
+        );
+      }
+    } catch {
+    }
     const isNewSession = state.last_session_id !== session_id;
     const isClear = input2.source === "compact" || input2.source === "clear";
     await patchActiveState(repoRoot, flowName, (cur) => {
@@ -4697,13 +4841,7 @@ async function handleSessionStart(input2) {
         ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
       };
       if (isNewSession || isClear) {
-        patch.context_warning = {
-          warned: false,
-          warned_at_pct: null,
-          warned_at: null,
-          block_reminded_at_pct: null
-        };
-        patch.context_blocked = false;
+        patch.context_wrap_up = { at_pct: null };
         patch.first_prompt_handled = false;
       }
       return patch;
@@ -4736,16 +4874,16 @@ signal\u3001\u8BB0\u8D26\u90FD\u4F1A\u5199\u5230\u90A3\u91CC\uFF0C**\u4E0D\u662F
         recovered: true
       });
       const isTerminal = expectedNext === null;
-      const templatePath = join6(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+      const templatePath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
       let renderedForRead = null;
       let templateReadable = true;
       try {
-        renderedForRead = renderPrompt(readFileSync5(templatePath, "utf-8"), repoRoot, flowName);
+        renderedForRead = renderPrompt(readFileSync6(templatePath, "utf-8"), repoRoot, flowName);
       } catch {
         templateReadable = false;
       }
       const materialized = renderedForRead ? materializeRenderedPrompt(repoRoot, flowName, state.current_stage, renderedForRead) : null;
-      const stagePromptPath = materialized ?? templatePath;
+      const stagePromptPath2 = materialized ?? templatePath;
       const lines = [
         `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0CStage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u7528\u6237\u786E\u8BA4\u3002`,
         ``,
@@ -4753,7 +4891,7 @@ signal\u3001\u8BB0\u8D26\u90FD\u4F1A\u5199\u5230\u90A3\u91CC\uFF0C**\u4E0D\u662F
         isTerminal ? `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve\uFF08\u7EC8\u7AEF\u9636\u6BB5\uFF0Capprove \u540E\u6D41\u7A0B\u7ED3\u675F\uFF09` : `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve`,
         ``,
         `\u26A0\uFE0F \u672C\u6B21\u6CE8\u5165**\u4E0D\u542B**\u672C stage \u7684\u63D0\u793A\u8BCD\u6B63\u6587\u3002\u5F00\u53D1\u8005\u5728 gate \u4E0A\u63D0\u51FA\u4EFB\u4F55\u4FEE\u6539\u3001\u6216\u4F60\u8981\u505A approve \u4E4B\u540E\u7684\u6536\u5C3E\u52A8\u4F5C\u4E4B\u524D\uFF0C**\u5148 Read \u8FD9\u4E2A\u6587\u4EF6**\u5E76\u7167\u5B83\u6267\u884C\uFF1A`,
-        stagePromptPath,
+        stagePromptPath2,
         materialized ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002\uFF09` : templateReadable ? `\u26A0\uFE0F \u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF08\u6E32\u67D3\u526F\u672C\u843D\u76D8\u5931\u8D25\uFF09\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u4E0A\u9762 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002` : `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u6587\u4EF6\u8BFB\u4E0D\u51FA\u6765\uFF08\u53EF\u80FD\u88AB\u6539\u540D\u6216\u5220\u4E86\uFF09\u3002\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84 Read \u4F1A\u5931\u8D25\u2014\u2014\u8FD9\u4E0D\u662F\u78C1\u76D8\u95EE\u9898\uFF0C\u662F flow \u5B9A\u4E49\u4E0E active.json \u91CC\u7684 stage id \u5BF9\u4E0D\u4E0A\u3002\u5148\u628A\u5B83\u4FEE\u597D\uFF0C\u522B\u51ED\u8BB0\u5FC6\u5F80\u4E0B\u505A\u3002`,
         isTerminal ? `\u26D4 \u7EC8\u7AEF stage \u7684 approve \u540E\u52A8\u4F5C\u53EA\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u91CC\uFF0C\u5F15\u64CE\u7684\u6D41\u7A0B\u5B8C\u6210\u6D88\u606F\u4E0D\u4F1A\u91CD\u590D\u5B83\uFF08\u5B83\u53EA\u8BF4\u300C\u603B\u7ED3\u4EA7\u51FA\u3001\u5EFA\u8BAE\u4E0B\u4E00\u6B65\u300D\uFF09\u2014\u2014\u4E0D\u8BFB\u5C31\u52A8\u624B\u4F1A\u9759\u9ED8\u6F0F\u6389\u3002` : `\u26A0\uFE0F \u5728 gate \u4E0A\u6539\u4E86\u4E0A\u6E38\u4EA7\u7269\u65F6\uFF0C\u4ECE\u5B83\u6D3E\u751F\u7684\u4E0B\u6E38\u4EA7\u7269 / \u89C6\u56FE\u5FC5\u987B\u8DDF\u7740\u540C\u6B65\uFF0C\u89C4\u5219\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u4E0E\u5B83\u8DEF\u7531\u5230\u7684 references \u91CC\uFF0C\u6F0F\u4E86\u4E0D\u4F1A\u6709\u4EFB\u4F55\u4E1C\u897F\u62A5\u9519\u3002`,
         ``,
@@ -4782,7 +4920,7 @@ signal\u3001\u8BB0\u8D26\u90FD\u4F1A\u5199\u5230\u90A3\u91CC\uFF0C**\u4E0D\u662F
       return base;
     }
     await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
-    const promptPath = join6(repoRoot, ".ai-flow", flowName, stageCfg.prompt);
+    const promptPath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
     const assemble = (body) => pathsPreamble + [
       `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0C\u5F53\u524D\u5904\u4E8E '${state.current_stage}'\u3002`,
       ``,
@@ -4794,10 +4932,10 @@ signal\u3001\u8BB0\u8D26\u90FD\u4F1A\u5199\u5230\u90A3\u91CC\uFF0C**\u4E0D\u662F
     ].join("\n");
     const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
     let promptContent = "";
-    if (existsSync5(promptPath)) {
+    if (existsSync7(promptPath)) {
       try {
         promptContent = injectableStagePrompt(
-          renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
+          renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
           promptPath,
           assembledOverhead(assemble) + gateNote.length,
           (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
@@ -4826,7 +4964,7 @@ signal\u3001\u8BB0\u8D26\u90FD\u4F1A\u5199\u5230\u90A3\u91CC\uFF0C**\u4E0D\u662F
 // src/hooks/session.ts
 var raw = (() => {
   try {
-    return readFileSync6(0, "utf-8");
+    return readFileSync7(0, "utf-8");
   } catch {
     return "{}";
   }

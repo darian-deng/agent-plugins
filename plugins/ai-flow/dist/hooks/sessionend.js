@@ -87,11 +87,18 @@ function statePath(repoRoot, flowName, file) {
 function stateDir(repoRoot, flowName) {
   return join2(repoRoot, ".ai-flow", flowName, "state");
 }
+function normalizeActiveState(parsed) {
+  const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
+  if (rest.context_wrap_up && typeof rest.context_wrap_up === "object") return rest;
+  const latched = legacyLatched === true;
+  const atPct = latched ? legacy?.warned_at_pct ?? null : null;
+  return { ...rest, context_wrap_up: { at_pct: atPct } };
+}
 async function readActiveState(repoRoot, flowName) {
   const path = statePath(repoRoot, flowName, "active.json");
   if (!existsSync2(path)) return null;
   try {
-    return JSON.parse(readFileSync2(path, "utf-8"));
+    return normalizeActiveState(JSON.parse(readFileSync2(path, "utf-8")));
   } catch {
     return null;
   }
