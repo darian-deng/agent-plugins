@@ -4482,6 +4482,18 @@ function controlPlaneRole(repoRoot, flowName, absPath) {
   if (rest === "state/signal" && !sameAnchor) return "signal";
   return null;
 }
+function staleDefinitionPath(repoRoot, flowName, candidate) {
+  const norm = candidate.replace(/\\/g, "/");
+  const marker = `/.ai-flow/${flowName}/`;
+  const idx = norm.lastIndexOf(marker);
+  if (idx === -1) return null;
+  const rest = norm.slice(idx + marker.length);
+  if (!/^(references|stages)\//.test(rest)) return null;
+  const defDir = flowDefDir(repoRoot, flowName);
+  const candidateDir = norm.slice(0, idx + marker.length - 1);
+  if (realPath(candidateDir) === realPath(defDir)) return null;
+  return `${defDir.replace(/\\/g, "/")}/${rest}`;
+}
 async function handlePreTool(input2) {
   const { cwd, tool_name, tool_input, session_id } = input2;
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
@@ -4496,6 +4508,20 @@ async function handlePreTool(input2) {
 
 \u5982\u9700\u4FEE\u6539\uFF1A\u8BF7\u5728\u63A7\u5236\u8BE5\u6D41\u7A0B\u7684 session \u4E2D\u8FDB\u884C\uFF1B\u82E5\u9700\u7531\u672C session \u63A5\u7BA1\uFF0C\u6267\u884C /clear \u63A5\u7BA1\uFF08\u539F session \u5DF2\u4E0D\u5B58\u5728\u5374\u4ECD\u88AB\u9501\u5B9A\u65F6\uFF0C\u5148\u5C06 ${activeFile} \u7684 "last_session_id" \u6539\u4E3A null \u518D /clear\uFF09\u3002`
       );
+    }
+    if (tool_name === "Read") {
+      const moved = staleDefinitionPath(repoRoot, activeFlowName, String(tool_input["file_path"] ?? ""));
+      if (moved) {
+        await appendLog(repoRoot, activeFlowName, session_id, `STALE_DEF_PATH tool=${tool_name}`);
+        return deny(
+          `\u8FD9\u6761\u8DEF\u5F84\u6307\u7684\u662F flow \u5B9A\u4E49\u5728 0.69.0 \u4E4B\u524D\u7684\u4F4D\u7F6E,\u90A3\u4EFD\u5DF2\u7ECF\u4E0D\u5728\u9879\u76EE\u91CC\u4E86\u3002
+\u5B9A\u4E49(stages / references / scripts)\u73B0\u5728\u968F\u63D2\u4EF6\u7248\u672C\u8D70,\u9879\u76EE\u91CC\u53EA\u5269 config.json \u548C state/\u3002
+
+\u6539\u7528:${moved}
+
+\u26A0\uFE0F \u6D3E\u5B50\u4EE3\u7406\u65F6\u522B\u4ECE\u4E0A\u6587\u91CC\u6284\u8FD9\u4E2A\u7EDD\u5BF9\u8DEF\u5F84\u2014\u2014\u5B83\u5E26\u63D2\u4EF6\u7248\u672C\u53F7,\u63D2\u4EF6\u4E00\u5347\u7EA7\u5C31\u53D8\u3002\u6BCF\u6B21\u4ECE\u6CE8\u5165 context \u9876\u90E8 \`[ai-flow:paths]\` \u7684 \`flow_def:\` \u884C\u73B0\u53D6\u3002`
+        );
+      }
     }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
     if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
