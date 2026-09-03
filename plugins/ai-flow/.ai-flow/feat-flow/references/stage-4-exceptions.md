@@ -1,7 +1,7 @@
 # stage-4 异常处理
 
 > **触发**（撞上任意一条就读对应那节）：pre-commit hook 挡住了 commit；子代理报「需补充信息」或「受阻」；子代理报 task 太大做了 `[partial]` 提交；自己或子代理发现前置 stage 有漏 / 错。
-> `<flow_root>` = 本文件所在目录的上一级。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走）。
 
 ## pre-commit hook 冲突
 
@@ -16,7 +16,7 @@
 
 1. 查答案是否在三份 docs / 该 task 相关 ADR 里
 2. **在** → 改 prompt 加更明确指向（**此处即给 design.md / architecture.md 兜底路径**——`decisions` 切片不足时，把全文路径补给子代理按需读），重 dispatch 一次；仍报 需补充信息 → 停下问开发者
-3. **不在** → 直接停下问开发者，**不许凭空补答案**（主 session 的信息源就是这些 docs；子代理读了还问 = 文档真缺信息 = 主 session 也编不出）。**若反复缺的是某 task 的护栏 → 是 Stage 3 的 `decisions` 切片漏了，走 `<flow_root>/references/revision-protocol.md` 入口 B 回补 plan**
+3. **不在** → 直接停下问开发者，**不许凭空补答案**（主 session 的信息源就是这些 docs；子代理读了还问 = 文档真缺信息 = 主 session 也编不出）。**若反复缺的是某 task 的护栏 → 是 Stage 3 的 `decisions` 切片漏了，走 `<FD>/references/revision-protocol.md` 入口 B 回补 plan**
 
 ## 受阻
 
@@ -40,6 +40,6 @@
 
 ## 自查前置 stage 问题（运行时随时可能触发）
 
-implementer 或主 session 发现前置 stage 漏 / 错 → 走 `<flow_root>/references/revision-protocol.md` 入口 B（已含「L2 改了上游后评估已完成 task 是否需 fix-up task」的兜底）。
+implementer 或主 session 发现前置 stage 漏 / 错 → 走 `<FD>/references/revision-protocol.md` 入口 B（已含「L2 改了上游后评估已完成 task 是否需 fix-up task」的兜底）。
 
 ⛔ **L1 / L2 必须停下等开发者**——stage-4 无 Gate、又自动连跑，更要主动停，**不能借「连续执行」冲过去**；**L3** 才 inline 修 + 在 task report 的「前置修订」字段注记。

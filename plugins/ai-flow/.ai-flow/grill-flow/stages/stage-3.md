@@ -7,7 +7,7 @@
 
 ## 岔路 → 先读哪份
 
-本页只留主循环和那几条「违反了不会有任何东西变红」的红线。下面每一格对应一个**可观察的触发事件**，撞上了先读那份再动手，**不要凭记忆推**。**下面凡出现 `<FR>` 都指 `{{flow_root}}` 这个绝对路径**，岔路表点的文件都在 `<FR>/references/` 下。⛔ **用 Write 写文件时把 `<FR>` 换成那个绝对路径，别把 `<FR>` 原样填进 `file_path`**——sh 里代入失败会报错，Write 不会：它会在仓库根下建出一个字面名为 `<FR>` 的目录，signal 落在那里等于没写，引擎不推进也不报错：
+本页只留主循环和那几条「违反了不会有任何东西变红」的红线。下面每一格对应一个**可观察的触发事件**，撞上了先读那份再动手，**不要凭记忆推**。**`<FR>` = `[ai-flow:paths]` 块里的 `flow_root:`（`state/`）、`<FD>` = 同块的 `flow_def:`（`scripts/` 与岔路表点的 `references/`）**。⛔ **用 Write 写文件时换成真实路径，别把 `<FR>` / `<FD>` 原样填进 `file_path`**——sh 里代入失败会报错，Write 不会：它会在仓库根下建出一个字面名的目录，signal 落在那里等于没写，引擎不推进也不报错：
 
 | 触发事件 | 读 |
 |---|---|
@@ -66,7 +66,7 @@
 每票一个（车道模式：每组一个、只在该组第一票前开）：
 
 ```sh
-node <FR>/scripts/worktree.cjs open <flow_id> T<n>
+node <FD>/scripts/worktree.cjs --flow-dir <FR> open <flow_id> T<n>
 ```
 
 它负责位置、gitignore 检查、分支命名、装依赖，并打印派发要用的绝对路径——**这些都不必记，这条命令就是全部。**
@@ -92,7 +92,7 @@ node <FR>/scripts/worktree.cjs open <flow_id> T<n>
 ⚠️ **派完不要只等通知。通知是一次性的**——它已经来过、而你读错了，就不会有第二条来纠正你（实测空转 1 小时 07 分正是这个机制）。**每隔 15 分钟主动扫一次**，一屏看全各票/各车道的 `ahead / dirty / HEAD 后继 / 待补依赖 / 静默时长`：
 
 ```sh
-node <FR>/scripts/worktree.cjs status <flow_id>
+node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>
 ```
 
 **一棵声称在飞的树静默 ≥30 分钟 = 那个子代理已经停了**（工作树的物理变化是唯一不依赖自我报告的信号）→ `subagent-lifecycle.md`。
@@ -121,7 +121,7 @@ node <FR>/scripts/worktree.cjs status <flow_id>
 裁完、无未决项之后，**先清注释、`--amend` 前必跑那节三条核实命令（测试文件零改动漏过一次）、票面写 `cm:done`，再 close**（做法与理由见 `quality-chain.md` 第 3 步）：⛔ 顺序反了就补不回来——ff 之后 `--amend` 不可用。
 
 ```sh
-node <FR>/scripts/worktree.cjs close <flow_id> T<n>
+node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 ```
 
 它跑一组前置断言 → `git merge --ff-only` → 拆除 worktree、保留分支，并报出「哪些兄弟车道现在过期了」。断言失败时脚本会说清是哪一条、怎么处置——**先照它说的做**，别绕过；脚本没覆盖到的失败形态在 `recovery.md`。

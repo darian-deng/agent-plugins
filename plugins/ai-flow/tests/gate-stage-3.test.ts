@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -28,10 +28,8 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     const repo = mkdtempSync(join(tmpdir(), 'ai-flow-gate3-test-'));
     tmpDirs.push(repo);
     const flowDir = join(repo, '.ai-flow', 'grill-flow');
-    mkdirSync(join(flowDir, 'scripts'), { recursive: true });
     mkdirSync(join(flowDir, 'state'), { recursive: true });
     mkdirSync(join(repo, 'docs', 'grill-flows', 'f1'), { recursive: true });
-    copyFileSync(GATE, join(flowDir, 'scripts', 'gate-stage-3.cjs'));
     git(repo, 'init', '-q');
     git(repo, 'config', 'user.email', 'test@example.com');
     git(repo, 'config', 'user.name', 'test');
@@ -61,9 +59,14 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     );
   }
 
+  // 跑的是插件里那一份门（现在只剩一份），形状与引擎一致：
+  // cwd = 插件的定义目录，项目锚点走 `AI_FLOW_FLOW_DIR`。把 cwd 放在插件这一侧
+  // 还顺带锁住了退化：要是脚本又拿自己的位置推项目，`git()` 的 cwd 就成了插件仓库，
+  // 整道门会拿插件自己的提交历史去对票。
   function runGate(flowDir: string): { code: number; stderr: string } {
-    const r = spawnSync(process.execPath, [join(flowDir, 'scripts', 'gate-stage-3.cjs')], {
-      cwd: flowDir,
+    const r = spawnSync(process.execPath, [GATE], {
+      cwd: join(PLUGIN_ROOT, '.ai-flow', 'grill-flow'),
+      env: { ...process.env, AI_FLOW_FLOW_DIR: flowDir },
       encoding: 'utf-8',
     });
     return { code: r.status ?? -1, stderr: r.stderr };
@@ -389,11 +392,9 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     tmpDirs.push(outer);
     const repo = join(outer, 'packages', 'app');       // 锚点在子目录
     const flowDir = join(repo, '.ai-flow', 'grill-flow');
-    mkdirSync(join(flowDir, 'scripts'), { recursive: true });
     mkdirSync(join(flowDir, 'state'), { recursive: true });
     mkdirSync(join(repo, 'docs', 'grill-flows', 'f1'), { recursive: true });
     mkdirSync(join(repo, 'src'), { recursive: true });
-    copyFileSync(GATE, join(flowDir, 'scripts', 'gate-stage-3.cjs'));
     git(outer, 'init', '-q');
     git(outer, 'config', 'user.email', 'test@example.com');
     git(outer, 'config', 'user.name', 'test');

@@ -15,7 +15,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 
 ## 入场动作
 
-1. **ADR 查阅**：执行 `{{flow_root}}/references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
+1. **ADR 查阅**：执行 `{{flow_def}}/references/adr-scan.md`，把筛出的 ADR 路径列表作为精选来源待传给 architect
 2. **选对齐视图形态**（`AskUserQuestion`，入场问一次，**默认轻量**）：这份视图的消费者就是被问的这个人，所以由他选，**不要用任何阈值代他判**（改动文件数 / diff 行数 / 决策条数都不行——票面静态特征与实际工作量的秩相关只有 0.15，划错线的失败方式是静默的）。两个选项：
    - **轻量（默认）**：出 Markdown 的 `tech-design.md`，落位图用 mermaid 围栏块。代价：没有全屏看图、没有 dark / light、默认只有一张落位图。
    - **完整**：出 `tech-design.html`。代价：多付一轮配图质量门（每张图渲 PNG → 读图 → 逐条核 → 修，≤2 轮）+ 一整套 HTML 外壳组装。
@@ -34,7 +34,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
    - 蓝图是否覆盖 design.md 每个决策？
    - 蓝图是否引入了 design.md「不在范围内」的内容？
    - 蓝图是否与 design.md 冲突？
-   - 任一处需要改前面已对齐的东西 → 走 `{{flow_root}}/references/revision-protocol.md`（开发者提的走入口 A，AI 自查的走入口 B）
+   - 任一处需要改前面已对齐的东西 → 走 `{{flow_def}}/references/revision-protocol.md`（开发者提的走入口 A，AI 自查的走入口 B）
 
 3. 写入新文件 `{{project_root}}/docs/feat-flows/<flow_id>/architecture.md`
 
@@ -56,7 +56,7 @@ dispatch `feature-dev:code-architect` subagent 产出 `architecture.md`——含
 ## 接口设计
 （每个 service / hook 的方法签名）
 
-**批量成员必须枚举（供 Stage 3 估算任务体量、防截断）**：若某个文件会获得 / 包装 / 注册**一批成员**（如「为 contextIsolation 包装全部 rpc 方法」「建一张含 N 条的映射表 / handler 注册表」），**必须在此列出完整成员清单或明确数量**，不能只写「全部 xxx」。Stage 3 的 `output_size` 体量门依赖这个枚举：列不全 → Stage 3 估不出体量 → 会退回本 stage 补全（`{{flow_root}}/references/revision-protocol.md` 入口 B），徒增往返。
+**批量成员必须枚举（供 Stage 3 估算任务体量、防截断）**：若某个文件会获得 / 包装 / 注册**一批成员**（如「为 contextIsolation 包装全部 rpc 方法」「建一张含 N 条的映射表 / handler 注册表」），**必须在此列出完整成员清单或明确数量**，不能只写「全部 xxx」。Stage 3 的 `output_size` 体量门依赖这个枚举：列不全 → Stage 3 估不出体量 → 会退回本 stage 补全（`{{flow_def}}/references/revision-protocol.md` 入口 B），徒增往返。
 
 ## 数据流
 （端到端链条 + 错误冒泡 + loading 归属）
@@ -109,11 +109,11 @@ architecture.md 写好后、呈给开发者前，派一个**独立**的 `general
 
 ## 生成开发者对齐视图（`tech-design.md` / `tech-design.html`）
 
-architecture.md + context-delta.md 完成后，按 `{{flow_root}}/references/tech-design-view.md` 在 `{{project_root}}/docs/feat-flows/<flow_id>/` 下生成入场选定形态的对齐视图——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施）。结构与呈现全遵该契约：术语表靠前、现状落位图建心智模型、提议方案「概览先行→机制下钻 + 嵌入式为什么」、决策台账降为附录速查；配图遵**图优先**原则（凡能讲清的结构/流程/时序/状态都配，每张准确贴合本需求 + 图文同主题）。
+architecture.md + context-delta.md 完成后，按 `{{flow_def}}/references/tech-design-view.md` 在 `{{project_root}}/docs/feat-flows/<flow_id>/` 下生成入场选定形态的对齐视图——把 design.md + architecture.md 蒸馏成一份给开发者签字对齐的专业技术方案（做什么 / 怎么做 / 为什么 / 如何实施）。结构与呈现全遵该契约：术语表靠前、现状落位图建心智模型、提议方案「概览先行→机制下钻 + 嵌入式为什么」、决策台账降为附录速查；配图遵**图优先**原则（凡能讲清的结构/流程/时序/状态都配，每张准确贴合本需求 + 图文同主题）。
 
 **轻量模式**照该契约的「轻量模式」节：主 session 自己按章节增量写 md，落位图写成 mermaid 围栏块，收尾跑一次 `mmdc` 只判退出码（无配图子代理、无 HTML 外壳、无视觉自检循环）。
 
-**完整模式**：配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）。⛔ **派发时把主题文件的绝对路径展开后写进 prompt**（`{{flow_root}}/references/assets/mermaid-theme.json` 展开后的那个真实路径）——子代理没有 stage 提示词，占位符到它手上不展开，`mmdc -c` 读不到配置就非零退出、被它误判成 `.mmd` 语法错。HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
+**完整模式**：配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）。⛔ **派发时把主题文件的绝对路径展开后写进 prompt**（`{{flow_def}}/references/assets/mermaid-theme.json` 展开后的那个真实路径）——子代理没有 stage 提示词，占位符到它手上不展开，`mmdc -c` 读不到配置就非零退出、被它误判成 `.mmd` 语法错。HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
 
 ⛔ **视图生成完、呈给开发者之前，必须按该契约的「陌生读者可读性审查」派一个只读这份视图的子代理**（禁止它读 design.md / architecture.md / 代码），三类命中项（读不懂 / 术语无定义 / 有决定没理由）逐条回改。本 stage 没有机器门，这是这份文档唯一的外部检测方——写它的 session 读过上游，判断不了陌生读者看不看得懂。
 
@@ -145,7 +145,7 @@ design.md + architecture.md 是给执行器的完备产物，对齐视图是给�
 - **模块定位三类齐全**：`architecture.md` 的「模块定位」节含新增 / 修改 / 删除三类（与下游动作列同名，别写成「新建」），每个文件写到模块级；某类确实为空时显式写占位行（如「本次无删除」）。⛔ **三类都没提到 = 不合格**（只列了新建、另两类连占位行都没有，通常是没去查，不是「本次真的只新建」）——下游对齐视图的「代码库改动面」以它为唯一来源，这里缺了那里只能现编或空着
 - **独立架构审查已跑，阻塞项已回改 architecture.md**
 - `context-delta.md` 已创建且包含 `## Stage 2` 节
-- **对齐视图已生成**（入场选定的形态，按 `{{flow_root}}/references/tech-design-view.md`：术语表靠前、实质默认展开只折附录、图准确贴合本需求 + 图文同主题、决策台账作附录速查、正文无时间性叙事；完整模式另加统一内容宽度、无横向滚动条、查看器资产已注入，轻量模式另加 `mmdc` 退出码为 0）
+- **对齐视图已生成**（入场选定的形态，按 `{{flow_def}}/references/tech-design-view.md`：术语表靠前、实质默认展开只折附录、图准确贴合本需求 + 图文同主题、决策台账作附录速查、正文无时间性叙事；完整模式另加统一内容宽度、无横向滚动条、查看器资产已注入，轻量模式另加 `mmdc` 退出码为 0）
 - **对齐视图的陌生读者可读性审查已跑、命中项已回改**（契约「陌生读者可读性审查」节）
 - 开发者审批以对齐视图为主审面，7 点 + 架构审查建议项已主动呈现
 

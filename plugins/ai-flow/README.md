@@ -48,7 +48,9 @@ Flow 定义生成后，用以下命令操作（将 `{flow-name}` 替换为你的
 
 ### 工作原理
 
-每个 flow 的配置存放在项目的 `.ai-flow/{flow-name}/` 目录下，包含阶段定义（`config.json`）、每个阶段的 AI 提示词（`stages/`）和可选的验证脚本（`scripts/`）。
+flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `stages/`、参考资料 `references/`、验证脚本 `scripts/`）随插件版本走，住在插件里。项目里只有两样：`.ai-flow/{flow-name}/config.json`——一个**稀疏覆盖层**，只写要改的键，留空就是全用插件默认；以及 `.ai-flow/{flow-name}/state/` 运行态。
+
+（0.69.0 之前定义会整份复制进项目。实测 7 份安装无一与模板一致、差异 2–25 条，且没有一条是有意定制——全是版本滞后，所以改成了单一来源。旧项目的残留副本由引擎在第一次 SessionStart 自动删除。）
 
 **阶段推进**：每个阶段的提示词末尾都有一条指令——完成后向 `.ai-flow/{flow-name}/state/signal` 写入内容。PreToolUse hook 拦截这次写入，按该阶段的配置决定是否推进。
 
@@ -138,9 +140,14 @@ intercepts and processes them automatically.
 
 ### How it works
 
-Each flow's configuration lives in `.ai-flow/{flow-name}/` in your project,
-containing the stage definitions (`config.json`), per-stage AI prompts
-(`stages/`), and optional validation scripts (`scripts/`).
+A flow's DEFINITION — default `config.json`, per-stage AI prompts (`stages/`),
+references and validation scripts — ships with the plugin and travels with its
+version. Your project keeps only `.ai-flow/{flow-name}/config.json`, a SPARSE
+override layer that may be empty, and `.ai-flow/{flow-name}/state/` for runtime
+state. (Before 0.69.0 the definition was copied into each project; across seven
+measured installs not one matched the template and none of the differences were
+intentional, so it became a single source. Leftover copies are removed
+automatically on the first SessionStart.)
 
 **Stage advancement**: Every stage prompt ends with one instruction — when
 the stage is done, write anything to `.ai-flow/{flow-name}/state/signal`. The

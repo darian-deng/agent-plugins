@@ -11,6 +11,7 @@ import {
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
 import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
+import { stagePromptPath } from '../flow-paths.js';
 
 export async function handleResume(
   repoRoot: string,
@@ -116,7 +117,7 @@ export async function handleResume(
   await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
 
   const stageCfg = getStageConfig(config, currentStage);
-  const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
   // Same budget contract as the advance / session-start injection points: this path also
   // hands a rendered stage prompt to the host through `additionalContext`, so it is under
   // the same character ceiling and must degrade to "go read the file" instead of spilling.

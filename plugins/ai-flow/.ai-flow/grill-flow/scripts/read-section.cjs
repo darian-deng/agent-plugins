@@ -7,11 +7,18 @@
 // `ledger.md` 表格行编号只到 N34 导致 `^| N45 ` 取不到 · `sed -n '1,95p'` 截断把整节切出范围外。
 //
 // 用法：
-//   node read-section.cjs <file> <start-re> [end-re]
+//   node <FD>/scripts/read-section.cjs --flow-dir <FR> <file> <start-re> [end-re]
 //     只给 start-re      → 取所有匹配的行（grep 语义）
 //     给了 end-re        → 取 start 那行到 end 那行之间（含 start、不含 end，awk 范围语义）
 //     end-re 写 `EOF`    → 明确表示「从 start 取到文件尾」，不检查结束图案
 //   退出码：0 有内容 · 1 图案失配（start 零命中，或 end 给了却没出现）· 2 用法错 / 文件读不到
+// 统一契约：所有 flow 脚本的调用都带 `--flow-dir <项目>/.ai-flow/<flow>`（脚本随插件分发、
+// 不再住在项目里，项目位置只能显式给）。本脚本只读参数里点名的那个文件、用不到 flowDir，
+// 但**必须把它吃掉**：否则 `--flow-dir` 会被当成 <file>，报「读不到 --flow-dir」。
+// 也不能反过来把这两处调用排除在契约外——留了例外的规则，迟早会被照着例外写。
+const fdIdx = process.argv.indexOf('--flow-dir');
+if (fdIdx !== -1) process.argv.splice(fdIdx, process.argv[fdIdx + 1] ? 2 : 1);
+
 const [file, startRe, endRe] = process.argv.slice(2);
 if (!file || !startRe) {
   console.error('用法: read-section.cjs <file> <start-re> [end-re|EOF]');

@@ -2,7 +2,7 @@
 
 > Stage 2 Gate 产出。把 design.md + architecture.md 蒸馏成一份**给开发者签字对齐**的专业技术方案 HTML。本契约自足（外壳/查看器/配图规则全在此），无需外部范例。
 >
-> ⚠️ **本文件里的 `{{flow_root}}` / `{{project_root}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成真实绝对路径——主 session 从 stage 提示词的 `[ai-flow:paths]` 块取；**子代理没有 stage 提示词**，用主 session 在派发 prompt 里给你的那个绝对路径。⛔ sh 里代入失败会报错，**Write 不会**（它会建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，且不报错）。
+> ⚠️ **本文件里的 `{{project_root}}` / `{{flow_root}}` / `{{flow_def}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成真实绝对路径——stage 提示词的 `[ai-flow:paths]` 块现在有三行：`project_root:`、`flow_root:`（项目锚点，`state/` 在这儿）、`flow_def:`（定义目录，`stages/` `references/` `scripts/` 在这儿）；**子代理没有 stage 提示词**，用主 session 在派发 prompt 里给你的那个绝对路径。⛔ sh 里代入失败会报错，**Write 不会**（它会建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，且不报错）。
 
 ## 它是什么、为谁
 
@@ -19,7 +19,7 @@
 
 ## 轻量模式（产物 `tech-design.md`）
 
-形态由开发者在 stage-2 入场时选一次（见 `{{flow_root}}/stages/stage-2.md`），默认轻量。本文件其余各节写的是**完整模式**；轻量模式**内容契约与完整模式完全相同**——下面「文档结构」「怎么做要『可感知』」「渐进披露」「**代码库改动面 schema**」「决策台账 schema」「**陌生读者可读性审查**」原样执行，一条不减（内容本身随需求规模伸缩：需求简单则机制下钻自然短、备选与台账自然少行，这不是减配）。换掉的只有外壳与配图流水线，共三处：
+形态由开发者在 stage-2 入场时选一次（见 `{{flow_def}}/stages/stage-2.md`），默认轻量。本文件其余各节写的是**完整模式**；轻量模式**内容契约与完整模式完全相同**——下面「文档结构」「怎么做要『可感知』」「渐进披露」「**代码库改动面 schema**」「决策台账 schema」「**陌生读者可读性审查**」原样执行，一条不减（内容本身随需求规模伸缩：需求简单则机制下钻自然短、备选与台账自然少行，这不是减配）。换掉的只有外壳与配图流水线，共三处：
 
 - **产物**：`{{project_root}}/docs/feat-flows/<flow_id>/` 下的 `tech-design.md`，单文件 Markdown。主 session 按章节顺序增量写（一节一次 Edit），不套 HTML 外壳、不走下面「HTML 组装」四步、不注入查看器资产。
 - **图**：保留**现状落位图**（陌生读者最快建心智模型的入口，不可省；其余图位仅当纯文字确实讲不清才追加），写成正文里的 mermaid fenced 代码块（围栏语言标 `mermaid`）——IDE 与 GitHub 预览原生渲染，不渲 SVG、不落盘、无图外壳与全屏查看器。图直接由主 session 写在正文里，**不派配图子代理**；mermaid 语法选型与「标签纪律」照下面「配图」节，但**不渲 PNG、不读图、不跑那 6 条视觉自检的 ≤2 轮循环**。
@@ -76,10 +76,10 @@
 
 - **图优先（但有预算，不是堆图）**：图是最好的阅读工具——纯文字讲不清的**结构 / 流程 / 时序 / 状态**都配图，每张必须 **准确 + 贴合本次需求 + 图文同主题**。**优先保证现状落位图 + 1–2 张核心数据流 / 时序图**；其余仅当「纯文字确实讲不清该结构 / 流程」才追加，**同一信息已有图覆盖不重复画**，不为画而画、不画与本需求无关的通用图。
   - 常配的图：**现状落位图**（结构：模块是什么 / 含什么 / 落在哪层）、**关键数据流或时序图**（行为：时序 / 条件分支 / 循环 / 重试回滚 / 跨进程往返 / 状态迁移）、**状态机图**。两类都画时各守车道：结构图管模块、数据流图只画流转。
-- **怎么画**：子代理读真实 design.md + architecture.md，**手写 mermaid 语法**（`flowchart` / `sequenceDiagram` / `stateDiagram-v2` 等，按图义选）。⚠️ **下面命令里的主题文件路径由主 session 在派发 prompt 里给成绝对路径**——配图子代理没有 stage 提示词，`{{flow_root}}` 到它手上不会展开，照字面跑 `mmdc` 会因读不到配置而非零退出，然后被误判进「语法错」分支（那里没错，于是修两轮后把图降级掉）。**主题与布局走现成的配置文件，不用 `-t` 内置主题**（`-t neutral` 出的是默认灰盒 + 贝塞尔曲线走线；配置文件给的是白底墨边 + 正交直角走线，同内容实测紧凑约一半）：
+- **怎么画**：子代理读真实 design.md + architecture.md，**手写 mermaid 语法**（`flowchart` / `sequenceDiagram` / `stateDiagram-v2` 等，按图义选）。⚠️ **下面命令里的主题文件路径由主 session 在派发 prompt 里给成绝对路径**——配图子代理没有 stage 提示词，`{{flow_def}}` 到它手上不会展开，照字面跑 `mmdc` 会因读不到配置而非零退出，然后被误判进「语法错」分支（那里没错，于是修两轮后把图降级掉）。**主题与布局走现成的配置文件，不用 `-t` 内置主题**（`-t neutral` 出的是默认灰盒 + 贝塞尔曲线走线；配置文件给的是白底墨边 + 正交直角走线，同内容实测紧凑约一半）：
 
   ```
-  mmdc -i <图>.mmd -o <图>.svg -c "{{flow_root}}/references/assets/mermaid-theme.json" -b transparent -I "fig-<图名>"
+  mmdc -i <图>.mmd -o <图>.svg -c "{{flow_def}}/references/assets/mermaid-theme.json" -b transparent -I "fig-<图名>"
   ```
 
   三个参数都不能省：
@@ -104,7 +104,7 @@
 
   自检命令（渲 PNG 后 Read 图核对上面 5 条）：
   ```
-  mmdc -i <图>.mmd -o /tmp/diagcheck.png -c "{{flow_root}}/references/assets/mermaid-theme.json" -b white --scale 2
+  mmdc -i <图>.mmd -o /tmp/diagcheck.png -c "{{flow_def}}/references/assets/mermaid-theme.json" -b white --scale 2
   ```
   ⚠️ **自检必须带上同一份 `-c` 配置**——布局引擎不同，出的几何就不同；拿默认布局渲的 PNG 去核对 ELK 布局的 SVG，等于核了另一张图。
   **render→check→fix 最多 2 轮**：2 轮后仍有命中项，接受当前最佳版本，不无限重画。
@@ -127,8 +127,8 @@
 
 配套的样式（`.diagram-stage` / `.fs-overlay` / `.fs-top` / `.fs-canvas` / `.fs-inner`）和 `openFS` 脚本存放在：
 
-- `{{flow_root}}/references/assets/viewer.css`
-- `{{flow_root}}/references/assets/viewer.js`
+- `{{flow_def}}/references/assets/viewer.css`
+- `{{flow_def}}/references/assets/viewer.js`
 
 两份资产**只由下面的 Bash 注入步骤写进 HTML**。要理解查看器行为可以读它们，但**不要把内容复制进 Write/Edit 的参数**。`.fs-inner` 为什么必须有不透明浅色背景，rationale（缘由）写在 `viewer.css` 的注释里。
 
@@ -148,7 +148,7 @@
 全屏查看器的样式与脚本已外置为资产文件，**不要读出来再写进 Write/Edit 的参数里**——那等于让模型逐字转写一段压缩 JS，一个字符错查看器就静默失效。跑现成脚本注入（`<flow_id>` 换成本次 flow 的实际 id）：
 
 ```bash
-node "{{flow_root}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html"
+node "{{flow_def}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/feat-flows/<flow_id>/tech-design.html"
 ```
 
 ## 代码库改动面 schema（正文章节，固定列）

@@ -178,7 +178,7 @@ const SPLIT_STAGES: SplitStage[] = [
       ['<WT> 与 <WT_ROOT> 两个都要带进 dispatch prompt', /`<WT_ROOT>`/],
       ['不为「只跑验证」派子代理', /不为「只跑验证」派子代理/],
       ['不给子代理下整仓全量的地板要求', /不给子代理下「整仓全量」的地板要求/],
-      ['通知是一次性的 → 每 15 分钟主动扫 status', /通知是一次性的[\s\S]{0,400}worktree\.cjs status/],
+      ['通知是一次性的 → 每 15 分钟主动扫 status', /通知是一次性的[\s\S]{0,400}worktree\.cjs[^\n]{0,60}status/],
     ],
   },
   {

@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } from 'fs';
+import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { builtinFlows, detect, nearestProjectRoot, ensureGitignore, wipeTemplateEntries, checkForceReinstall } from '../src/cli/add.js';
+import { builtinFlows, detect, nearestProjectRoot, ensureGitignore, install } from '../src/cli/add.js';
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'ai-flow-cli-test-'));
@@ -135,84 +135,112 @@ describe('cli/add — ensureGitignore', () => {
 });
 
 /**
- * `install --force` used to `rmSync` the whole installed flow directory before copying
- * the template back. That took `state/` with it — `active.json`, `signal`, `mark-base`,
- * `flow.log`. `state/` is gitignored, so a reinstall aimed at picking up a fixed
- * stage prompt silently destroyed any flow that was mid-run, with nothing to restore
- * from. These two guard the fix.
+ * What `install` is allowed to put in a project since 0.69.0.
+ *
+ * It used to `cpSync` the whole flow template in, and `--force` had to wipe the
+ * template-owned entries first so files the template had dropped did not linger.
+ * The definition lives in the plugin now, so there is nothing to copy and nothing to
+ * wipe: the project gets `config.json` (a sparse override layer, and the marker that
+ * says this project runs the flow) plus an empty `state/`. These tests pin that, and
+ * pin that the one destructive thing left — resetting a non-empty override layer —
+ * happens only under `--force` and never silently.
  */
-describe('cli/add — --force 不能杀掉正在跑的 flow', () => {
-  /** A minimal installed flow dir: template-owned files + engine-owned state/. */
-  function installedFlow(stageIds: string[], currentStage: string | null): string {
-    const dest = join(tmp(), '.ai-flow', 'demo-flow');
-    mkdirSync(join(dest, 'stages'), { recursive: true });
-    writeFileSync(join(dest, 'config.json'), JSON.stringify({ name: 'demo-flow', stages: stageIds.map((id) => ({ id })) }));
-    writeFileSync(join(dest, 'helper.md'), 'helper');
-    writeFileSync(join(dest, 'stages', 'stage-1.md'), 'one');
-    // A file the NEW template no longer ships — the reason --force wipes at all.
-    writeFileSync(join(dest, 'stages', 'renamed-away.md'), 'stale');
-    if (currentStage) {
-      mkdirSync(join(dest, 'state'), { recursive: true });
-      writeFileSync(join(dest, 'state', 'active.json'), JSON.stringify({ flow_id: 'demo-20260816', current_stage: currentStage }));
-      writeFileSync(join(dest, 'state', 'flow.log'), 'STARTED\n');
+describe('cli/add — install 只建锚点，不复制定义', () => {
+  /** A project root with git, so ensureGitignore has somewhere to write. */
+  function project(): string {
+    const root = tmp();
+    execSync('git init -q', { cwd: root });
+    writeFileSync(join(root, 'package.json'), '{}');
+    return root;
+  }
+
+  /** Run install with stdout captured (it is the CLI's human-readable result). */
+  function runInstall(flow: string, dir: string, force = false): string {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      install(flow, dir, force);
+    } finally {
+      spy.mockRestore();
     }
-    return dest;
+    return chunks.join('');
   }
 
-  function template(stageIds: string[]): string {
-    const src = join(tmp(), 'demo-flow');
-    mkdirSync(src, { recursive: true });
-    writeFileSync(join(src, 'config.json'), JSON.stringify({ name: 'demo-flow', stages: stageIds.map((id) => ({ id })) }));
-    return src;
-  }
+  it('新装:项目里只多出 config.json（内容 {}）和空的 state/,定义一个字节都没复制过来', () => {
+    const root = project();
+    runInstall('feat-flow', root);
 
-  it('清模板文件时保留 state/：陈旧文件删掉，active.json 与 flow.log 原样留下', () => {
-    const dest = installedFlow(['stage-1', 'stage-2'], 'stage-2');
-    const before = readFileSync(join(dest, 'state', 'active.json'), 'utf-8');
-
-    wipeTemplateEntries(dest);
-
-    // 模板拥有的全部清掉了（这正是 --force 存在的理由）
-    expect(existsSync(join(dest, 'stages', 'renamed-away.md'))).toBe(false);
-    expect(existsSync(join(dest, 'stages'))).toBe(false);
-    expect(existsSync(join(dest, 'config.json'))).toBe(false);
-    expect(existsSync(join(dest, 'helper.md'))).toBe(false);
-    // 引擎拥有的一个都没动
-    expect(readFileSync(join(dest, 'state', 'active.json'), 'utf-8')).toBe(before);
-    expect(readFileSync(join(dest, 'state', 'flow.log'), 'utf-8')).toBe('STARTED\n');
+    const dest = join(root, '.ai-flow', 'feat-flow');
+    expect(readdirSync(dest).sort()).toEqual(['config.json', 'state']);
+    expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({});
+    expect(readdirSync(join(dest, 'state'))).toEqual([]);
+    // 定义仍然只有插件里那一份
+    for (const entry of ['stages', 'references', 'scripts', 'helper.md', 'preflight.cjs']) {
+      expect(existsSync(join(dest, entry))).toBe(false);
+    }
   });
 
-  it('没有正在跑的 flow → 直接放行，不报 live', () => {
-    const dest = installedFlow(['stage-1', 'stage-2'], null);
-    const r = checkForceReinstall(template(['stage-1', 'stage-2']), dest, 'demo-flow');
-    expect(r.ok).toBe(true);
-    expect(r.ok && r.live).toBeNull();
+  it('重复安装（无 --force）:不再报错,但用户的覆盖层原样保住', () => {
+    const root = project();
+    runInstall('feat-flow', root);
+    const dest = join(root, '.ai-flow', 'feat-flow');
+    const mine = JSON.stringify({ context: { wrap_up_at_pct: 42 } }, null, 2);
+    writeFileSync(join(dest, 'config.json'), mine);
+
+    const out = runInstall('feat-flow', root);
+
+    expect(readFileSync(join(dest, 'config.json'), 'utf-8')).toBe(mine);
+    expect(out).toContain('--force');
   });
 
-  it('有正在跑的 flow、且新 config 仍有它当前那个 stage → 放行，并报出被换掉定义的是谁', () => {
-    const dest = installedFlow(['stage-1', 'stage-2'], 'stage-2');
-    const r = checkForceReinstall(template(['stage-1', 'stage-2', 'stage-3']), dest, 'demo-flow');
-    expect(r.ok).toBe(true);
-    expect(r.ok && r.live?.flow_id).toBe('demo-20260816');
-    expect(r.ok && r.live?.current_stage).toBe('stage-2');
+  it('缺 state/ 时补建,同样不动 config.json', () => {
+    const root = project();
+    const dest = join(root, '.ai-flow', 'feat-flow');
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, 'config.json'), '{"context":{"wrap_up_at_pct":42}}');
+
+    runInstall('feat-flow', root);
+
+    expect(existsSync(join(dest, 'state'))).toBe(true);
+    expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({ context: { wrap_up_at_pct: 42 } });
   });
 
-  it('新 config 里没有它当前那个 stage → 拒绝，且拒绝发生在任何删除之前', () => {
-    const dest = installedFlow(['stage-1', 'stage-2'], 'stage-2');
-    // 新模板把 stage-2 改名了：getStageConfig 找不到就抛，而它在 PreTool/PostTool 路径上
-    const r = checkForceReinstall(template(['stage-1', 'implement']), dest, 'demo-flow');
-    expect(r.ok).toBe(false);
-    expect(r.ok === false && r.reason).toContain('stage-2');
-    expect(r.ok === false && r.reason).toContain('demo-flow abort');
-    // 纯函数：一个字节都没动
-    expect(existsSync(join(dest, 'state', 'active.json'))).toBe(true);
-    expect(existsSync(join(dest, 'stages', 'renamed-away.md'))).toBe(true);
+  it('--force:重置成 {},并把原内容原样打印出来,让丢掉的东西看得见', () => {
+    const root = project();
+    runInstall('feat-flow', root);
+    const dest = join(root, '.ai-flow', 'feat-flow');
+    writeFileSync(join(dest, 'config.json'), '{\n  "context": { "wrap_up_at_pct": 42 }\n}');
+
+    const out = runInstall('feat-flow', root, true);
+
+    expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({});
+    expect(out).toContain('wrap_up_at_pct');
   });
 
-  it('active.json 损坏（读不出 current_stage）→ 当作没有在跑的 flow，不拿它当拒绝依据', () => {
-    const dest = installedFlow(['stage-1'], 'stage-1');
-    writeFileSync(join(dest, 'state', 'active.json'), '{ 这不是 json');
-    const r = checkForceReinstall(template(['whatever']), dest, 'demo-flow');
-    expect(r.ok).toBe(true);
+  it('--force 覆盖层本来就是 {} → 没有「丢了什么」可报,不吓唬用户', () => {
+    const root = project();
+    runInstall('feat-flow', root);
+
+    const out = runInstall('feat-flow', root, true);
+
+    expect(out).not.toContain('被重置成了');
+  });
+
+  it('有正在跑的 flow:state/ 一个字节都不动,且说明定义不随本命令改变', () => {
+    const root = project();
+    runInstall('feat-flow', root);
+    const state = join(root, '.ai-flow', 'feat-flow', 'state');
+    writeFileSync(join(state, 'active.json'), JSON.stringify({ flow_id: 'feat-20260903', current_stage: 'stage-3' }));
+    writeFileSync(join(state, 'flow.log'), 'STARTED\n');
+
+    const out = runInstall('feat-flow', root, true);
+
+    expect(JSON.parse(readFileSync(join(state, 'active.json'), 'utf-8')).current_stage).toBe('stage-3');
+    expect(readFileSync(join(state, 'flow.log'), 'utf-8')).toBe('STARTED\n');
+    expect(out).toContain('feat-20260903');
+    expect(out).toContain('随插件版本走');
   });
 });

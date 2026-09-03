@@ -20,6 +20,8 @@ import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, writtenDocLengthNote } from './prompt-render.js';
+import { stagePromptPath as stagePromptTemplatePath } from './flow-paths.js';
+import { pruneLegacyInstall } from './legacy-cleanup.js';
 
 
 export async function handleSessionStart(
@@ -120,6 +122,25 @@ export async function handleSessionStart(
     return { additionalContext: lines.join('\n'), systemMessage: statusLine };
   }
   // ─────────────────────────────────────────────────────────────────────────────
+
+  // Past the mutex, so this session owns the flow — the point at which it is allowed
+  // to rewrite anything on disk. Deliberately not before it: a read-only session
+  // touching another session's checkout is the one thing that branch exists to
+  // prevent, and a project that only ever hosts read-only sessions has no flow of its
+  // own to migrate. Runs BEFORE the config is loaded below, because a leftover full
+  // config.json would otherwise win this session's merge and pin the flow to the
+  // stage list it was installed with. Best-effort: a failure here must not stop a
+  // session from starting, and the next SessionStart retries.
+  try {
+    const pruned = pruneLegacyInstall(repoRoot, flowName);
+    if (pruned) {
+      await appendLog(
+        repoRoot, flowName, session_id,
+        `LEGACY_PRUNED entries=${pruned.removed.join(',') || 'none'}`
+        + ` config_dropped=${pruned.configKeysDropped.join(',') || 'none'}`
+      );
+    }
+  } catch { /* migration is opportunistic; flow.log records nothing and we retry next start */ }
 
   const isNewSession = state.last_session_id !== session_id;
   // Observed on 27/27 `/clear` samples across two real flow.logs: the host hands the
@@ -236,7 +257,7 @@ export async function handleSessionStart(
     // Deliberately no existsSync on the template (unlike the normal-recovery path further
     // down): a failed Read is a VISIBLE error, which beats that path's silent degradation to
     // an empty prompt body. Don't "unify" the two.
-    const templatePath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+    const templatePath = stagePromptTemplatePath(repoRoot, flowName, stageCfg.prompt);
     let renderedForRead: string | null = null;
     let templateReadable = true;
     try {
@@ -320,7 +341,7 @@ export async function handleSessionStart(
   // Inject current stage prompt
   await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
 
-  const promptPath = join(repoRoot, '.ai-flow', flowName, stageCfg.prompt);
+  const promptPath = stagePromptTemplatePath(repoRoot, flowName, stageCfg.prompt);
   // Same reason as in advance-stage: the host's inline limit applies to the assembled
   // `additionalContext` (preamble + framing + prompt), so the size check must see all of it.
   const assemble = (body: string) => pathsPreamble + [

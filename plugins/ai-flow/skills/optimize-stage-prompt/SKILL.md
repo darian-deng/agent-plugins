@@ -84,7 +84,7 @@ Include `## 前置读取` only when the stage reads files produced by earlier st
 - **Comparisons / multi-option content**: table
 - **Delete** anything agents already know: how git works, how to run npm/bun, how to write markdown
 - **Length**: match the stage's actual complexity — a 3-step docs stage and a multi-task implementation stage do not belong at the same size. There is no fixed token budget. What to cut is boilerplate, text duplicated across stages, and detail that can live in a reference file; what to keep is guardrails and re-entry criteria.
-- **Where detail belongs**: the stage file is re-injected in full on every `/clear`; a file under `references/` costs nothing until the agent actually Reads it. So push procedural detail into `{{flow_root}}/references/<topic>.md` and link to it — but keep guardrails and re-entry criteria (how the agent knows where it left off after a `/clear`) inside the stage file, because the engine only guarantees the stage prompt is injected.
+- **Where detail belongs**: the stage file is re-injected in full on every `/clear`; a file under `references/` costs nothing until the agent actually Reads it. So push procedural detail into `{{flow_def}}/references/<topic>.md` and link to it (`{{flow_def}}` is the definition dir — the plugin's copy for a shipped flow; `{{flow_root}}` is the project's instance dir and holds only `state/`) — but keep guardrails and re-entry criteria (how the agent knows where it left off after a `/clear`) inside the stage file, because the engine only guarantees the stage prompt is injected.
 
 ### 6. Path anchoring (hard requirement)
 
@@ -93,9 +93,12 @@ Every flow-artifact path in a stage prompt must be anchored on a placeholder, ne
 | Placeholder | Expands to |
 |-------------|-----------|
 | `{{project_root}}` | the project root (where `.ai-flow` lives) |
-| `{{flow_root}}` | `<project_root>/.ai-flow/{flow-name}` |
+| `{{flow_root}}` | `<project_root>/.ai-flow/{flow-name}` — the flow INSTANCE: `state/` and the sparse `config.json`, nothing else |
+| `{{flow_def}}` | the flow DEFINITION: `stages/` `references/` `scripts/` `helper.md`. For a flow the plugin ships this is inside the plugin, so it travels with the plugin version; for one `/ai-flow:create` wrote, it is the project's own directory |
 
 The engine substitutes them when it injects the prompt, so write the placeholders literally into the stage file.
+
+⛔ Do not reach for `{{flow_root}}` to name a reference, a stage file or a script — they do not live there any more, and `tests/flow-placeholders.test.ts` refuses it. The reverse mistake is the dangerous one: `{{flow_def}}/state/signal` writes the signal where nothing reads it, and nothing reports that either.
 
 Why it is mandatory: `cd` is unrestricted during a flow, so a relative path is resolved against whatever cwd the agent currently has. A relative signal write is the worst case — it lands somewhere else, the engine never sees the signal, and the flow silently stops advancing with nothing in the log to explain it.
 

@@ -11,6 +11,7 @@ import { advanceStage } from '../advance-stage.js';
 import { runScript } from '../script-executor.js';
 import { buildAiFlowPreamble, commandOutputPrefix } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
+import { flowDefDir, flowAnchorDir } from '../flow-paths.js';
 
 export async function handleApprove(
   repoRoot: string,
@@ -51,11 +52,18 @@ export async function handleApprove(
   // no script gate (pure gate / no gate) keep their prior approve behavior.
   let gateNotes: string | undefined;
   if (stageCfg.completion.script) {
-    const flowDir = join(repoRoot, '.ai-flow', flowName);
+    // cwd is the DEFINITION dir so a `node scripts/x.cjs` command resolves against
+    // the scripts that ship with this plugin version. The project's own paths can
+    // no longer be derived from the script's location, so they are passed in.
+    const defDir = flowDefDir(repoRoot, flowName);
+    const anchorDir = flowAnchorDir(repoRoot, flowName);
     const scriptOpts = stageCfg.completion.script.timeout_ms !== undefined
       ? { timeout_ms: stageCfg.completion.script.timeout_ms }
       : undefined;
-    const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
+    const scriptResult = await runScript(stageCfg.completion.script.command, defDir, {
+      ...scriptOpts,
+      env: { AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: repoRoot },
+    });
     if (!scriptResult.ok) {
       await appendLog(repoRoot, flowName, sessionId, `APPROVE_SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
       return {

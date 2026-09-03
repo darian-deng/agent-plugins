@@ -2,7 +2,7 @@
 
 > 全部 ticket 完成后，把整轮改动过 AI 组装审 + 开发者 IDE 亲审，最终 squash 成一笔 feat commit。三环节：**A 全量测试 → B AI 组装审 → C 开发者 IDE 人审闭环 + squash**。环节 C 走完前**绝不写 signal**。
 
-⚠️ **本文件里的 `{{flow_root}}` / `{{project_root}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成 stage 提示词 `[ai-flow:paths]` 块里的真实绝对路径。⛔ **sh 里代入失败会报错，Write 不会**——它会在仓库根下建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，而引擎不推进也不报错。下面那条重写 mark-base 的指令正是这个坑的高发点。
+⚠️ **本文件里的 `{{project_root}}` / `{{flow_root}}` / `{{flow_def}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成 stage 提示词 `[ai-flow:paths]` 块里的真实绝对路径——该块有三行：`project_root:`、`flow_root:`（项目锚点，`state/` 在这儿）、`flow_def:`（定义目录，`stages/` `references/` `scripts/` 在这儿）。⛔ **sh 里代入失败会报错，Write 不会**——它会在仓库根下建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，而引擎不推进也不报错。下面那条重写 mark-base 的指令正是这个坑的高发点。
 
 `<base>` = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code`（stage-3 的 mark-base 捕获）。不读 active.json（控制面）。若注入块无该行（跨版本续跑，或本 flow 是 `resume` 恢复来的——那条路径曾经每次都丢它）→ 回 stage-3 重写 `{{flow_root}}/state/mark-base` 重新捕获。
 

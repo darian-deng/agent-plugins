@@ -16,6 +16,18 @@ export interface ScriptResult {
 
 export interface RunScriptOptions {
   timeout_ms?: number;
+  /**
+   * Absolute paths a flow script needs and can no longer derive on its own.
+   *
+   * Scripts used to sit next to the flow's `state/` in the project and take both
+   * from `__dirname` (`join(__dirname, '..')`). They now ship with the plugin, so
+   * `__dirname` says nothing about which project is running them — every script
+   * would resolve the plugin's own repository. `AI_FLOW_FLOW_DIR` is the project's
+   * `.ai-flow/<flow>/` (state and config live there); `AI_FLOW_PROJECT_ROOT` is the
+   * flow anchor, which is NOT necessarily the git root (monorepo sub-project
+   * installs differ — this plugin's own repo is one).
+   */
+  env?: Record<string, string>;
 }
 
 export async function runScript(
@@ -30,6 +42,7 @@ export async function runScript(
   // (`node "..."`) and ordinary validator commands work cross-platform.
   const result = spawnSync(command, {
     cwd,
+    ...(opts?.env && { env: { ...process.env, ...opts.env } }),
     timeout,
     encoding: 'utf-8',
     maxBuffer: 1024 * 1024,

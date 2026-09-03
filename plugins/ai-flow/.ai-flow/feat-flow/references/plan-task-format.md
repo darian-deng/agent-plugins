@@ -1,7 +1,7 @@
 # plan.md 的 task 格式与粒度标准
 
 > **触发**：要生成或修改 plan.md 里的任何一个 task（stage-3 步骤 1、3，以及后续按 review 意见回改时）。
-> `<flow_root>` = 本文件所在目录的上一级。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走）。
 
 ## 任务格式规范
 
@@ -55,7 +55,7 @@ effort_hint: normal | high # 可选，默认 normal；high = 高风险隔离单�
 
 **`effort_hint` 标注**（供 Stage 4 选 effort，把无法静态拆开的复杂度落成可读字段）：以下单元标 `effort_hint: high`——① 拆分轴 2 命中的**高风险隔离单元**；② **非枚举型复杂度**（architecture 描述含「重写 / 迁移 / 复杂状态机」，或单元 `done` 蕴含 ≥ ~5 路枚举分派（错误码 / 状态 / 类型），或 `decisions` 含 ≥3 条相互制约约束）——这类拆分轴静态拆不开、但实施需更高 effort。其余默认 `normal`。（`output_size: large` 已独立触发 Stage 4 升 high，被它覆盖的不必再标 `effort_hint`。）
 
-⛔ **output_size 前置门（修截断根因）**：若 architecture.md **没列全**某文件要实现的成员（如只写「包装全部 rpc 方法」却没枚举是哪些），stage-3 **估不出体量 → 不许猜**，走 `<flow_root>/references/revision-protocol.md` 入口 B 退回要求 Stage 2 补全枚举，再继续。这是把「预测代码体量」这个不可静态化的事，换成「architecture 是否列全」这个可静态检查的前置条件。
+⛔ **output_size 前置门（修截断根因）**：若 architecture.md **没列全**某文件要实现的成员（如只写「包装全部 rpc 方法」却没枚举是哪些），stage-3 **估不出体量 → 不许猜**，走 `<FD>/references/revision-protocol.md` 入口 B 退回要求 Stage 2 补全枚举，再继续。这是把「预测代码体量」这个不可静态化的事，换成「architecture 是否列全」这个可静态检查的前置条件。
 
 > 非枚举型的大（纯逻辑复杂度高、无法静态估）→ 标 `output_size: small` 正常处理，运行时若仍超大由 Stage 4 截断自保护协议兜底。
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, existsSync, symlinkSync, lstatSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, lstatSync, rmSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -24,7 +24,8 @@ describe('grill-flow worktree.cjs', () => {
   }
 
   /**
-   * 建仓并把脚本铺到 `<repo>/<anchorRel>/.ai-flow/grill-flow/scripts/`。
+   * 建一个只含项目侧安装物（`.ai-flow/grill-flow/state/`）的仓库。脚本**不铺进去**：
+   * 它随插件走，全机只有 `SCRIPT` 那一份，项目位置由 `--flow-dir` 告诉它。
    * anchorRel = '' 时锚点就是 git 根；非空时模拟 monorepo 子项目锚点（本插件自己的形态）。
    * rootLock / anchorLock 控制 `package-lock.json` 放哪一层——装依赖探测的全部输入。
    */
@@ -38,21 +39,18 @@ describe('grill-flow worktree.cjs', () => {
     // 落点在仓库同级，所以它不在 repo 里 —— 单独登记，否则每跑一次测试都留一份整仓 checkout。
     tmpDirs.push(repo + '.ai-flow-worktrees');
     const anchor = opts.anchorRel ? join(repo, opts.anchorRel) : repo;
-    mkdirSync(join(anchor, '.ai-flow', 'grill-flow', 'scripts'), { recursive: true });
     mkdirSync(join(anchor, '.ai-flow', 'grill-flow', 'state'), { recursive: true });
     mkdirSync(join(anchor, 'src'), { recursive: true });
-    copyFileSync(SCRIPT, join(anchor, '.ai-flow', 'grill-flow', 'scripts', 'worktree.cjs'));
-    // 脚本拿「自己旁边有没有 state/active.json」判断它是不是主检出那一份（worktree 里有
-    // 一份被 git 追踪的同名副本，跑错了会静默作用在错误的树上）。`state/` 被 gitignore，
-    // 所以真实形态就是「主检出有、副本没有」——夹具照这个建。
+    // `state/active.json` 是「这个项目有活跃 flow」的唯一标记，也是脚本第三级解析
+    // （从 cwd 上溯找项目）的判据。装依赖等用例走的是第一级 `--flow-dir`，但夹具照真实
+    // 形态建，下面「flowDir 解析」那组才有得测。
     writeFileSync(
       join(anchor, '.ai-flow', 'grill-flow', 'state', 'active.json'),
       JSON.stringify({ flow_id: 'f1', stage: 'stage-3' })
     );
     // open 拒绝在 `.worktrees/` 没被忽略时开树，所以这条是所有用例的前提。
-    // `**/.ai-flow/**/state/` 是引擎建 flow 时写进去的真实规则——它决定了「车道副本里没有
-    // active.json」，而脚本正是靠这一点分辨自己是不是主检出那一份。忽略它就等于让夹具偏离
-    // 真实形态、把那条断言测成恒真。
+    // `**/.ai-flow/**/state/` 是引擎建 flow 时写进去的真实规则：运行态不进 git，于是
+    // worktree 里没有 `state/`——第三级解析在车道里跑时会继续上溯，这条规则决定了它的行为。
     writeFileSync(join(repo, '.gitignore'), '.worktrees/\nnode_modules/\n**/.ai-flow/**/state/\n');
     if (opts.rootLock) writeLockPair(repo, 'root');
     if (opts.anchorLock) writeLockPair(anchor, 'anchor');
@@ -74,11 +72,15 @@ describe('grill-flow worktree.cjs', () => {
     );
   }
 
+  // 跑插件里那一份脚本（全机唯一），项目位置走 `--flow-dir`——提示词里就是这个形状。
+  // cwd 故意放在与被测项目无关的 tmpdir：这样这批用例里 `--flow-dir` 是**唯一**的项目
+  // 来源，脚本要是又回头去猜（`__dirname` 或 cwd），整组会立刻红。
   function run(anchor: string, ...args: string[]): { code: number; stdout: string; stderr: string } {
-    const r = spawnSync(process.execPath, [join(anchor, '.ai-flow', 'grill-flow', 'scripts', 'worktree.cjs'), ...args], {
-      cwd: anchor,
-      encoding: 'utf-8',
-    });
+    const r = spawnSync(
+      process.execPath,
+      [SCRIPT, '--flow-dir', join(anchor, '.ai-flow', 'grill-flow'), ...args],
+      { cwd: tmpdir(), encoding: 'utf-8' }
+    );
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   }
 
@@ -178,23 +180,19 @@ describe('grill-flow worktree.cjs', () => {
       const root = mkdtempSync(join(tmpdir(), 'ai-flow-sched-test-'));
       tmpDirs.push(root);
       const flowDir = join(root, '.ai-flow', 'grill-flow');
-      mkdirSync(join(flowDir, 'scripts'), { recursive: true });
       mkdirSync(join(flowDir, 'state'), { recursive: true });
       mkdirSync(join(root, 'docs', 'grill-flows', 'f1'), { recursive: true });
-      copyFileSync(
-        join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'scripts', 'schedule.cjs'),
-        join(flowDir, 'scripts', 'schedule.cjs')
-      );
       writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
       writeFileSync(join(root, 'docs', 'grill-flows', 'f1', 'tickets.md'), tickets);
       void lanes;
       return flowDir;
     }
     function runSched(flowDir: string): string {
-      const r = spawnSync(process.execPath, [join(flowDir, 'scripts', 'schedule.cjs')], {
-        cwd: flowDir,
-        encoding: 'utf-8',
-      });
+      const r = spawnSync(
+        process.execPath,
+        [join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'scripts', 'schedule.cjs'), '--flow-dir', flowDir],
+        { cwd: tmpdir(), encoding: 'utf-8' }
+      );
       return (r.stdout ?? '') + (r.stderr ?? '');
     }
 
@@ -273,22 +271,73 @@ describe('grill-flow worktree.cjs', () => {
     });
   });
 
-  describe('跑错脚本副本', () => {
-    it('副本旁边没有 state/active.json → 拒绝运行，并指出正确那一份', () => {
+  // 脚本现在住在插件里，`__dirname` 只能回答「我属于哪个 flow」，回答不了「哪个项目
+  // 在跑我」。四级解析（--flow-dir → AI_FLOW_FLOW_DIR → 从 cwd 上溯 → 死）里，上面那批
+  // 用例走的都是第一级；这组补其余三级。没有兜底这件事本身就是被测行为——兜底会把
+  // 「找不到项目」变成「静默地对插件自己的仓库动手」。
+  describe('flowDir 解析', () => {
+    // 把 AI_FLOW_FLOW_DIR 从继承的环境里拿掉：否则开发机上碰巧设了它，第三级、
+    // 第四级的用例会因为第二级提前命中而变成测不到东西。
+    function envWithout(extra?: Record<string, string>): NodeJS.ProcessEnv {
+      const e = { ...process.env, ...(extra ?? {}) };
+      if (!extra?.AI_FLOW_FLOW_DIR) delete e.AI_FLOW_FLOW_DIR;
+      return e;
+    }
+    function runRaw(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]) {
+      const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd, env, encoding: 'utf-8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    }
+
+    // 第一级赢过 cwd：这条是整次搬迁里最贵的一条断言。模型从 B 项目的目录里
+    // 跑一条属于 A 项目的命令时，树必须建在 A 旁边；猜错了不会报错，只会在另一个
+    // 仓库里静默建树并占掉分支名。
+    it('--flow-dir 定的项目，不是 cwd 所在的项目', () => {
+      const a = makeRepo({ anchorRel: '', anchorLock: true });
+      const b = makeRepo({ anchorRel: '', anchorLock: true });
+      const r = runRaw(
+        b.anchor, envWithout(),
+        '--flow-dir', join(a.anchor, '.ai-flow', 'grill-flow'),
+        'open', 'f1', 'R1', '--install', 'true'
+      );
+      expect(r.code).toBe(0);
+      expect(existsSync(join(a.lanes, 'f1-R1'))).toBe(true);
+      expect(existsSync(join(b.lanes, 'f1-R1'))).toBe(false);
+      expect(git(b.repo, 'branch', '--list', 'wt/f1-R1').trim()).toBe('');
+    });
+
+    // 第二级：引擎跑 gate / 脚本校验时注入的就是它（cwd 那时是插件的定义目录）。
+    it('AI_FLOW_FLOW_DIR 在没给 --flow-dir 时生效', () => {
       const { anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
-      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
-      // worktree 是整仓 checkout，`.ai-flow/` 被追踪 → 车道里有一份同名脚本副本，
-      // 而 `state/` 被 gitignore、副本里没有。跑副本必须响亮拒绝而不是作用在错误的树上。
-      const copy = join(lanes, 'f1-R1', '.ai-flow', 'grill-flow', 'scripts', 'worktree.cjs');
-      expect(existsSync(copy)).toBe(true);
-      const r = spawnSync(process.execPath, [copy, 'open', 'f1', 'R2'], {
-        cwd: join(lanes, 'f1-R1'),
-        encoding: 'utf-8',
-      });
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain('不是主检出里那一份');
-      // 静默建错树是这条断言要防的主要后果
-      expect(existsSync(join(lanes, 'f1-R1') + '.ai-flow-worktrees')).toBe(false);
+      const r = runRaw(
+        join(PLUGIN_ROOT, '.ai-flow', 'grill-flow'),
+        envWithout({ AI_FLOW_FLOW_DIR: join(anchor, '.ai-flow', 'grill-flow') }),
+        'open', 'f1', 'R1', '--install', 'true'
+      );
+      expect(r.code).toBe(0);
+      expect(existsSync(join(lanes, 'f1-R1'))).toBe(true);
+    });
+
+    // 第三级：两者都没给时从 cwd 逐级上溯。从子目录跑（而不是锚点）才能证明
+    // 真的在上溯，而不是碰巧 cwd 就是项目根。
+    it('从 cwd 逐级上溯找到项目', () => {
+      const { anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const r = runRaw(join(anchor, 'src'), envWithout(), 'open', 'f1', 'R1', '--install', 'true');
+      expect(r.code).toBe(0);
+      expect(existsSync(join(lanes, 'f1-R1'))).toBe(true);
+    });
+
+    // 第四级：死。断言的不只是退出码——报错里必须带着能直接重跑的那条命令，
+    // 否则读到它的人还得去猜 `--flow-dir` 该填什么。
+    it('三级都无果 → 响亮地死，并给出带 --flow-dir 的完整命令', () => {
+      const nowhere = mkdtempSync(join(tmpdir(), 'ai-flow-nodir-'));
+      tmpDirs.push(nowhere);
+      const r = runRaw(nowhere, envWithout(), 'open', 'f1', 'R1', '--install', 'true');
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('定位不到项目的 flow 目录');
+      expect(r.stderr).toContain('--flow-dir <项目>/.ai-flow/grill-flow open f1 R1 --install true');
+      // 删掉的那道「跑错脚本副本」防线防的就是这个后果，它必须还写在报错里。
+      expect(r.stderr).toContain('再建一层 worktree');
+      expect(existsSync(nowhere + '.ai-flow-worktrees')).toBe(false);
     });
   });
 
@@ -561,11 +610,15 @@ describe('grill-flow worktree.cjs', () => {
       expect(git(repo, 'log', '-1', '--format=%s')).toContain('T1');
     });
 
-    // 运行中升级插件（`/ai-flow:add` 的 install --force、或 scripts/upgrade-flows.cjs）会改写
-    // 主树里被 git 跟踪的 `.ai-flow/<flow>/**`。那不能单独 commit——机器门③ 要求区间内每笔
-    // commit 都归属某一票，一笔「升级 flow 定义」会 fail 掉整道门——所以只能留在工作树、
-    // 由 stage-4 的 squash 吸收。close 若把它判成 stray，整条 flow 在升级之后就再也回合不了。
-    it('主树有 .ai-flow/ 下的 flow 定义改动（运行中升级插件）→ 照常回合，不判成 stray', () => {
+    // 主树里被 git 跟踪的 `.ai-flow/<flow>/**` 会在 flow 运行中被引擎自己改动。0.69.0 之前
+    // 的来源是「运行中升级插件会重写落地的定义副本」；现在定义不再落地，来源换成了
+    // `legacy-cleanup` —— 它在 SessionStart 把 0.69.0 之前装下的 `stages/` `references/`
+    // `scripts/` `helper.md` 删掉，并把 config.json 缩成稀疏覆盖层。形态从「改写」变成
+    // 「删除 + 改写」，出现的时机反而更确定（每个旧项目的第一次 SessionStart 必然发生一次）。
+    // 那批改动不能单独 commit——机器门③ 要求区间内每笔 commit 都归属某一票,一笔「清理 flow
+    // 定义」会 fail 掉整道门——所以只能留在工作树、由 stage-4 的 squash 吸收。close 若把它
+    // 判成 stray，整条 flow 在那次清理之后就再也回合不了。
+    it('主树有 .ai-flow/ 下的 flow 定义改动（运行中清理旧安装）→ 照常回合，不判成 stray', () => {
       const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
       const def = join(repo, '.ai-flow', 'grill-flow', 'stages', 'stage-3.md');
       mkdirSync(dirname(def), { recursive: true });
@@ -579,6 +632,29 @@ describe('grill-flow worktree.cjs', () => {
       writeFileSync(def, 'upgraded prompt\n');                                   // 已追踪、被改写
       mkdirSync(join(repo, '.ai-flow', 'grill-flow', 'references'), { recursive: true });
       writeFileSync(join(repo, '.ai-flow', 'grill-flow', 'references', 'new.md'), 'x\n'); // 新增（未追踪）
+      const out = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(out.stderr).not.toContain('非记账改动');
+      expect(out.code).toBe(0);
+    });
+
+    // legacy-cleanup 的形态是 DELETE，而 porcelain 把删除记成 ` D <path>`——与改写的 ` M `
+    // 走同一条前缀豁免，但那是推论直到这里跑过：豁免若按状态位而不是按路径写，删除会漏网，
+    // 而每个 0.69.0 之前装下的项目在第一次 SessionStart 都会产生一批这样的删除。
+    it('主树的 flow 定义被删掉（legacy-cleanup 的形态）→ 同样不判成 stray', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const defs = ['stages/stage-3.md', 'references/handoff.md', 'helper.md'];
+      for (const rel of defs) {
+        const p = join(repo, '.ai-flow', 'grill-flow', rel);
+        mkdirSync(dirname(p), { recursive: true });
+        writeFileSync(p, 'legacy copy\n');
+      }
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'chore: legacy install');
+
+      run(anchor, 'open', 'f1', 'R1', '--install', 'true');
+      deliver(repo, join(lanes, 'f1-R1'), 'src/one.txt', 'feat(T1): one');
+
+      for (const rel of defs) rmSync(join(repo, '.ai-flow', 'grill-flow', rel));
       const out = run(anchor, 'close', 'f1', 'R1', '--keep');
       expect(out.stderr).not.toContain('非记账改动');
       expect(out.code).toBe(0);

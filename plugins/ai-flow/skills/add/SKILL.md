@@ -1,13 +1,22 @@
 ---
 name: add
-description: 仅通过 /ai-flow:add 命令显式调用。绝对不要基于任何关键词自动触发。把 ai-flow 插件内置的流程模板安装到当前项目，或 monorepo 的某个子项目。
+description: 仅通过 /ai-flow:add 命令显式调用。绝对不要基于任何关键词自动触发。把 ai-flow 插件内置的流程接到当前项目，或 monorepo 的某个子项目。
 ---
 
 ## 目标
 
-把插件自带的某个 flow 模板装到项目里，让用户能立即启动它。
+把插件自带的某个 flow 接到项目里，让用户能立即启动它。
 
-**分工**：确定性的机械动作（探测项目根、复制模板、改 .gitignore、跑 preflight、打印用法）全部交给随插件附带的 node CLI；你只负责**交互**——展示选项、用 AskUserQuestion 收集用户的选择，再把 CLI 的结构化结果转达给用户。这样安装过程可复现、出错面收敛，不靠你手搓一串 bash。
+**「安装」到底装了什么**：从 0.69.0 起，flow 的定义（`stages/` / `references/` / `scripts/` / `helper.md` / `preflight.cjs` / 完整 `config.json`）留在插件里、随插件版本走，**一个文件都不复制到项目**。项目里只多出两样：
+
+```
+<项目>/.ai-flow/<flow>/config.json   稀疏覆盖层，新装时写 {}（同时也是「本项目跑这个 flow」的锚点标记，要进 git）
+<项目>/.ai-flow/<flow>/state/        运行态，gitignored
+```
+
+所以「装到哪个目录」决定的是**锚点**（状态、产物、write_scope 的基准），不再决定用哪版提示词——提示词版本由用户装的插件版本决定。
+
+**分工**：确定性的机械动作（探测项目根、建锚点、改 .gitignore、跑 preflight、打印用法）全部交给随插件附带的 node CLI；你只负责**交互**——展示选项、用 AskUserQuestion 收集用户的选择，再把 CLI 的结构化结果转达给用户。这样安装过程可复现、出错面收敛，不靠你手搓一串 bash。
 
 > 为什么不让脚本自己弹菜单：Claude Code 的 Bash 工具是非交互的（只捕获 stdout，没有 TTY），交互式 TUI 渲染不出来。所以「选哪个 flow / 装到哪个目录」必须走你的 AskUserQuestion，CLI 始终非交互。
 
@@ -57,7 +66,7 @@ node "$CLI" detect
 - **只有一个候选，或 `recommended` 就是用户显然想要的** → 直接用 `recommended`，不必多问。
 - **有多个候选**（典型：子项目根 vs git 根）→ 用 AskUserQuestion 让用户选，默认项放 `recommended`。把每个候选的 `reason` 讲清楚，帮用户判断装在子项目还是仓库根。
 - **某候选的 `outerAiFlow` 非 null** → 明确告诉用户：装在这里后，在该子树工作时引擎会**就近锚定到这里、完全屏蔽外层 `outerAiFlow` 的 flow**。这是 monorepo 项目隔离的预期行为，但要让用户知情确认。
-- 候选的 `existingFlows` 里已含目标 flow → 提示用户这里已装过（见下一步的 `--force`）。
+- 候选的 `existingFlows` 里已含目标 flow → 提示用户这里已装过；重跑安装是安全的（只补缺失的 `state/`，不动 `config.json`），只有想把覆盖层清成 `{}` 才需要 `--force`。
 
 ### 5. 安装
 
@@ -67,7 +76,9 @@ node "$CLI" detect
 node "$CLI" install --flow <flow-name> --dir <chosen-dir>
 ```
 
-CLI 会复制模板、`chmod` preflight、把 `.ai-flow/*/state/` 写进该目录的 `.gitignore`、跑该 flow 的 preflight 做依赖自检，最后打印启动用法。**把 CLI 的输出原样转达给用户**——它已经包含 preflight 结果（缺依赖会列出补齐命令）和「如何启动」。
+CLI 会写 `config.json`（`{}`）、建空的 `state/`、把 `**/.ai-flow/**/state/` 写进 git 根的 `.gitignore`、跑该 flow 的 preflight（脚本在插件里，cwd 是项目根）做依赖自检，最后打印启动用法。**把 CLI 的输出原样转达给用户**——它已经包含 preflight 结果（缺依赖会列出补齐命令）和「如何启动」。
 
-- 该 flow 已装在目标目录 → CLI 会拒绝并提示加 `--force`。征得用户同意覆盖后，重跑并加 `--force`。
-- preflight 未通过 → flow 文件已装好，但要先按 CLI 列出的缺失项补齐依赖才能 start；把这些转达给用户。
+- **重复安装是安全的、不再报错**：目标目录已有 `config.json` 时，CLI 不动它（那是用户的稀疏覆盖层，可能有真定制），只补建缺失的 `state/`。
+- `--force` 现在只有一个作用：**把项目侧 `config.json` 重置成 `{}`**。重置前若它非空，CLI 会把原内容原样打印出来——**这段必须转达给用户**，那是他丢掉的定制（文件在 git 里，可以 `git checkout` 找回）。定义本身不受影响，所以「想升级提示词」不需要 `--force`，那是 `/plugin update` 的事。
+- 目标目录有正在跑的 flow → 不再是拒绝的理由：本命令碰不到它的提示词，`state/` 也原样保留。CLI 会把这一点写在输出里。
+- preflight 未通过 → 锚点已建好，但要先按 CLI 列出的缺失项补齐依赖才能 start；把这些转达给用户。

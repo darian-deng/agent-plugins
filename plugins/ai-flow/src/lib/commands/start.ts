@@ -9,6 +9,8 @@ import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 import type { CommandResult } from '../types.js';
+import { flowDefDir, stagePromptPath } from '../flow-paths.js';
+import { pruneLegacyInstall } from '../legacy-cleanup.js';
 
 const BLOCK_START_IF_ABOVE_PCT = 95;
 
@@ -64,6 +66,15 @@ export async function handleStart(
     };
   }
 
+  // Second migration point. SessionStart's only fires when a flow is already
+  // running, so a project that installed a flow and never started one would never
+  // shed its legacy copies — and starting is exactly when the stale config.json
+  // would do its damage, by pinning the new instance to the stage list that was
+  // copied in at install time.
+  try {
+    pruneLegacyInstall(repoRoot, flowName);
+  } catch { /* opportunistic: a failed migration must not block starting a flow */ }
+
   let config;
   try {
     config = await loadFlowConfig(repoRoot, flowName);
@@ -113,7 +124,7 @@ export async function handleStart(
     };
   }
 
-  const preflightCmd = findPreflightCommand(join(repoRoot, '.ai-flow', flowName));
+  const preflightCmd = findPreflightCommand(flowDefDir(repoRoot, flowName));
   if (preflightCmd) {
     const result = await runScript(preflightCmd, repoRoot);
     if (!result.ok) {
@@ -151,7 +162,7 @@ export async function handleStart(
   bindSession(sessionId, repoRoot, flowName);
   await appendLog(repoRoot, flowName, sessionId, `STARTED flow_id=${flowId} stage=${firstStage.id}`);
 
-  const promptPath = join(repoRoot, '.ai-flow', flowName, firstStage.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, firstStage.prompt);
   // Same budget contract as the advance / session-start injection points — see the note in
   // `resume.ts`. This path had no check at all either, and its wrapper carries the user's
   // own `requirement` text, which has no length bound.

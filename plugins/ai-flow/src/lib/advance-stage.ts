@@ -12,6 +12,7 @@ import {
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
+import { stagePromptPath } from './flow-paths.js';
 
 export interface AdvanceResult {
   additionalContext: string;
@@ -92,7 +93,7 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
     `${body}\n` +
     `════════════════════════════════\n\n` +
     `用 1-2 句自然语言告知用户已进入新阶段，然后直接开始工作，不要等待用户回复。`;
-  const promptPath = join(repoRoot, '.ai-flow', flowName, nextStageCfg.prompt);
+  const promptPath = stagePromptPath(repoRoot, flowName, nextStageCfg.prompt);
   // Built before the budget check, not after: a gated stage carries this note too, so its
   // length is part of what the host receives and must be measured with the wrapper.
   const gateNote = nextStageCfg.completion.gate ? '\n' + gateProtocolNote() : '';

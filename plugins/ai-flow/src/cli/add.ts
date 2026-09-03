@@ -11,8 +11,20 @@
  *       → JSON: where the user is, the project-root candidates for the anchor,
  *         git root, and nested-.ai-flow warnings.
  *   node dist/cli/add.js install --flow <name> --dir <dir> [--force]
- *       → copies the template, fixes .gitignore, runs the flow's preflight,
- *         prints how to start. Human-readable (this is the final message).
+ *       → creates the project-side anchor, fixes .gitignore, runs the flow's
+ *         preflight, prints how to start. Human-readable (this is the final message).
+ *
+ * Installing copies NOTHING. Since 0.69.0 a built-in flow's definition (stages,
+ * references, scripts, helper.md, preflight.cjs, the full config.json) lives in the
+ * plugin and travels with the plugin version — see `src/lib/flow-paths.ts` for why.
+ * All the project gets is the two things that are genuinely per-project:
+ *
+ *   <target>/.ai-flow/<flow>/config.json   sparse override layer, written as `{}`
+ *   <target>/.ai-flow/<flow>/state/        runtime state, gitignored
+ *
+ * config.json doubles as the anchor marker: `resolveActiveFlow` / `discoverFlows`
+ * answer "which flows does this project run" by its presence, so it is written even
+ * when empty.
  *
  * It locates the plugin root from its own file location, so it needs no python
  * and no $CLAUDE_PLUGIN_ROOT.
@@ -22,9 +34,7 @@ import {
   readFileSync,
   readdirSync,
   mkdirSync,
-  cpSync,
-  rmSync,
-  chmodSync,
+  writeFileSync,
   appendFileSync,
   realpathSync,
 } from 'fs';
@@ -58,32 +68,6 @@ interface FlowInfo {
   description: string;
 }
 
-/**
- * Entries inside an installed flow directory that the ENGINE owns, not the template.
- *
- * The template ships none of these — they only exist once a flow has run. They are
- * also gitignored (`**‍/.ai-flow/**‍/state/`), so deleting one is unrecoverable: it
- * takes `active.json` (the whole control plane: which stage the flow is on, the diff
- * bases, the owning session), plus `signal`, `mark-base` and `flow.log`. A
- * reinstall that removes them does not "reset" a running flow, it destroys it.
- */
-const ENGINE_OWNED_ENTRIES = new Set(['state']);
-
-/**
- * Delete the template-owned contents of `dest`, leaving engine-owned entries alone.
- *
- * `--force` needs a wipe because `cpSync` merges over the tree: files that the
- * template dropped (renamed stages, deleted scripts, `preflight.sh`→`.cjs`) would
- * otherwise linger and keep being read. That reason only ever applied to files the
- * template owns, so the wipe is scoped to those.
- */
-export function wipeTemplateEntries(dest: string): void {
-  for (const entry of readdirSync(dest)) {
-    if (ENGINE_OWNED_ENTRIES.has(entry)) continue;
-    rmSync(join(dest, entry), { recursive: true, force: true });
-  }
-}
-
 interface LiveFlow {
   flow_id: string;
   current_stage: string;
@@ -100,50 +84,6 @@ function liveFlowAt(dest: string): LiveFlow | null {
   } catch {
     return null;
   }
-}
-
-/** Stage ids declared by a flow template's config.json. */
-function stageIdsOf(flowDir: string): string[] {
-  try {
-    const cfg = JSON.parse(readFileSync(join(flowDir, 'config.json'), 'utf-8')) as { stages?: Array<{ id?: string }> };
-    return (cfg.stages ?? []).map((s) => String(s.id ?? '')).filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-export type ForceReinstallCheck =
-  | { ok: true; live: LiveFlow | null }
-  | { ok: false; reason: string };
-
-/**
- * Decide whether reinstalling template `src` over an existing install at `dest` is safe.
- * Pure — reads only, writes nothing, so it can run before the wipe.
- *
- * Reinstalling over a LIVE flow is a supported operation: it is how a fix to a stage
- * prompt reaches a flow that is already days into a run. The one case it must refuse is
- * an incoming config that no longer declares the stage the flow is sitting on —
- * `getStageConfig` throws on an unknown stage id and sits on the PreTool/PostTool path,
- * so proceeding does not degrade the flow, it bricks it on the flow's very next tool
- * call. That has to be caught before the wipe, because `state/` is gitignored: once
- * `active.json` is gone there is nothing left to point at the right stage.
- */
-export function checkForceReinstall(src: string, dest: string, flowName: string): ForceReinstallCheck {
-  const live = liveFlowAt(dest);
-  if (!live) return { ok: true, live: null };
-  const incoming = stageIdsOf(src);
-  // An unreadable/stage-less incoming config is a separate problem (install() already
-  // requires config.json to exist); don't turn it into a bogus stage-mismatch refusal.
-  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { ok: true, live };
-  return {
-    ok: false,
-    reason:
-      `拒绝覆盖:这里有一个正在跑的 flow（${live.flow_id}），它停在 stage '${live.current_stage}'，\n` +
-      `而新模板的 config.json 里没有这个 stage（新的是:${incoming.join(', ')}）。\n` +
-      `直接覆盖会让它在下一次工具调用时抛异常、无法继续,而且 state/ 不在 git 里、救不回来。\n` +
-      `先选一条:① 等它跑完再升级;② \`${flowName} abort\` 存快照后再升级;` +
-      `③ 手工把 state/active.json 的 current_stage 改成新配置里的对应 stage id,再重跑本命令。`,
-  };
 }
 
 export function builtinFlows(): FlowInfo[] {
@@ -260,20 +200,34 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function install(flow: string, dir: string, force: boolean) {
-  const src = join(PLUGIN_FLOWS_DIR, flow);
-  if (!existsSync(join(src, 'config.json'))) {
+/**
+ * Is this project-side override layer carrying anything at all?
+ *
+ * `{}` (what a fresh install writes) and an unreadable/empty file both count as
+ * empty: there is nothing a developer could lose by resetting them.
+ */
+function overrideKeys(configPath: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf-8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    return Object.keys(parsed as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+export function install(flow: string, dir: string, force: boolean) {
+  const defDir = join(PLUGIN_FLOWS_DIR, flow);
+  if (!existsSync(join(defDir, 'config.json'))) {
     fail(`内置 flow '${flow}' 不存在。可用:${builtinFlows().map((f) => f.name).join(', ') || '(无)'}`);
   }
   const target = resolve(dir);
   if (!existsSync(target)) fail(`目标目录不存在:${target}`);
 
   const dest = join(target, '.ai-flow', flow);
+  const overridePath = join(dest, 'config.json');
+  const alreadyInstalled = existsSync(overridePath);
   const lines: string[] = [];
-
-  if (existsSync(join(dest, 'config.json')) && !force) {
-    fail(`'${flow}' 已安装在 ${target}/.ai-flow/${flow}。如需覆盖,重跑并加 --force。`);
-  }
 
   const outer = outerAiFlow(target);
   if (outer) {
@@ -283,51 +237,76 @@ function install(flow: string, dir: string, force: boolean) {
     lines.push('');
   }
 
-  // Copy template. On --force, clear the template-owned entries first so files
-  // removed from the template (renamed stages, deleted scripts, preflight.sh→.cjs)
-  // don't linger — cpSync merges over the tree and would otherwise leave stale files.
-  // `state/` is deliberately NOT cleared: see ENGINE_OWNED_ENTRIES.
-  if (force && existsSync(dest)) {
-    const check = checkForceReinstall(src, dest, flow);
-    if (!check.ok) fail(`${check.reason}\n位置:${dest}`);
-    if (check.live) {
-      lines.push(`⚠️  ${dest} 有一个正在跑的 flow:${check.live.flow_id}（当前 stage:${check.live.current_stage}）`);
-      lines.push(`    覆盖会**立即换掉它后续要用的 stage 提示词 / references / scripts**;`);
-      lines.push(`    运行状态(state/)原样保留,flow 不会中断。若该 session 还开着,\`/reload-plugins\` 后继续即可。`);
+  // A live flow here is NOT a reason to refuse: nothing this command writes can
+  // reach the running flow's stage prompts / references / scripts — those live in
+  // the plugin now and change only with the plugin version. The one thing install
+  // can take away is the project's own override layer, and only under --force.
+  const live = liveFlowAt(dest);
+  if (live) {
+    lines.push(`ℹ️  ${dest} 有一个正在跑的 flow:${live.flow_id}(当前 stage:${live.current_stage})`);
+    lines.push(`    它的 stage 提示词 / references / scripts 装在插件里、随插件版本走,本命令一个字都不会动;`);
+    lines.push(`    运行状态(state/)原样保留,flow 不会中断。`);
+    lines.push('');
+  }
+
+  mkdirSync(dest, { recursive: true });
+
+  if (!alreadyInstalled) {
+    // `{}` = "no overrides": the plugin's config.json supplies every value. The file
+    // exists anyway because its presence is what marks this project as running the flow.
+    writeFileSync(overridePath, '{}\n');
+    lines.push(`✅ 已安装 '${flow}' → ${dest}`);
+  } else if (!force) {
+    lines.push(`✅ '${flow}' 已装在 ${dest},本次只补齐缺失的部分。`);
+    lines.push(`    config.json(项目侧稀疏覆盖层)保持原样未动——要把它重置成 {} 请重跑并加 --force。`);
+  } else {
+    const kept = overrideKeys(overridePath);
+    if (kept.length > 0) {
+      // The override layer is git-tracked, so this is recoverable — but only if the
+      // developer knows it happened. Print what is being dropped, verbatim.
+      lines.push(`⚠️  --force:下面这份项目侧 config.json 被重置成了 {},原内容在此(git 里也还能找回):`);
+      lines.push('```json');
+      lines.push(readFileSync(overridePath, 'utf-8').trimEnd());
+      lines.push('```');
+      lines.push(`    重置后本 flow 全部使用插件默认值(${join(defDir, 'config.json')})。`);
+      if (kept.includes('stages')) {
+        lines.push(`    ⚠️ 丢掉的键里有 stages:阶段表将换回插件默认的那一份。`);
+      }
       lines.push('');
     }
-    wipeTemplateEntries(dest);
+    writeFileSync(overridePath, '{}\n');
+    lines.push(`✅ 已重置 '${flow}' 的项目侧覆盖层 → ${overridePath}`);
   }
-  mkdirSync(dest, { recursive: true });
-  cpSync(src, dest, { recursive: true });
 
-  // chmod preflight if present
-  const preflightSh = join(dest, 'preflight.sh');
-  if (existsSync(preflightSh)) {
-    try { chmodSync(preflightSh, 0o755); } catch { /* non-fatal */ }
-  }
+  // The engine creates this on demand, but writing it here makes the install result
+  // self-describing: the two things the project owns are both on disk afterwards.
+  mkdirSync(join(dest, 'state'), { recursive: true });
 
   // Ensure .gitignore ignores the runtime state dir (at the git root, so one
-  // rule covers .ai-flow installed anywhere in the repo — including subprojects)
+  // rule covers .ai-flow installed anywhere in the repo — including subprojects).
+  // config.json is deliberately NOT ignored — it is the anchor and is meant to be
+  // committed, empty or not.
   ensureGitignore(target);
-
-  lines.push(`✅ 已安装 '${flow}' → ${dest}`);
   lines.push('');
 
-  // Run preflight (fail-fast diagnostics, but files stay installed either way)
-  const preflightResult = runPreflight(dest, target);
+  // Run preflight (fail-fast diagnostics, but the anchor stays either way). The
+  // script lives with the definition, in the plugin; cwd stays the project root so
+  // its project-file checks resolve there.
+  const preflightResult = runPreflight(defDir, target, dest);
   if (preflightResult !== null) {
-    lines.push(preflightResult.ok ? '✅ preflight 通过' : '❌ preflight 未通过(flow 已安装,补齐下列依赖后即可启动):');
+    lines.push(preflightResult.ok ? '✅ preflight 通过' : '❌ preflight 未通过(锚点已建好,补齐下列依赖后即可启动):');
     if (preflightResult.output.trim()) lines.push(preflightResult.output.trimEnd());
     lines.push('');
   }
 
-  // Usage
+  // Usage. The description comes from the PLUGIN's config.json — the project copy is
+  // a sparse override and normally carries nothing at all.
   let desc = '';
   try {
-    desc = String((JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8')) as { description?: string }).description ?? '');
+    desc = String((JSON.parse(readFileSync(join(defDir, 'config.json'), 'utf-8')) as { description?: string }).description ?? '');
   } catch { /* ignore */ }
   lines.push(`📋 ${flow}${desc ? ' — ' + desc : ''}`);
+  lines.push(`流程定义(随插件版本走,不复制到项目):${defDir}`);
   lines.push(`锚点(项目根):${target}`);
   lines.push(`启动:在 ${target} 目录的 session 里输入  ${flow} start <需求描述>`);
   lines.push(`查看流程:${flow} help`);
@@ -362,16 +341,30 @@ export function ensureGitignore(target: string): void {
   try { appendFileSync(giPath, `${prefix}${missing.join('\n')}\n`); } catch { /* non-fatal */ }
 }
 
-function runPreflight(flowDir: string, cwd: string): { ok: boolean; output: string } | null {
+/**
+ * Run the flow's preflight.
+ *
+ * `defDir` is where the script lives (the plugin, for a built-in flow); `cwd` is the
+ * project root, so project-file checks resolve against the project; `anchorDir` is
+ * `<project>/.ai-flow/<flow>`.
+ *
+ * The two env vars are the same pair the engine injects (`RunScriptOptions.env` in
+ * `src/lib/script-executor.ts`). A script that ships with the plugin cannot derive
+ * either path from `__dirname` any more — that now points into the plugin's own
+ * checkout — so without them a script falls through to its cwd walk-up, or dies.
+ */
+function runPreflight(defDir: string, cwd: string, anchorDir: string): { ok: boolean; output: string } | null {
   // Prefer a Node preflight (.cjs/.mjs — node-only, cross-platform); fall back
   // to a legacy shell preflight.
   let res;
-  const cjs = join(flowDir, 'preflight.cjs');
-  const mjs = join(flowDir, 'preflight.mjs');
-  const sh = join(flowDir, 'preflight.sh');
-  if (existsSync(cjs)) res = spawnSync(process.execPath, [cjs], { cwd, encoding: 'utf-8', timeout: 30_000 });
-  else if (existsSync(mjs)) res = spawnSync(process.execPath, [mjs], { cwd, encoding: 'utf-8', timeout: 30_000 });
-  else if (existsSync(sh)) res = spawnSync('sh', [sh], { cwd, encoding: 'utf-8', timeout: 30_000 });
+  const env = { ...process.env, AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: cwd };
+  const opts = { cwd, env, encoding: 'utf-8' as const, timeout: 30_000 };
+  const cjs = join(defDir, 'preflight.cjs');
+  const mjs = join(defDir, 'preflight.mjs');
+  const sh = join(defDir, 'preflight.sh');
+  if (existsSync(cjs)) res = spawnSync(process.execPath, [cjs], opts);
+  else if (existsSync(mjs)) res = spawnSync(process.execPath, [mjs], opts);
+  else if (existsSync(sh)) res = spawnSync('sh', [sh], opts);
   else return null;
   const output = [res.stdout, res.stderr].filter(Boolean).join('\n');
   return { ok: res.status === 0, output };

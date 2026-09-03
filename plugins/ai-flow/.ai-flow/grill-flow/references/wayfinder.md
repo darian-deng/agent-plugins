@@ -1,6 +1,6 @@
 # wayfinder 子模式（stage-1 内，处理设计迷雾大的需求）
 
-> ⚠️ **本文件里的 `{{flow_root}}` / `{{project_root}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符，references 是你自己 Read 进来的，拿到的就是原文。用之前换成 stage 提示词 `[ai-flow:paths]` 块里的真实绝对路径——⛔ sh 里代入失败会报错，**Write 不会**（会建出字面名的目录，落盘等于没写，且不报错）。
+> ⚠️ **本文件里的 `{{project_root}}` / `{{flow_root}}` / `{{flow_def}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符，references 是你自己 Read 进来的，拿到的就是原文。用之前换成 stage 提示词 `[ai-flow:paths]` 块里的真实绝对路径——该块有三行：`project_root:`、`flow_root:`（项目锚点，`state/` 在这儿）、`flow_def:`（定义目录，`stages/` `references/` `scripts/` 在这儿）。⛔ sh 里代入失败会报错，**Write 不会**（会建出字面名的目录，落盘等于没写，且不报错）。
 >
 > 何时用：需求**设计迷雾大**——一次 grilling 根本聊不出完整 spec，因为背后是一串**互相依赖、现在答不出、要调研/原型才能定的架构级决策**（例：协作编辑先定 OT 还是 CRDT，落盘/离线/权限全悬在它下面）。实现规模大（切几十 ticket）**不算**迷雾大，走普通 grill 即可。
 

@@ -2,7 +2,8 @@
 
 > **触发**：① `/clear` 之后入场（任何 stage）② 撞上 context 收尾阈值（`wrap_up_at_pct`）③ 开发者说要 clear
 > ④ 一批票收口之后。
-> `<flow_root>` = 本文件所在目录的上一级。`<产物目录>` = `docs/<flow 名>s/<flow_id>/`
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。
+> `<产物目录>` = `docs/<flow 名>s/<flow_id>/`
 > （`flow_id` 用注入 context 顶部的实际值，勿自拼）。
 >
 > 这份契约管**「背景怎么传下去」**。它和各 stage 自己的重入判据是两件事，不互相取代：
@@ -33,7 +34,7 @@ stage-1 那一轮 grill 的走向决定，没有固定骨架）。写交接段�
 实际标题填图案**，并且**填完当场跑一遍确认非空**：
 
 ```sh
-node <flow_root>/scripts/read-section.cjs docs/<flow 名>s/<flow_id>/alignment.md '<起始图案>' '<结束图案>'
+node <FD>/scripts/read-section.cjs --flow-dir <FR> docs/<flow 名>s/<flow_id>/alignment.md '<起始图案>' '<结束图案>'
 ```
 
 ⛔ 没跑过就别写进交接段——写错标题的那一格，下一个 session 拿到的是空输出或整片文件，
@@ -78,7 +79,7 @@ node <flow_root>/scripts/read-section.cjs docs/<flow 名>s/<flow_id>/alignment.m
 ⇒ 优先用与格式无关的写法（词边界 `grep -n "\bN45\b"` 而不是行首图案），并且**用带断言的封装**：
 
 ```sh
-node <flow_root>/scripts/read-section.cjs <文件> '<起始图案>' ['<结束图案>']
+node <FD>/scripts/read-section.cjs --flow-dir <FR> <文件> '<起始图案>' ['<结束图案>']
 # 零命中 → 退出码 1 并打印「图案很可能已经漂了」，不会给你一个静默的空输出
 ```
 

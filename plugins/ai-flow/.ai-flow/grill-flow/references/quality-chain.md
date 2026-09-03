@@ -8,7 +8,7 @@
 >
 > **不属于你**：`AskUserQuestion`（人在环只在主 session 那侧）、记账（tickets.md 的 `qc:done`/`[x]`/`rm:pending`、candidates.md）、开收 worktree。**不写 `docs/grill-flows/**`**——在 worktree 里提交那里的文件会让后续所有归并被 git 阻断。
 >
-> ⚠️ **本文件里的 `{{flow_root}}` 是没展开的字面量**（引擎只替换 stage 提示词里的占位符），用之前换成主 session 给你的绝对路径——下面第 3 节另有一条同源提醒。
+> ⚠️ **本文件里的 `{{flow_root}}` / `{{flow_def}}` 都是没展开的字面量**（引擎只替换 stage 提示词里的占位符；stage 提示词的 `[ai-flow:paths]` 块有 `project_root:` / `flow_root:` / `flow_def:` 三行），用之前换成主 session 给你的绝对路径——下面第 3 节另有一条同源提醒。
 
 ## 为什么这一段单独派一个新代理
 
@@ -54,14 +54,14 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 ## 派发时带什么（主 session 机械拼装）
 
-`<flow_root>` = 本文件所在目录的上一级（stage-3 提示词里 `{{flow_root}}` 展开出来的那个绝对路径）。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
+`<FD>` = 本文件所在目录的上一级（定义层：`references/` `scripts/` 在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（`state/` 在这儿）。就是 stage-3 提示词 `[ai-flow:paths]` 块里 `flow_def:` / `flow_root:` 那两行展开出来的绝对路径。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
 
 - `<WT>` 与（monorepo 时）`<WT_ROOT>` 绝对路径 + cwd 纪律
 - **该票票面整段**（票行 + `delivers` + `Blocked by` + `Touches` + `AC`）——`Touches` 是第 6 步自检的对照物，缺了那一项做不了
 - **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径
 - **前置/后继票关系**（票号 + 一句结论 + 它那笔 commit 的 sha）——第 5 步撞 pre-commit hook 时 `--no-verify` 的唯一依据
 - **实施代理回报里的「取舍与为什么不选 X」整段**——你没写过这段代码，缺了它评审一问原因就只能上报
-- `<flow_root>/references/fowler-smells.md` 的**绝对路径**（Standards 轴要携全文）
+- `<FD>/references/fowler-smells.md` 的**绝对路径**（Standards 轴要携全文）
 - 形态是甲 / 乙 / 丙（见上）；**乙的话附上票面 `rest:` 字段的内容 + 它的完成状态**（「已由续做代理做完」/「无剩余」——⛔ 只丢一份清单过去，收到的人无法判断该不该等，见形态乙那条 fail-closed）；丙的话写明本轮任务是修 findings 还是 rebase 适配
 - ⛔ **不给 `tickets.md` / `spec.md` / `gate-stage-3.cjs` 的路径**（都是大文件，给了路径就被整篇读进来，此后每一轮都重新计费；实测被整篇读过 14 / — / 15 次）
 
@@ -93,7 +93,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 三个轴：
 
-- **Standards 轴**：携 `<flow_root>/references/fowler-smells.md` 全文（主 session 会给绝对路径），只报 simplify 修不动的判断型 smell（架构级重复、错 altitude、过度工程）。这是 mattpocock 的质量轴，别退化成 correctness。
+- **Standards 轴**：携 `<FD>/references/fowler-smells.md` 全文（主 session 会给绝对路径），只报 simplify 修不动的判断型 smell（架构级重复、错 altitude、过度工程）。这是 mattpocock 的质量轴，别退化成 correctness。
 - **Spec 轴**：携 spec 相关段（主 session 会切好给你，**不要自己去整篇读 spec.md**），查该票对 spec 的一致性（偏离 / 漏实现 User Story / 越出 spec）。
 - **correctness 轴**：专审 bug——逻辑错误、边界/空值、错误处理与失败路径、并发/竞态、**测试完整性**（diff 里凡涉及测试文件，逐条核对断言数量/强度相对改动前是否被弱化——弱化了但实施代理的回报没有在「取舍与为什么不选 X」段说明理由 → 报 finding，判断型，交主 session 裁），以及**安全红线五类**（定义见 `per-ticket-review.md`）。不依赖任何内置 slash 命令，任何仓库通用。
 
@@ -234,7 +234,7 @@ git -C <WT> diff --shortstat --cached HEAD      # 形态乙 / 丙用 HEAD~1
 **触发时机**：主 session 回合本票失败、把票退回来——那说明别的票已经先回合了。
 
 ```sh
-node <flow_root>/scripts/worktree.cjs sync <flow_id> <T<n>|R<n>>   # rebase 到需求分支；车道模式用本车道的 R 号
+node <FD>/scripts/worktree.cjs --flow-dir <FR> sync <flow_id> <T<n>|R<n>>   # rebase 到需求分支；车道模式用本车道的 R 号
 # 有冲突 → 在 <WT> 里解 → git -C <WT> rebase --continue
 ```
 

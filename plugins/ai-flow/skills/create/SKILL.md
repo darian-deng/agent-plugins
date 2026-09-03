@@ -7,6 +7,10 @@ description: 仅通过 /ai-flow:create 命令显式调用。绝对不要基于�
 
 你是工作流架构师。用户描述业务场景，你深度分析后设计完整的 flow 结构，对齐确认后生成所有文件。**你做架构设计，用户确认方向——不要让用户来配置技术参数。**
 
+**产物落在哪**：自定义 flow 的定义**整份写进项目**——`<项目>/.ai-flow/{flow-name}/` 下的 `config.json` / `stages/` / `references/` / `scripts/` / `helper.md` / `preflight.cjs` 就是这个 flow 的唯一真相，引擎直接读它，改完立刻生效、不需要发版。
+
+这与**内置 flow**（`feat-flow` / `grill-flow`，由 `/ai-flow:add` 接入）不同：内置 flow 的定义住在插件里、随插件版本走，项目里只有稀疏 `config.json` + `state/`。两者的引擎行为完全一致（引擎先找插件、没有才回退到项目），差别只在「定义存在哪、怎么改」。读者若见过 `/ai-flow:add` 装出来的空目录，别以为自定义 flow 也该是空的。
+
 ---
 
 ## 第一阶段：理解业务
@@ -152,7 +156,15 @@ Schema 约束：
 
 每个 stage prompt 必须符合 `optimize-stage-prompt` 规范（本插件同名 skill）。使用以下固定结构：
 
-**路径一律用 `{{project_root}}` / `{{flow_root}}` 占位符锚定，禁写相对路径**（展开值与缘由见 `optimize-stage-prompt` 标准 6）；stage 文件长度、以及「细节放 stage 还是放 references」的取舍见其标准 5。
+**路径一律用占位符锚定，禁写相对路径**（展开值与缘由见 `optimize-stage-prompt` 标准 6）；stage 文件长度、以及「细节放 stage 还是放 references」的取舍见其标准 5。三个占位符各有分工，**别混用**：
+
+| 占位符 | 展开成 | 用来指 |
+|---|---|---|
+| `{{project_root}}` | 项目根 | 代码、文档等项目文件 |
+| `{{flow_root}}` | `<项目>/.ai-flow/{flow-name}` | **只有 `state/`**：signal、active.json |
+| `{{flow_def}}` | 定义目录（自定义 flow 就是上面那个同一目录；内置 flow 在插件里） | `references/` `stages/` `scripts/` `helper.md` `preflight.*` |
+
+`{{flow_root}}` 与 `{{flow_def}}` 在自定义 flow 里展开值相同，写错也看不出来——但一旦这个 flow 以后被收进插件、或被别人照抄，`{{flow_def}}/state/signal` 会把 signal 写进定义目录：**Write 不报错、引擎永远不推进**。所以从第一天就按语义写。
 
 ```markdown
 # Stage N：{阶段名}
@@ -298,7 +310,16 @@ preflight 运行时 cwd = 项目根（repoRoot）：检查项目文件可用相�
 
 为每个用到 Script Validator 的 stage 生成对应脚本。exit 0 = 验证通过，exit 非零并打印失败原因 = 失败。
 
-**注意 validator 的 cwd 与 preflight 不同**：validator 由引擎在 signal 写入时执行，cwd = `.ai-flow/{flow-name}`（flow 目录），不是项目根。脚本里访问项目文件请从这里往上定位，不要假设 cwd 是 repoRoot。
+**注意 validator 的 cwd 与 preflight 不同**：validator 由引擎在 signal 写入时执行，cwd = **定义目录**（自定义 flow 即 `<项目>/.ai-flow/{flow-name}`），不是项目根。
+
+脚本**不要用 `join(__dirname, '..')` 推 flow 目录**——自定义 flow 今天推得对，但同一份脚本被搬进插件后推出来的是插件仓库，而且不报错、只是默默指向别的仓库。按四级取：
+
+1. `--flow-dir <abs>` 命令行参数（提示词里让模型传：`node {{flow_def}}/scripts/x.cjs --flow-dir {{flow_root}} <子命令>`）
+2. `process.env.AI_FLOW_FLOW_DIR`（引擎执行 validator / preflight 时注入；同时还有 `AI_FLOW_PROJECT_ROOT`）
+3. 从 `process.cwd()` 逐级上溯，找 `<d>/.ai-flow/{flow-name}/state/active.json`
+4. 都没有 → 打印「带正确 `--flow-dir` 的完整命令」并 `process.exit(1)`,**不要猜**
+
+拿到 `flowDir` 后 `repoRoot = join(flowDir, '..', '..')`。
 
 ### `.gitignore`
 

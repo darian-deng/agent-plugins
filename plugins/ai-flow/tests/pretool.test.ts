@@ -609,6 +609,38 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
       expect(out?.permissionDecision ?? 'allow').toBe('allow');
     });
 
+    it('脚本在插件里、--flow-dir 指回项目 → 放行（0.69.0 起的真实形状）', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      // The definition layer moved into the plugin, so the script path no longer
+      // sits under repoRoot and the project's own flow dir travels as an argument.
+      // Both halves have to clear this guard: the path still matches a `scripts`
+      // fragment (the `.ai-flow/<flow>/scripts` shape is the same wherever it
+      // lives), and `--flow-dir <project>/.ai-flow/<flow>` must NOT read as a
+      // control-plane reference — it names no signal, no active.json, no scripts dir.
+      const pluginScript = join(
+        '/opt/plugins/ai-flow', '.ai-flow', 'test-flow', 'scripts', 'worktree.cjs'
+      );
+      const flowDir = join(repo.repoRoot, '.ai-flow', 'test-flow');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node ${pluginScript} --flow-dir ${flowDir} open f1 R1`)
+      );
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    it('--flow-dir 指到 signal 上仍然拒（参数不是绕过控制面的口子）', async () => {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      const pluginScript = join(
+        '/opt/plugins/ai-flow', '.ai-flow', 'test-flow', 'scripts', 'worktree.cjs'
+      );
+      const signal = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, `node ${pluginScript} --flow-dir ${signal} open f1 R1`)
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
     it('相对路径执行 + 长选项 → 放行', async () => {
       const repo = makeRepo();
       activateFlow(repo.repoRoot, 'work');

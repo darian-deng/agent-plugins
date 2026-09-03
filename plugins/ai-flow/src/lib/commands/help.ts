@@ -2,11 +2,12 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { discoverFlows, loadFlowConfig } from '../flow-config-loader.js';
 import type { CommandResult } from '../types.js';
+import { flowDefDir } from '../flow-paths.js';
 
 export async function handleHelp(repoRoot: string, flowName?: string): Promise<CommandResult> {
   // Flow-specific help: inject helper.md so AI can answer questions interactively
   if (flowName) {
-    const helperPath = join(repoRoot, '.ai-flow', flowName, 'helper.md');
+    const helperPath = join(flowDefDir(repoRoot, flowName), 'helper.md');
     if (existsSync(helperPath)) {
       const content = readFileSync(helperPath, 'utf-8');
       return { action: 'allow', additionalContext: content };

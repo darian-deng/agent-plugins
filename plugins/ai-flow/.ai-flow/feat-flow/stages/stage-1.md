@@ -17,7 +17,7 @@
    - 其内容在接地时完整读取（本地 Read / URL→tavily-extract / 飞书→lark-doc），此处不重复读取
 
 2. **ADR 查阅**
-   - 执行 `{{flow_root}}/references/adr-scan.md`
+   - 执行 `{{flow_def}}/references/adr-scan.md`
 
 3. **项目命令探测**
    - 读 `package.json` scripts / `pyproject.toml` / `Makefile` 等
@@ -78,7 +78,7 @@ load-bearing 结论 = 塑造本 feature 怎么做、AI 读错则下游设计就�
 
 ## UI 设计来源对齐（若需求涉及 UI）
 
-涉及任何 UI 改动（新页面、新组件、视觉调整）**必须读 `{{flow_root}}/references/ui-protocol.md` 并逐步执行**：六类状态维度逐项 gap closure、每项未覆盖独立代码探索找现有复用组件、复用组件需开发者显式确认沿用。
+涉及任何 UI 改动（新页面、新组件、视觉调整）**必须读 `{{flow_def}}/references/ui-protocol.md` 并逐步执行**：六类状态维度逐项 gap closure、每项未覆盖独立代码探索找现有复用组件、复用组件需开发者显式确认沿用。
 
 ## 独立审计（写完 design.md 后必做）
 
@@ -100,7 +100,7 @@ dispatch 一个 fresh subagent（general-purpose 类型）对 design.md 做独�
 
 ## 前置产物修订（开发者异议 / AI 自查）
 
-详见 `{{flow_root}}/references/revision-protocol.md`。开发者对产出有异议走入口 A，AI 自查发现前置漏 / 错走入口 B；均先评估对全部上游产物的影响并分级 L1/L2/L3，不反射性接受、不私下消化。
+详见 `{{flow_def}}/references/revision-protocol.md`。开发者对产出有异议走入口 A，AI 自查发现前置漏 / 错走入口 B；均先评估对全部上游产物的影响并分级 L1/L2/L3，不反射性接受、不私下消化。
 
 ## 输出规格
 

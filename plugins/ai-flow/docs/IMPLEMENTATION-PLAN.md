@@ -23,6 +23,15 @@ Target: 100% line + branch coverage. Python3 tests use `skipIf(!hasPython3())`.
 > `BLOCK_START_IF_ABOVE_PCT = 95`，`FlowConfigSchema` 里没有这个字段。照这份文档往
 > `config.json` 里写它不会报错——zod 会静默 strip 掉未知键，所以它是**静默无效**。
 >
+> 0.69.0 又改了**目录布局**，而这份文档从头到尾假设的是旧的那个：flow 的定义
+> （`stages/` `references/` `scripts/` `helper.md` `preflight.cjs` 与 config.json 的默认值）
+> 不再复制进项目，而是随插件版本走、住在插件的 `.ai-flow/<flow>/` 里；项目里只剩
+> `.ai-flow/<flow>/config.json`（**稀疏覆盖层**，可以是 `{}`）和 `state/`。占位符也因此
+> 拆成两个：`{{flow_root}}` 仍是项目里的实例目录（只有 `state/`），新的 `{{flow_def}}`
+> 才是定义目录。凡本文档写「安装/复制模板到项目」「`.ai-flow/<flow>/stages/…` 在项目里」
+> 的地方，都按这条读。旧项目里的残留副本由引擎在第一次 SessionStart 自动删除
+> （`src/lib/legacy-cleanup.ts`）。
+>
 > **要了解引擎当前行为，读 `src/`，不要读这份文档。**
 
 ---

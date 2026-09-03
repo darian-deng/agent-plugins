@@ -12,7 +12,7 @@
 ## 前置读取
 
 - `{{project_root}}/docs/grill-flows/<flow_id>/` 下 `alignment.md` / `wayfinder-map.md` / `spec.md` / `tickets.md` / `candidates.md`（沉淀候选主来源）/ `review.md`（`<flow_id>` 用 context 注入的实际值）
-- `{{flow_root}}/references/adr-scan.md` — 定位既有 ADR 目录（写入口径、冲突/supersede 判断）
+- `{{flow_def}}/references/adr-scan.md` — 定位既有 ADR 目录（写入口径、冲突/supersede 判断）
 
 ## 入场校验（含 /clear 重入）
 
@@ -25,7 +25,7 @@ git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || { echo "ERROR: HEAD
 校验通过后，沉淀写入都在这笔 feat 之上、**不 commit**；approve 后 `amend` 折回它（见 Signal）。
 
 **/clear 重入**：引擎注入的 stage 已是 gate-pending → 沉淀多半已写入工作树（未提交）。重读 candidates.md 与已写的 context 文件重建沉淀清单，approve 后照 Signal 段 amend 幸存文件（`git add -A` 天然只收工作树现存改动）。
-> **背景怎么传下去**：`/clear` 之后先按 `{{flow_root}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
+> **背景怎么传下去**：`/clear` 之后先按 `{{flow_def}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
 
 ## 步骤
 

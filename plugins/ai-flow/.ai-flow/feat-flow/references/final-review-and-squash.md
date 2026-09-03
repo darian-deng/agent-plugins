@@ -1,7 +1,7 @@
 # 环节 C：人工 review 闭环 + 最终 CR + squash
 
 > **触发**：stage-5 环节 B 全部结束、改动都已 commit，要交给开发者亲审。**本环节走完前绝不写 signal。**
-> `<base>` = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code` 值。`<flow_root>` = 本文件所在目录的上一级。
+> `<base>` = 引擎注入 `[ai-flow:paths]` 块里的 `base_sha_code` 值。`<FD>` = 本文件所在目录的上一级（定义层，随插件走）。
 
 环节 A/B 是 AI 自查，这一环是**开发者**把关；开发者的修改同样要过回归与最终 CR（与 AI 代码同等把关）。
 

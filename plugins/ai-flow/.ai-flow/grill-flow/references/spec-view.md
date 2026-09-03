@@ -4,7 +4,7 @@
 >
 > **与 feat-flow 契约的关键差异**：grill-flow 的 spec 是**散文、不锁实现**，所以本视图**去掉 feat-flow 的 typed 接口签名与 pseudo-code 两节**；但**保留接口契约决策**（用散文描述"这个模块对外承诺什么行为/输入输出契约"，不是 typed 签名）——否则 gate 沦为盖章。
 >
-> ⚠️ **本文件里的 `{{flow_root}}` / `{{project_root}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成真实绝对路径——主 session 从 stage 提示词的 `[ai-flow:paths]` 块取；**子代理没有 stage 提示词**，用主 session 在派发 prompt 里给你的那个绝对路径。⛔ sh 里代入失败会报错，**Write 不会**（它会建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，且不报错）。
+> ⚠️ **本文件里的 `{{project_root}}` / `{{flow_root}}` / `{{flow_def}}` 是没展开的字面量**：引擎只替换 stage 提示词里的占位符（`renderPrompt` 只作用于 `stages/*.md`），references 是你自己 Read 进来的，拿到的就是原文。用之前一律换成真实绝对路径——stage 提示词的 `[ai-flow:paths]` 块现在有三行：`project_root:`、`flow_root:`（项目锚点，`state/` 在这儿）、`flow_def:`（定义目录，`stages/` `references/` `scripts/` 在这儿）；**子代理没有 stage 提示词**，用主 session 在派发 prompt 里给你的那个绝对路径。⛔ sh 里代入失败会报错，**Write 不会**（它会建出一个字面名为 `{{flow_root}}` 的目录，文件落在那里等于没写，且不报错）。
 
 ## 它是什么、为谁
 
@@ -57,16 +57,16 @@
 一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ `mmdc` 渲染 SVG 写盘。子代理只产 SVG，不组装 HTML，不再 spawn 下级子代理。
 
 - **图优先（有预算）**：优先现状落位图 + 1–2 张核心数据流/时序图；其余仅当纯文字讲不清才追加，同信息不重复画。
-- **怎么画**：读真实 spec.md，手写 mermaid（`flowchart`/`sequenceDiagram`/`stateDiagram-v2` 按图义选）。⚠️ **下面命令里的主题文件路径由主 session 在派发 prompt 里给成绝对路径**——配图子代理没有 stage 提示词，`{{flow_root}}` 到它手上不会展开，照字面跑会读不到配置、非零退出，再被误判进「语法错」分支。**主题与布局走现成配置文件，不用 `-t` 内置主题**（`-t neutral` 出的是默认灰盒 + 曲线走线；配置文件给的是白底墨边 + 正交直角走线，同内容实测紧凑约一半）：
+- **怎么画**：读真实 spec.md，手写 mermaid（`flowchart`/`sequenceDiagram`/`stateDiagram-v2` 按图义选）。⚠️ **下面命令里的主题文件路径由主 session 在派发 prompt 里给成绝对路径**——配图子代理没有 stage 提示词，`{{flow_def}}` 到它手上不会展开，照字面跑会读不到配置、非零退出，再被误判进「语法错」分支。**主题与布局走现成配置文件，不用 `-t` 内置主题**（`-t neutral` 出的是默认灰盒 + 曲线走线；配置文件给的是白底墨边 + 正交直角走线，同内容实测紧凑约一半）：
   ```
-  mmdc -i <图>.mmd -o <图>.svg -c "{{flow_root}}/references/assets/mermaid-theme.json" -b transparent -I "fig-<图名>"
+  mmdc -i <图>.mmd -o <图>.svg -c "{{flow_def}}/references/assets/mermaid-theme.json" -b transparent -I "fig-<图名>"
   ```
   三个参数都不能省：**`-c`** 给 `theme: base` + 浅色品牌色板（图文同主题）+ `layout: elk`——**ELK**（Eclipse Layout Kernel，mermaid 除默认 dagre 外的第二个布局引擎，**11.14.0 起**随 mermaid-cli 自带、无需安装，更旧版本会静默退回默认布局、由 preflight 拦）产出正交直角走线并自动绕开盒子，把「箭头穿盒 / 压线」从靠自检发现变成由布局器保证；⚠️ 它只对 `flowchart` 生效，时序图 / 状态图会忽略它，但**配置照样传、不报错**（实测三种图型退出码均 0），别为不同图型分两条命令。**`-b transparent`** 把背景交给 HTML 才能跟随 dark / light。⛔ **`-I "fig-<图名>"` 每张图取不同值**：mmdc 默认把根 id 固定写成 `my-svg`，全部 CSS 选择器与 marker（箭头定义）id 都以它打头，多图内联进同一份 HTML 会重复 id、任何一张换主题就互相污染。
 - **焦点节点（每图至多 2 个）**：关键路径 / 本次新增的那一两个节点用 `classDef` + `class` 单独上色，其余中性。⛔ **`classDef` 不吃 `rgba(...)`**（报 `Expecting 'SEMI'… got 'PS'`、直接渲染失败），要透明度写 8 位十六进制：`classDef focal fill:#eb6c3614,stroke:#eb6c36,stroke-width:1.2px,color:#2d3142` + `class <节点id> focal`。
 - **标签纪律（避免渲染失败）**：**`flowchart` 的**节点标签一律用 `"..."` 双引号包裹；换行必须用 `<br/>`，禁 `\n`（会渲成字面量）。裸写 `( ) [ ] { } : / | # < > ;` 及全角符号易崩。⚠️ **双引号那条只管 `flowchart` 节点标签**：`sequenceDiagram` 的 `participant X as <名字>` 里加引号会被当成名字的一部分**原样渲染**（实测 `as "主 session"` 渲出带引号的 `"主 session"`）。
 - **★ 配图质量门（强制）**：每张图写盘前渲 PNG → 读图 → 逐条核对 → 修。失败项：渲染失败（语法错，置顶先修）/ 箭头穿盒 / 标签压线 / 文字溢出截断 / 重叠 / 顺序错 / 可见 `\n`。自检（⚠️ **必须带同一份 `-c`**——布局引擎不同几何就不同，拿默认布局的 PNG 去核 ELK 布局的 SVG 等于核了另一张图）：
   ```
-  mmdc -i <图>.mmd -o /tmp/diagcheck.png -c "{{flow_root}}/references/assets/mermaid-theme.json" -b white --scale 2
+  mmdc -i <图>.mmd -o /tmp/diagcheck.png -c "{{flow_def}}/references/assets/mermaid-theme.json" -b white --scale 2
   ```
   **render→check→fix 最多 2 轮**（语法修复轮次单独算）。仍不合格 → 降级为纯文字承载，标注，绝不内联损坏 SVG。
 - **写盘**：SVG 落 `{{project_root}}/docs/grill-flows/<flow_id>/diagram/`。⚠️ **别指望引擎拦你写错地方**：`write_scope` 只作用于 `Edit` / `Write` / `NotebookEdit`，SVG 是 mmdc 经 Bash 写的、不过那道检查（自检的 `-o /tmp/...` 也因此跑得通）。落错目录不报错，只会让主 session 找不到图。子代理回报图清单供主 session 内联。
@@ -78,14 +78,14 @@
 1. **写骨架**：一次 Write 落外壳——HTML 头、CSS 变量与 dark mode 脚本、sticky 导航 + scrollspy、统一内容宽度（~100ch）。**查看器的 CSS/JS 一个字都不要自己写**：只在 `<style>` 末尾放一行 `<!--VIEWER_CSS-->`、在 `</body>` 前的空 `<script>` 里放一行 `<!--VIEWER_JS-->`，两个锚点全文各出现一次。各章节/图位照旧留唯一占位锚点（如 `<!--SEC:现状落位-->`、`<!--FIG:落位-->`）。
 2. **逐节填充**：每章节单独 Edit 替换占位锚点。
 3. **内联图**：按图清单从 `diagram/` 读 SVG，逐张 Edit 替换图位，每张套 `<figure class="diagram">…</figure>` 全屏查看器外壳。
-4. **注入查看器资产**（Bash，最后一步，见下「查看器资产注入」）：把 `{{flow_root}}/references/assets/viewer.css` 与 `viewer.js` 的内容替换进上面两个 VIEWER 锚点。
+4. **注入查看器资产**（Bash，最后一步，见下「查看器资产注入」）：把 `{{flow_def}}/references/assets/viewer.css` 与 `viewer.js` 的内容替换进上面两个 VIEWER 锚点。
 
 ### 查看器资产注入（Bash，不经模型转写）
 
 全屏查看器的样式与脚本已外置为资产文件，**不要读出来再写进 Write/Edit 的参数里**——那等于让模型逐字转写一段压缩 JS，一个字符错查看器就静默失效。跑现成脚本注入（`<flow_id>` 换成本次 flow 的实际 id）：
 
 ```bash
-node "{{flow_root}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/grill-flows/<flow_id>/tech-design.html"
+node "{{flow_def}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/grill-flows/<flow_id>/tech-design.html"
 ```
 
 ### 外壳技术要求
@@ -101,8 +101,8 @@ node "{{flow_root}}/references/assets/inject-viewer.cjs" "{{project_root}}/docs/
 
 配套的样式（`.diagram-stage` / `.fs-overlay` / `.fs-top` / `.fs-canvas` / `.fs-inner`）和 `openFS` 脚本存放在：
 
-- `{{flow_root}}/references/assets/viewer.css`
-- `{{flow_root}}/references/assets/viewer.js`
+- `{{flow_def}}/references/assets/viewer.css`
+- `{{flow_def}}/references/assets/viewer.js`
 
 两份资产**只由上面的 Bash 注入步骤写进 HTML**。要理解查看器行为可以读它们，但**不要把内容复制进 Write/Edit 的参数**。`.fs-inner` 为什么必须有背景色，rationale（缘由）写在 `viewer.css` 的注释里。
 

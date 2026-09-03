@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { flowDefDir, flowAnchorDir } from './flow-paths.js';
 
 /**
  * Substitute path placeholders in a stage prompt before injecting it.
@@ -13,7 +14,9 @@ import { join } from 'path';
  *
  * Placeholders:
  *   {{project_root}} → the anchor dir (repoRoot)
- *   {{flow_root}}    → <repoRoot>/.ai-flow/<flowName>
+ *   {{flow_root}}    → <repoRoot>/.ai-flow/<flowName>   (state/ and the sparse config.json)
+ *   {{flow_def}}     → wherever this flow's stages/references/scripts live — the
+ *                      plugin for a flow it ships, the project for a custom one
  *
  * Placeholder substitution is a no-op for prompts that contain none, but the
  * render itself is NOT a pure pass-through: every rendered prompt also gets
@@ -137,10 +140,10 @@ export function assembledOverhead(assemble: (body: string) => string): number {
 }
 
 export function renderPrompt(content: string, repoRoot: string, flowName: string): string {
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const substituted = content
     .replace(/\{\{\s*project_root\s*\}\}/g, repoRoot)
-    .replace(/\{\{\s*flow_root\s*\}\}/g, flowRoot);
+    .replace(/\{\{\s*flow_def\s*\}\}/g, flowDefDir(repoRoot, flowName))
+    .replace(/\{\{\s*flow_root\s*\}\}/g, flowAnchorDir(repoRoot, flowName));
   return substituted + '\n' + writtenDocLengthNote();
 }
 
@@ -153,11 +156,11 @@ export function renderPrompt(content: string, repoRoot: string, flowName: string
  * guard blocks and which is not cwd-safe).
  */
 export function buildAiFlowPreamble(repoRoot: string, flowName: string, baseSha?: string | null): string {
-  const flowRoot = join(repoRoot, '.ai-flow', flowName);
   const lines = [
     `[ai-flow:paths]`,
     `project_root: ${repoRoot}`,
-    `flow_root: ${flowRoot}`,
+    `flow_root: ${flowAnchorDir(repoRoot, flowName)}`,
+    `flow_def: ${flowDefDir(repoRoot, flowName)}`,
   ];
   if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
   return lines.join('\n') + '\n\n';

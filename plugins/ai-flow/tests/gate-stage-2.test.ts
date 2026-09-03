@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -24,10 +24,8 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     tmpDirs.push(repo);
     const flowDir = join(repo, '.ai-flow', 'grill-flow');
     const docs = join(repo, 'docs', 'grill-flows', 'f1');
-    mkdirSync(join(flowDir, 'scripts'), { recursive: true });
     mkdirSync(join(flowDir, 'state'), { recursive: true });
     mkdirSync(docs, { recursive: true });
-    copyFileSync(GATE, join(flowDir, 'scripts', 'gate-stage-2.cjs'));
     writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
     writeFileSync(
       join(docs, 'spec.md'),
@@ -40,9 +38,13 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     return flowDir;
   }
 
+  // 跑的是插件里那一份门（现在只剩一份），形状与引擎一致：
+  // cwd = 插件的定义目录，项目锚点走 `AI_FLOW_FLOW_DIR`。把 cwd 放在插件这一侧
+  // 还顺带锁住了退化：要是脚本又拿自己的位置推项目，它会去查插件仓库、这批用例全红。
   function runGate(flowDir: string): { code: number; stderr: string } {
-    const r = spawnSync(process.execPath, [join(flowDir, 'scripts', 'gate-stage-2.cjs')], {
-      cwd: flowDir,
+    const r = spawnSync(process.execPath, [GATE], {
+      cwd: join(PLUGIN_ROOT, '.ai-flow', 'grill-flow'),
+      env: { ...process.env, AI_FLOW_FLOW_DIR: flowDir },
       encoding: 'utf-8',
     });
     return { code: r.status ?? -1, stderr: r.stderr };

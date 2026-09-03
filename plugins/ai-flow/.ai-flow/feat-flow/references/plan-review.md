@@ -1,7 +1,7 @@
 # plan.md 的内部审查：三轮 review + 七道门 + 独立耦合边界重推导
 
 > **触发**：stage-3 步骤 5——plan.md 草稿已生成、self-review checklist 已过，要跑内部审查。
-> `<flow_root>` = 本文件所在目录的上一级。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走）。
 
 ## 三轮 Review 机制
 
@@ -80,5 +80,5 @@ plan.md 生成后由 review subagent 自动完成三轮审查，**不阻塞等�
 
 ## 冲突处理
 
-- 开发者提异议 → `<flow_root>/references/revision-protocol.md`（入口 A）
-- AI 自查发现 design.md / architecture.md 漏写 / 错了 → `<flow_root>/references/revision-protocol.md`（入口 B）
+- 开发者提异议 → `<FD>/references/revision-protocol.md`（入口 A）
+- AI 自查发现 design.md / architecture.md 漏写 / 错了 → `<FD>/references/revision-protocol.md`（入口 B）

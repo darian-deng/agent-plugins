@@ -1,7 +1,7 @@
 # 执行单位：一票一树，还是一组一车道
 
 > **触发**：stage-3 开工时选一次（落 `base_sha_code` 之后、开第一棵树之前）。读者是主 session。
-> `<flow_root>` = 本文件所在目录的上一级；stage-3 提示词里 `{{flow_root}}` 展开出来的就是它。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。
 
 默认**一票一树**（stage-3 主循环写的就是它）。当「开树」本身成为主要成本时改成**一组一车道**：每组各开一棵长驻 worktree（名字 `R<n>`），组内逐票 commit、逐票 `close --keep` 回合，组间并行。
 
@@ -10,7 +10,7 @@
 ## 怎么选：算，不要凭感觉
 
 ```sh
-node <flow_root>/scripts/schedule.cjs
+node <FD>/scripts/schedule.cjs --flow-dir <FR>
 ```
 
 它按主循环的同一套准入算法模拟一遍，输出三个数字——墙钟下限（最长依赖链）、一票一树在各上限下的轮数、一组一车道的轮数——并给出结论。**照它的结论走**；轮数相同时选一票一树（它多一条机器门⑦）。

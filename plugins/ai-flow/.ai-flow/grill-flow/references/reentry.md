@@ -1,7 +1,7 @@
 # stage-3 重入：/clear 之后怎么判走到哪一步
 
 > **触发**：`/clear` 之后回到 stage-3；或注入 context 里已有 `base_sha_code`、或 tickets.md 已有 `[x]`（都表示不是首次进入）。
-> `<flow_root>` = 本文件所在目录的上一级；stage-3 提示词里 `{{flow_root}}` 展开出来的就是它。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。
 
 引擎只恢复到「stage-3」，不记进度。**第一步必须枚举，不能直接看 tickets.md 就重派**：
 
@@ -13,7 +13,7 @@ git worktree prune && git worktree list --porcelain
 
 ⚠️ **车道模式除外**：`R<n>` 的树按设计长驻，看到它不代表有残留要收口——正确动作往往是往同一棵树派下一票。判据见下面「车道模式的重入」。
 
-车道模式下再跑一次 `node <flow_root>/scripts/worktree.cjs status <flow_id>`，它一屏给出各车道的 `ahead / dirty / 是否 HEAD 后继 / 待补依赖 / 静默时长`。
+车道模式下再跑一次 `node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>`，它一屏给出各车道的 `ahead / dirty / 是否 HEAD 后继 / 待补依赖 / 静默时长`。
 
 ## 逐票判相位
 

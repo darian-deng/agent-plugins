@@ -1,7 +1,7 @@
 # 出错怎么处置：假红、close 失败、收口测试红、机器门报违规
 
 > **触发**：测试红了；`close` 报错；收口测试失败；`gate-stage-3.cjs` 报违规。**读到对应那节再动手，别先改代码。**
-> `<flow_root>` = 本文件所在目录的上一级。`<WT>` = 该票 worktree 里的项目根。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。`<WT>` = 该票 worktree 里的项目根。
 
 ## 一、先判是不是假红（测试一红，先读这节）
 
@@ -15,7 +15,7 @@
 
 **处置分两种**：
 
-- **在某棵 worktree 里撞到** → `node <flow_root>/scripts/worktree.cjs sync <flow_id> <T或R编号>`；`sync` / `close` 会自己检测并补装（`--no-install` 只报不装）。
+- **在某棵 worktree 里撞到** → `node <FD>/scripts/worktree.cjs --flow-dir <FR> sync <flow_id> <T或R编号>`；`sync` / `close` 会自己检测并补装（`--no-install` 只报不装）。
 - **在主树上撞到**（一票一树的收口测试跑在全部树都拆掉之后，`sync` 那条命令此时必然报「不存在」——**别去查票号是不是写错了**）：`close` 本应在 ff 时自动补装过，先回看它当时有没有报补装失败；没补上就在主树手动跑一次装依赖命令（`pnpm install` / `npm ci` 等，照本仓库的）再重跑测试。⛔ 无论哪种，**都不要去读代码追这个「回归」**。
 
 **你自己手动 rebase / 切分支之后不会有人替你装**，那时同样手动装一次。
@@ -37,7 +37,7 @@
 = 别的票已经先回合了、本票还没适配。处置：
 
 1. **按 `quality-chain.md` 拼一个质量链代理**（原来那个已经返回）——它手上有地板与 `--amend` 两步，实施代理没有；
-2. 它跑 `node <flow_root>/scripts/worktree.cjs sync <flow_id> T<n>` → 解冲突 → 重跑客观地板；
+2. 它跑 `node <FD>/scripts/worktree.cjs --flow-dir <FR> sync <flow_id> T<n>` → 解冲突 → 重跑客观地板；
 3. `git -C <WT> commit --amend` 折回本票那笔；
 4. 再单独发一条 `close`。
 
@@ -82,4 +82,4 @@ GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>
 
 **这条修法只对「本来就不该是复选框的真机条目」成立。** 如果报的是一张**执行期插进来、被误追加到文件末尾**的真票，照做等于把它从全部完成判定里删掉——它从此不参与「无未勾票」「qc:done」「票↔commit 配对」「写集」四条断言，门立刻全绿。
 
-**先判它是哪一种**：`git log --oneline <base>..HEAD` 里有没有一笔认领这个票号的 commit？tickets.md 上游有没有它的 `delivers:` / `Touches:`？是真票 → **把它移回票列表区**（最后一张票之后、`## 待真机验证` / `## 已知碰撞面` / `## 收口记录` 这些段标题之前），再跑一遍 `node <flow_root>/scripts/gate-stage-2.cjs` 确认格式；不是真票 → 才按报错说的改写。
+**先判它是哪一种**：`git log --oneline <base>..HEAD` 里有没有一笔认领这个票号的 commit？tickets.md 上游有没有它的 `delivers:` / `Touches:`？是真票 → **把它移回票列表区**（最后一张票之后、`## 待真机验证` / `## 已知碰撞面` / `## 收口记录` 这些段标题之前），再跑一遍 `node <FD>/scripts/gate-stage-2.cjs --flow-dir <FR>` 确认格式；不是真票 → 才按报错说的改写。

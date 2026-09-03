@@ -12,6 +12,7 @@ import {
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
 import { runScript } from './script-executor.js';
 import { truncateError } from './format.js';
+import { flowDefDir, flowAnchorDir, isBuiltinFlow, PLUGIN_ROOT } from './flow-paths.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -106,11 +107,18 @@ type ControlPlaneRole = 'active.json' | 'config.json' | 'stages' | 'scripts' | '
  * privilege as editing them in place and must be refused the same way.
  *
  * A suffix match alone over-reaches: a project may legitimately VENDOR flow
- * templates in its tree (ai-flow's own repo ships `.ai-flow/<flow>/` copies
- * under the plugin directory) and those are ordinary content, editable during a
- * flow. What separates the two is whether the copy lives inside a linked
- * worktree, which is exactly the condition under which an edit there can travel
- * back into the flow's own checkout via a merge.
+ * templates in its tree and those are ordinary content, editable during a flow.
+ * What separates the two is whether the copy lives inside a linked worktree,
+ * which is exactly the condition under which an edit there can travel back into
+ * the flow's own checkout via a merge.
+ *
+ * The installed plugin's own `.ai-flow/<flow>/` is the third case, and since the
+ * definition layer moved there it is the LIVE definition rather than a vendored
+ * copy: the stage prompts, gate scripts and config the running flow is executing
+ * are read from it on every stage transition. Editing it mid-flow is the same
+ * privilege as editing the project's copy used to be, so it is fenced the same
+ * way. (When the flow being run is ai-flow's own development checkout the two
+ * coincide and `sameAnchor` already covers it.)
  *
  * Testing for a `.git` file BESIDE `.ai-flow` is not that condition: `git
  * worktree add` checks out the whole repository, so under a monorepo sub-project
@@ -135,7 +143,8 @@ function controlPlaneRole(repoRoot: string, flowName: string, absPath: string): 
   // with git's real path for a worktree. A literal mismatch here reads as "not this
   // repo's anchor" and drops the guard, so it must compare the resolved paths.
   const sameAnchor = realPath(anchor) === realPath(repoRoot);
-  if (!sameAnchor && !isInsideLinkedWorktree(anchor)) return null;
+  const isShippedDefinition = isBuiltinFlow(flowName) && realPath(anchor) === realPath(PLUGIN_ROOT);
+  if (!sameAnchor && !isShippedDefinition && !isInsideLinkedWorktree(anchor)) return null;
 
   if (rest === 'state/active.json') return 'active.json';
   if (rest === 'config.json') return 'config.json';
@@ -406,11 +415,18 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     // Script validation (if configured)
     let gateNotes: string | undefined;
     if (stageCfg.completion.script) {
-      const flowDir = join(repoRoot, '.ai-flow', activeFlowName);
+      // cwd is the DEFINITION dir so a `node scripts/x.cjs` command resolves against
+      // the scripts that ship with this plugin version. The project's own paths can
+      // no longer be derived from the script's location, so they are passed in.
+      const defDir = flowDefDir(repoRoot, activeFlowName);
+      const anchorDir = flowAnchorDir(repoRoot, activeFlowName);
       const scriptOpts = stageCfg.completion.script.timeout_ms !== undefined
         ? { timeout_ms: stageCfg.completion.script.timeout_ms }
         : undefined;
-      const scriptResult = await runScript(stageCfg.completion.script.command, flowDir, scriptOpts);
+      const scriptResult = await runScript(stageCfg.completion.script.command, defDir, {
+        ...scriptOpts,
+        env: { AI_FLOW_FLOW_DIR: anchorDir, AI_FLOW_PROJECT_ROOT: repoRoot },
+      });
       if (!scriptResult.ok) {
         await appendLog(repoRoot, activeFlowName, session_id, `SCRIPT_FAIL stage=${state.current_stage} reason=${scriptResult.reason.replace(/\n/g, ' ').slice(0, 80)}`);
         return deny(`Script validation failed:\n${scriptResult.reason}\n\nFix the issues and try again.`);

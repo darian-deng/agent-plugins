@@ -1,7 +1,7 @@
 # 执行期插票：本期还需要一张票时怎么办
 
 > **触发**：stage-3 执行中发现「本期还需要一张票」——新暴露的缺口、刚交付的东西有缺陷、上游清单枚举不全。
-> `<flow_root>` = 本文件所在目录的上一级。
+> `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。
 
 **照下面办，不要现编。**
 
@@ -43,7 +43,7 @@
 ⚠️ **新票不会再经过 stage-2 的机器门**（`gate-stage-2.cjs` 只在 stage-2 写 signal 时跑一次）。别手工复核格式——把门跑一遍：
 
 ```sh
-node <flow_root>/scripts/gate-stage-2.cjs && echo "格式 OK"
+node <FD>/scripts/gate-stage-2.cjs --flow-dir <FR> && echo "格式 OK"
 ```
 
 它是纯读脚本，对已勾票与未勾票一视同仁，stage-3 中途跑不会因为「flow 已经开跑」误报。**exit 0 才算插票完成。**

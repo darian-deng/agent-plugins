@@ -20,14 +20,67 @@
 //     `lane:`；没有就按「`Touches` 相交 ∨ 有 `Blocked by` 关系」取连通分量。
 'use strict';
 
-const { existsSync, readFileSync } = require('fs');
-const { join } = require('path');
-
-const flowDir = join(__dirname, '..');
-const projectRoot = join(flowDir, '..', '..');
+const { existsSync, readFileSync, realpathSync } = require('fs');
+const { join, dirname, basename, resolve } = require('path');
 
 const die = (m) => { process.stderr.write('❌  ' + m + '\n'); process.exit(1); };
 const say = (m) => process.stdout.write(m + '\n');
+
+// ── flowDir 解析（四级，最后一级响亮地死）──────────────────────────────────
+// 本脚本随插件分发、不再住在项目里，所以 `__dirname` 只够回答「我属于哪个 flow」
+//（上一级目录名就是 flow 名），回答不了「**哪个项目**在跑我」。
+// ⛔ 不许拿 `join(__dirname, '..')` 当 flowDir 兜底：那推出来的是**插件自己的仓库**，
+//    于是 state 读写与 git 操作全都静默作用在错误的树上——把「找不到项目」这种一眼可见
+//    的失败，换成了「安静地做错事」。所以第四级是死，不是兜底。
+const FLOW_NAME = basename(join(__dirname, '..'));
+// 解掉符号链接再往下用。`git` 报的路径永远是真实路径（macOS 的 `/var/folders/…` 实为
+// `/private/var/folders/…`），基准两边不一致时 `relative()` 会算出一串 `../`，于是
+// 「锚点相对」的前缀剥离、残留 worktree 的前缀匹配都**静默失效**。旧版从 `__dirname`
+// 取路径时是 node 顺手解的（模块路径默认走 realpath），换成 argv / env / cwd 之后得自己解。
+const realDir = (p) => { try { return realpathSync(p); } catch { return p; } };
+function resolveFlowDir() {
+  // 1) `--flow-dir <abs>`：模型从 Bash 跑时由提示词给（紧跟脚本路径、在子命令之前）。
+  //    就地从 argv 取走，后面按位置解析参数的代码才看不见它。
+  const i = process.argv.indexOf('--flow-dir');
+  if (i !== -1) {
+    const v = process.argv[i + 1];
+    process.argv.splice(i, v ? 2 : 1);
+    if (!v) die('--flow-dir 后面要跟 `<项目>/.ai-flow/' + FLOW_NAME + '` 的绝对路径。');
+    return realDir(resolve(v));
+  }
+  // 2) `AI_FLOW_FLOW_DIR`：引擎跑 gate / 脚本校验时注入。
+  if (process.env.AI_FLOW_FLOW_DIR) return realDir(resolve(process.env.AI_FLOW_FLOW_DIR));
+  // 3) 从 cwd 逐级上溯。判据是 `state/active.json` 而不是目录存在：没有活跃 flow 的
+  //    目录不该被认成锚点（装了 flow 但没启动的项目会把上溯停在错误的一级）。
+  let d = process.cwd();
+  for (;;) {
+    const cand = join(d, '.ai-flow', FLOW_NAME);
+    if (existsSync(join(cand, 'state', 'active.json'))) return realDir(cand);
+    const up = dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  // 4) 响亮地死，并打印带正确 `--flow-dir` 的完整命令。
+  // 含空格的参数要把引号带回去：`--install "npm ci"` 直接拼回去会变成两个参数，
+  // 照抄这条命令的人拿到的就是一条跑不通的命令。
+  const rest = process.argv.slice(2).map((a) => (/\s/.test(a) ? JSON.stringify(a) : a));
+  die(
+    '定位不到项目的 flow 目录（`<项目>/.ai-flow/' + FLOW_NAME + '/`）：没给 --flow-dir、'
+    + '没有 AI_FLOW_FLOW_DIR，从 cwd（' + process.cwd() + '）逐级上溯也没找到 `.ai-flow/'
+    + FLOW_NAME + '/state/active.json`。\n'
+    + '    本脚本住在插件里（' + __filename + '），从自己的位置推不出是哪个项目在跑它——'
+    + '硬推只会推到插件自己的仓库，然后静默地对错误的树动手。\n'
+    + '    三种补法，任选其一：\n'
+    + '    1) 显式给（提示词里就是这个形状）：\n'
+    + '       node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME
+    + (rest.length ? ' ' + rest.join(' ') : '') + '\n'
+    + '    2) 设 AI_FLOW_FLOW_DIR=<项目>/.ai-flow/' + FLOW_NAME + '（引擎跑 gate 时自动注入的就是这一条）\n'
+    + '    3) 换到项目里跑：cwd 或它的某一级祖先下要有 `.ai-flow/' + FLOW_NAME + '/state/active.json`'
+  );
+}
+
+const flowDir = resolveFlowDir();
+const projectRoot = join(flowDir, '..', '..');
 
 let state;
 try { state = require(join(flowDir, 'state', 'active.json')); }

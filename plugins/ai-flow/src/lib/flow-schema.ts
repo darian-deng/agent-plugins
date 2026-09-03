@@ -40,7 +40,7 @@ const StageConfigSchema = z.object({
   }
 );
 
-const ContextConfigSchema = z.object({
+export const ContextConfigSchema = z.object({
   /**
    * Context occupancy (percent of the window) at which this flow's session starts
    * wrapping up FOR a `/clear`: the engine refuses further writes to the codebase
@@ -67,6 +67,16 @@ const ContextConfigSchema = z.object({
    */
   wrap_up_at_pct: z.number().int().min(1).max(99).optional(),
 });
+
+/**
+ * The `context` keys this version still recognises.
+ *
+ * Read by legacy-cleanup to tell a dead key (drop it) from a live one the project
+ * has deliberately set to something other than the default (keep it). Derived from
+ * the schema rather than listed by hand so adding a key cannot silently teach the
+ * cleanup to delete it.
+ */
+export const LIVE_CONTEXT_KEYS: ReadonlySet<string> = new Set(Object.keys(ContextConfigSchema.shape));
 
 export const FlowConfigSchema = z.object({
   schema_version: z.literal('1.0'),

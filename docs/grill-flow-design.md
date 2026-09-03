@@ -139,7 +139,7 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
   - `{}`（none）：写 `done` → 立即自动推进。
   - `{gate:true}`：写 `done` → 暂停等开发者 `approve`。
   - `{script:{command,timeout_ms?}}`：写 `done` 时 **PreToolUse 先跑脚本**（`pretool-handler.ts:178`），exit≠0 就 deny 写 signal、把 stderr 回给 AI 逼修；exit0 才放行。**可与 gate 组合**（先机器门后人工门，顺序已核实正确）。
-- **script 门能力边界**（`script-executor.ts`）：只在"写 signal 触发 stage 完成"那一刻跑一次；cwd = flow 目录（`.ai-flow/<flow>/`）；继承父进程 env；**默认 30s 超时、1MB stdout 上限（超限 ENOBUFS→fail-closed）、同步执行（会冻 UI）**。→ **只适合秒级、小输出、可移植的检查**（grep/awk 结构校验），绝不塞耗时命令（全量测试）。
+- **script 门能力边界**（`script-executor.ts`）：只在"写 signal 触发 stage 完成"那一刻跑一次；cwd = flow 的**定义**目录（0.69.0 起在插件里；项目锚点走注入的 `AI_FLOW_FLOW_DIR` / `AI_FLOW_PROJECT_ROOT`）；继承父进程 env；**默认 30s 超时、1MB stdout 上限（超限 ENOBUFS→fail-closed）、同步执行（会冻 UI）**。→ **只适合秒级、小输出、可移植的检查**（grep/awk 结构校验），绝不塞耗时命令（全量测试）。
 - **preflight 的 cwd = repoRoot**（`start.ts:91`），**不是 flowDir**（与 completion script 的 cwd 不同）——写 preflight.cjs 时别假设 cwd=flowDir。
 - **stage 内部无引擎停顿点**：`task_gates` 字段在 schema 里但**全库无消费代码**（死字段）。唯一引擎强制点是 **stage 边界**（完成门 script/gate）。→ per-ticket 层、wayfinder 逐决策层都加不了引擎门，只能靠 AI 纪律 + 人在场 + 产物落盘。
 - **session recovery 只到 stage 级**（`session-handler.ts:161-192`）：SessionStart 无条件重注**当前 stage 提示词**，不记 stage 内做到第几步——stage 内进度靠**产物落盘 + marker**，AI 重入自己读文件续。这是 wayfinder 子模式与 stage-3 循环能跨 /clear 存活的唯一依据。
