@@ -4523,26 +4523,6 @@ async function handlePreTool(input2) {
         );
       }
     }
-    const config = await loadFlowConfig(repoRoot, activeFlowName);
-    if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
-      const stageCfgForBlock = getStageConfig(config, state.current_stage);
-      const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
-      const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
-      const relForBlock = relative2(repoRoot, blockAbs);
-      const isFlowDocs = docsPaths.some((p) => {
-        const norm = p.endsWith("/") ? p : p + "/";
-        return relForBlock.startsWith(norm) || blockAbs.startsWith(join5(repoRoot, norm));
-      });
-      if (docsPaths.length > 0 && !isFlowDocs) {
-        const wrapUpPct = state.context_wrap_up.at_pct;
-        return deny(
-          `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ")}) are still allowed so you can land a handoff.
-
-Before /clear: write whatever a later session cannot reconstruct into those docs \u2014 which lane is where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any decision you have made but not recorded.
-What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report does not** \u2014 its findings, real-machine items and security self-check cannot be reconstructed from the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree state into the docs first.`
-        );
-      }
-    }
     if (tool_name === "Bash") {
       const command = String(tool_input["command"] ?? "");
       const flowRel = join5(".ai-flow", activeFlowName);
@@ -4571,6 +4551,26 @@ What /clear costs: flow state and commits are on disk and survive; **an in-fligh
         );
       }
       return null;
+    }
+    const config = await loadFlowConfig(repoRoot, activeFlowName);
+    if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
+      const stageCfgForBlock = getStageConfig(config, state.current_stage);
+      const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
+      const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
+      const relForBlock = relative2(repoRoot, blockAbs);
+      const isFlowDocs = docsPaths.some((p) => {
+        const norm = p.endsWith("/") ? p : p + "/";
+        return relForBlock.startsWith(norm) || blockAbs.startsWith(join5(repoRoot, norm));
+      });
+      if (docsPaths.length > 0 && !isFlowDocs) {
+        const wrapUpPct = state.context_wrap_up.at_pct;
+        return deny(
+          `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ")}) are still allowed so you can land a handoff.
+
+Before /clear: write whatever a later session cannot reconstruct into those docs \u2014 which lane is where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any decision you have made but not recorded.
+What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report does not** \u2014 its findings, real-machine items and security self-check cannot be reconstructed from the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree state into the docs first.`
+        );
+      }
     }
     if (READ_TOOLS.has(tool_name)) {
       const fp2 = String(tool_input["file_path"] ?? "");
