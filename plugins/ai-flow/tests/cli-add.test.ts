@@ -4,7 +4,8 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { builtinFlows, detect, nearestProjectRoot, ensureGitignore, install } from '../src/cli/add.js';
+import { builtinFlows, detect, nearestProjectRoot, ensureGitignore, install, forceWouldStrandFlow } from '../src/cli/add.js';
+import { PLUGIN_FLOWS_DIR } from '../src/lib/flow-paths.js';
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'ai-flow-cli-test-'));
@@ -218,6 +219,81 @@ describe('cli/add — install 只建锚点，不复制定义', () => {
 
     expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({});
     expect(out).toContain('wrap_up_at_pct');
+  });
+
+  // `--force` is the one thing this command does that can change a running flow's
+  // stage table, because a project-side `stages` replaces the plugin's wholesale.
+  // Getting it wrong is silent: both hot paths catch and return null, so the flow
+  // does not stop, it stops being a flow.
+  describe('--force 会不会把正在跑的 flow 撂在一个不存在的 stage 上', () => {
+    function pluginStages(): string[] {
+      const cfg = JSON.parse(
+        readFileSync(join(PLUGIN_FLOWS_DIR, 'feat-flow', 'config.json'), 'utf-8')
+      ) as { stages: Array<{ id: string }> };
+      return cfg.stages.map((st) => st.id);
+    }
+
+    function withOverrideStages(root: string, currentStage: string, overrideStageId: string) {
+      const dest = join(root, '.ai-flow', 'feat-flow');
+      writeFileSync(join(dest, 'config.json'), JSON.stringify({
+        stages: [{ id: overrideStageId, prompt: 'stages/x.md', write_scope: 'unrestricted', completion: { gate: true } }],
+      }));
+      writeFileSync(join(dest, 'state', 'active.json'), JSON.stringify({
+        flow_id: 'feat-20260903', current_stage: currentStage,
+      }));
+      return dest;
+    }
+
+    it('覆盖层带 stages 且当前 stage 不在插件表里 → 拒绝,不重置', () => {
+      const root = project();
+      runInstall('feat-flow', root);
+      const dest = withOverrideStages(root, 'stage-custom', 'stage-custom');
+
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('EXIT'); }) as never);
+      const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        expect(() => install('feat-flow', root, true)).toThrow('EXIT');
+        const msg = err.mock.calls.map((c) => String(c[0])).join('');
+        expect(msg).toContain('stage-custom');
+        expect(msg).toContain('静默失效');
+      } finally {
+        exit.mockRestore();
+        err.mockRestore();
+      }
+      // The refusal has to leave the override alone — resetting it IS the damage.
+      expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toHaveProperty('stages');
+    });
+
+    it('覆盖层带 stages 但当前 stage 插件表里也有 → 照常重置', () => {
+      const root = project();
+      runInstall('feat-flow', root);
+      const shared = pluginStages()[0]!;
+      const dest = withOverrideStages(root, shared, shared);
+
+      runInstall('feat-flow', root, true);
+
+      expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({});
+    });
+
+    it('覆盖层没有 stages → 不拦(阶段表本来就是插件那份,重置改不了它)', () => {
+      // Refusing here would blame this command for a flow that was already broken.
+      const root = project();
+      runInstall('feat-flow', root);
+      const dest = join(root, '.ai-flow', 'feat-flow');
+      writeFileSync(join(dest, 'config.json'), JSON.stringify({ context: { wrap_up_at_pct: 42 } }));
+      writeFileSync(join(dest, 'state', 'active.json'), JSON.stringify({
+        flow_id: 'feat-20260903', current_stage: 'stage-gone',
+      }));
+
+      runInstall('feat-flow', root, true);
+
+      expect(JSON.parse(readFileSync(join(dest, 'config.json'), 'utf-8'))).toEqual({});
+    });
+
+    it('没有正在跑的 flow → 不拦', () => {
+      const defCfg = join(PLUGIN_FLOWS_DIR, 'feat-flow', 'config.json');
+      expect(forceWouldStrandFlow(defCfg, '/nonexistent/config.json', null)).toEqual({ stranded: false });
+    });
   });
 
   it('--force 覆盖层本来就是 {} → 没有「丢了什么」可报,不吓唬用户', () => {

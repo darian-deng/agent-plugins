@@ -216,6 +216,49 @@ function overrideKeys(configPath: string): string[] {
   }
 }
 
+/** Stage ids a config.json declares, or [] if it declares none / cannot be read. */
+function stageIdsOf(configPath: string): string[] {
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8')) as { stages?: Array<{ id?: string }> };
+    return (cfg.stages ?? []).map((s) => String(s.id ?? '')).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Would resetting the override layer strand a running flow on a stage that no
+ * longer exists?
+ *
+ * `loadFlowConfig` lets a project-side `stages` REPLACE the plugin's wholesale
+ * (partial merge of a stage list has no defensible semantics), so `--force` is the
+ * one thing this command does that can change which stages a running flow has. If
+ * the stage it is sitting on is not among the plugin's, nothing crashes — and that
+ * is the problem. Both hot paths catch and return null (`session-handler.ts` and
+ * `pretool-handler.ts` end in catch-alls that log `ERROR <hook>` and bail), so the
+ * flow does not stop, it goes quiet: no stage prompt injected, every PreToolUse
+ * guard failing OPEN, the signal no longer intercepted so the stage never advances.
+ * The only trace is one line in flow.log.
+ *
+ * Deliberately narrow. It fires only when the override actually carries `stages` —
+ * without them the effective table is already the plugin's, so `--force` changes
+ * nothing about stages and refusing would blame this command for a flow that was
+ * already broken.
+ */
+export function forceWouldStrandFlow(
+  defConfigPath: string,
+  overridePath: string,
+  live: LiveFlow | null
+): { stranded: true; incoming: string[] } | { stranded: false } {
+  if (!live) return { stranded: false };
+  if (!overrideKeys(overridePath).includes('stages')) return { stranded: false };
+  const incoming = stageIdsOf(defConfigPath);
+  // An unreadable plugin config is a different failure; install() already required
+  // it to exist. Don't turn it into a bogus stranding refusal.
+  if (incoming.length === 0 || incoming.includes(live.current_stage)) return { stranded: false };
+  return { stranded: true, incoming };
+}
+
 export function install(flow: string, dir: string, force: boolean) {
   const defDir = join(PLUGIN_FLOWS_DIR, flow);
   if (!existsSync(join(defDir, 'config.json'))) {
@@ -260,6 +303,20 @@ export function install(flow: string, dir: string, force: boolean) {
     lines.push(`✅ '${flow}' 已装在 ${dest},本次只补齐缺失的部分。`);
     lines.push(`    config.json(项目侧稀疏覆盖层)保持原样未动——要把它重置成 {} 请重跑并加 --force。`);
   } else {
+    const strand = forceWouldStrandFlow(join(defDir, 'config.json'), overridePath, live);
+    if (strand.stranded) {
+      fail(
+        `拒绝重置:这里有一个正在跑的 flow(${live!.flow_id}),它停在 stage '${live!.current_stage}',\n` +
+        `而项目侧 config.json 用自己的 stages 覆盖了插件的阶段表。重置成 {} 之后阶段表换成插件那份\n` +
+        `(${strand.incoming.join(', ')}),里面没有 '${live!.current_stage}'。\n` +
+        `后果不是报错而是**静默失效**:引擎两条热路径都会捕获异常并放行,于是新 session 不再注入\n` +
+        `stage 提示词、PreToolUse 的守卫全部 fail open、signal 也不再被拦截,flow 永远推进不下去,\n` +
+        `只在 flow.log 留一行 ERROR。\n` +
+        `先选一条:① 等它跑完再重置;② \`${flow} abort\` 存快照后再重置;` +
+        `③ 手工把 state/active.json 的 current_stage 改成插件阶段表里的对应 id,再重跑本命令。\n` +
+        `位置:${dest}`
+      );
+    }
     const kept = overrideKeys(overridePath);
     if (kept.length > 0) {
       // The override layer is git-tracked, so this is recoverable — but only if the
