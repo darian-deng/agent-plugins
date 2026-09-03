@@ -1,6 +1,6 @@
 # 交接契约：新 session 先读什么 · 旧 session 走之前写什么
 
-> **触发**：① `/clear` 之后入场（任何 stage）② 撞上 context block 阈值 ③ 开发者说要 clear
+> **触发**：① `/clear` 之后入场（任何 stage）② 撞上 context 收尾阈值（`wrap_up_at_pct`）③ 开发者说要 clear
 > ④ 一批票收口之后。
 > `<flow_root>` = 本文件所在目录的上一级。`<产物目录>` = `docs/<flow 名>s/<flow_id>/`
 > （`flow_id` 用注入 context 顶部的实际值，勿自拼）。

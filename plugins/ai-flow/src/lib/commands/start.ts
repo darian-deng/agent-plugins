@@ -141,8 +141,7 @@ export async function handleStart(
     // owns last_session_id here, so without seeding it would never be recorded.
     history_session_ids: [sessionId],
     context_size: DEFAULT_CONTEXT_WINDOW,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
     first_prompt_handled: false,
   };
 

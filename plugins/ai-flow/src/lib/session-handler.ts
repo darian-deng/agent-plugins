@@ -122,8 +122,15 @@ export async function handleSessionStart(
   // ─────────────────────────────────────────────────────────────────────────────
 
   const isNewSession = state.last_session_id !== session_id;
-  // /clear and compact keep the same session_id, so isNewSession stays false.
-  // Detect them via source to ensure context state is properly reset.
+  // Observed on 27/27 `/clear` samples across two real flow.logs: the host hands the
+  // reentered session a NEW session_id, so `isNewSession` is already true on a `/clear`.
+  // `compact` did not occur in those samples, so whether it rotates the id is unmeasured
+  // here. `isClear` therefore keys off `source` and not off the id: both are context
+  // resets that must clear the warning / block latches below, and keying on `source` makes
+  // that independent of whether the host happens to rotate the id for either of them.
+  // (A rotated id still gets past the session mutex above because the SESSION_END logged
+  // immediately before the `/clear` has already set `last_session_id` back to null —
+  // see `session-end-handler.ts`.)
   const isClear = input.source === 'compact' || input.source === 'clear';
 
   // Note: there is an inherent TOCTOU race here — two sessions could both read
@@ -143,10 +150,7 @@ export async function handleSessionStart(
       ...(input.source === 'startup' && { context_size: contextWindowForModel(model) }),
     };
     if (isNewSession || isClear) {
-      patch.context_warning = {
-        warned: false, warned_at_pct: null, warned_at: null, block_reminded_at_pct: null,
-      };
-      patch.context_blocked = false;
+      patch.context_wrap_up = { at_pct: null };
       // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
       patch.first_prompt_handled = false;
     }

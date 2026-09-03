@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
 import { readActiveState } from '../src/lib/state.js';
 import { bindSession, unbindSession } from '../src/lib/session-registry.js';
-import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG } from './fixtures/helpers.js';
+import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG, NO_ESCAPE_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -887,8 +887,8 @@ describe('handlePreTool — non-owner read-only guard', () => {
   });
 });
 
-describe('handlePreTool — context block enforcement', () => {
-  it('context_blocked=true + write tool → DENY with /clear message', async () => {
+describe('handlePreTool — context wrap-up enforcement', () => {
+  it('wrap-up latched + write tool → DENY with /clear message', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -897,8 +897,7 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 65 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: '/tmp/foo.ts', content: 'x' }));
     expect(out?.permissionDecision).toBe('deny');
@@ -906,7 +905,7 @@ describe('handlePreTool — context block enforcement', () => {
     expect(out?.permissionDecisionReason).toContain('65%');
   });
 
-  it('context_blocked=true + Edit tool → DENY', async () => {
+  it('wrap-up latched + Edit tool → DENY', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -915,8 +914,7 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 70, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 70 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', { file_path: '/tmp/foo.ts', old_string: 'a', new_string: 'b' }));
     expect(out?.permissionDecision).toBe('deny');
@@ -925,42 +923,40 @@ describe('handlePreTool — context block enforcement', () => {
   // The block stops the session producing new work; it must not also block the safe
   // exit. Observed: a session crossed the threshold with a subagent in flight, could no
   // longer record anything, and `/clear` then lost that subagent's report.
-  it('context_blocked=true + write to the flow\'s own docs → 不被 block 拦（交接必须写得下去）', async () => {
+  it('wrap-up latched + write to the flow\'s own docs → 不被 block 拦（交接必须写得下去）', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc', flow_name: 'test-flow',
       requirement: 'test', current_stage: 'review', base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 65 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
       file_path: join(repo.repoRoot, 'docs', 'test-flow', 'test-flow-abc', 'tickets.md'),
       content: '交接块',
     }));
-    expect(out?.permissionDecisionReason ?? '').not.toMatch(/Context blocked/);
+    expect(out?.permissionDecisionReason ?? '').not.toMatch(/Context wrap-up started/);
   });
 
-  it('context_blocked=true + write to codebase（同一 stage）→ 仍 DENY，且文案讲清 /clear 的真实代价', async () => {
+  it('wrap-up latched + write to codebase（同一 stage）→ 仍 DENY，且文案讲清 /clear 的真实代价', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc', flow_name: 'test-flow',
       requirement: 'test', current_stage: 'review', base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 65 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
       file_path: join(repo.repoRoot, 'src', 'foo.ts'), content: 'x',
     }));
     expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toContain('Context blocked');
+    expect(out?.permissionDecisionReason).toContain('Context wrap-up started at 65%');
     // 旧文案说 "progress won't be lost" —— 在有在飞子代理时那是假的。
     expect(out?.permissionDecisionReason).not.toMatch(/won't be lost/);
     expect(out?.permissionDecisionReason).toMatch(/in-flight subagent/i);
   });
 
-  it('context_blocked=true + Read tool → ALLOW (read tools not blocked)', async () => {
+  it('wrap-up latched + Read tool → ALLOW (read tools not blocked)', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -969,8 +965,7 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 70, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 70 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Read', { file_path: '/tmp/foo.ts' }));
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
@@ -981,7 +976,7 @@ describe('handlePreTool — context block enforcement', () => {
   // caused it. Observed: a session latched at 61% and did the prescribed thing — handed
   // the remaining fix work to a fresh subagent — which was then refused mid-edit at 75K
   // of its own context, leaving one file created and its call sites unwired.
-  it('context_blocked=true + 子代理写代码 → 不被 block 拦（fresh context 正是退化时的处方）', async () => {
+  it('wrap-up latched + 子代理写代码 → 不被 block 拦（fresh context 正是退化时的处方）', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -990,8 +985,7 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 61, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 61 },
     });
     const input = makeInput(repo.repoRoot, 'Edit', {
       file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b',
@@ -1000,10 +994,10 @@ describe('handlePreTool — context block enforcement', () => {
     const out = await handlePreTool(input);
     // 断言 allow 而不是只排除 block 的文案：写不进去就是写不进去，换一条守卫来拦同样是回归。
     expect(out?.permissionDecision ?? 'allow').toBe('allow');
-    expect(out?.permissionDecisionReason ?? '').not.toMatch(/context blocked/i);
+    expect(out?.permissionDecisionReason ?? '').not.toMatch(/context wrap-up started/i);
   });
 
-  it('context_blocked=true + 主 session 写代码 → 仍 DENY（agent_id 缺席时行为不变）', async () => {
+  it('wrap-up latched + 主 session 写代码 → 仍 DENY（agent_id 缺席时行为不变）', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -1012,17 +1006,16 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 61, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 61 },
     });
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', {
       file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b',
     }));
     expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toMatch(/context blocked/i);
+    expect(out?.permissionDecisionReason).toMatch(/context wrap-up started/i);
   });
 
-  it('context_blocked=false + write tool → normal processing (not denied by block)', async () => {
+  it('wrap-up not latched + write tool → normal processing (not denied by the wrap-up guard)', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -1031,19 +1024,87 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: false,
+      context_wrap_up: { at_pct: null },
     });
     const anyPath = join(repo.repoRoot, 'src', 'main.ts');
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: anyPath, content: 'x' }));
     // Should NOT be denied by context block (may be allowed or denied for other reasons)
     const reason = out?.permissionDecisionReason ?? '';
-    expect(reason).not.toMatch(/context blocked/i);
+    expect(reason).not.toMatch(/context wrap-up started/i);
   });
 
-  // Design intent: signal writes are also blocked when context_blocked=true.
-  // User must /clear first — after which context_blocked resets to false — then signal.
+  // A stage with no docs_paths has no safe exit, and the guard's whole design note
+  // says it "must not also block the safe exit". Observed before this branch existed:
+  // an `unrestricted` stage with no docs_paths (legal — the schema requires them only
+  // for `docs_only`, so `/ai-flow:create` emits it) latched at 60%, and then BOTH the
+  // code write AND the handoff write were denied, the refusal text claiming writes to
+  // "this flow's own docs (none configured)" were still allowed. The only prescribed
+  // way out is `/clear`, which requires the handoff to be on disk first.
+  describe('stage without docs_paths → nothing is refused (there is no safe exit to keep open)', () => {
+    function latchedNoEscapeRepo() {
+      const repo = createFlowTestRepo('test-flow', NO_ESCAPE_CONFIG);
+      cleanups.push(repo.cleanup);
+      writeActiveState(repo.repoRoot, 'test-flow', {
+        flow_id: 'test-flow-abc',
+        flow_name: 'test-flow',
+        requirement: 'test',
+        current_stage: 'work',
+        base_sha: 'abc',
+        context_wrap_up: { at_pct: 60 },
+      });
+      return repo;
+    }
+
+    it('write to the codebase → ALLOW, not denied by the wrap-up guard', async () => {
+      const repo = latchedNoEscapeRepo();
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
+        file_path: join(repo.repoRoot, 'src', 'main.ts'), content: 'x',
+      }));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+      expect(out?.permissionDecisionReason ?? '').not.toMatch(/context wrap-up started/i);
+    });
+
+    it('write to a handoff document → ALLOW (this is the write /clear depends on)', async () => {
+      const repo = latchedNoEscapeRepo();
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
+        file_path: join(repo.repoRoot, 'docs', 'handoff.md'), content: '交接块',
+      }));
+      // allow, not merely "the wrap-up guard stayed quiet": a handoff that cannot be
+      // written is the whole defect, whichever guard refuses it.
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+      expect(out?.permissionDecisionReason ?? '').not.toMatch(/none configured/);
+    });
+
+    it('Edit to the codebase → ALLOW too (the guard covers every write tool or none)', async () => {
+      const repo = latchedNoEscapeRepo();
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Edit', {
+        file_path: join(repo.repoRoot, 'src', 'main.ts'), old_string: 'a', new_string: 'b',
+      }));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+
+    // Includes the signal, i.e. the stage can still advance here — which the
+    // configured-docs_paths case refuses ('wrap-up latched + signal Write → DENY'
+    // below). Pinned rather than left implicit because it is a real consequence of
+    // "nothing is refused" and reads like an oversight otherwise: making signal the
+    // one exception would recreate the very defect this branch exists to fix, in a
+    // smaller shape — a session that can neither write nor advance, with `/clear`
+    // (which costs whatever is not on disk) as its only move.
+    it('signal Write → ALLOW as well, so the stage can still advance', async () => {
+      const repo = latchedNoEscapeRepo();
+      const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', {
+        file_path: join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal'),
+        content: 'done',
+      }));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+      expect(out?.permissionDecisionReason ?? '').not.toMatch(/context wrap-up started/i);
+    });
+  });
+
+  // Design intent: signal writes are refused once the wrap-up has latched too.
+  // User must /clear first — SessionStart clears the latch — then signal.
   // This prevents stage advancement with an already-exhausted context window.
-  it('context_blocked=true + signal Write → DENY (stage advancement blocked too)', async () => {
+  it('wrap-up latched + signal Write → DENY (stage advancement blocked too)', async () => {
     const repo = createFlowTestRepo('test-flow', BLOCKING_CONFIG);
     cleanups.push(repo.cleanup);
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -1052,12 +1113,11 @@ describe('handlePreTool — context block enforcement', () => {
       requirement: 'test',
       current_stage: 'work',
       base_sha: 'abc',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 65, warned_at: new Date().toISOString() },
+      context_wrap_up: { at_pct: 65 },
     });
     const signalPath = join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'signal');
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: '' }));
     expect(out?.permissionDecision).toBe('deny');
-    expect(out?.permissionDecisionReason).toMatch(/context blocked/i);
+    expect(out?.permissionDecisionReason).toMatch(/context wrap-up started/i);
   });
 });

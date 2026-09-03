@@ -3,6 +3,7 @@ import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { handleResume } from '../src/lib/commands/resume.js';
+import { handleAbort } from '../src/lib/commands/abort.js';
 import { readActiveState } from '../src/lib/state.js';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG } from './fixtures/helpers.js';
 
@@ -97,7 +98,7 @@ describe('handleResume', () => {
       started_at: '2024-01-01T00:00:00.000Z',
       last_session_id: 'old-session',
       context_size: 50,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-2024-01-01T00-00-00', snapshot);
     const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-2024-01-01T00-00-00');
@@ -119,7 +120,7 @@ describe('handleResume', () => {
       current_stage: 'work', base_sha: 'abc123',
       base_sha_code: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       started_at: '2024-01-01T00:00:00.000Z', last_session_id: null, context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     });
     const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-with-base');
     expect(result.action).toBe('allow');
@@ -135,7 +136,7 @@ describe('handleResume', () => {
       flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'r',
       current_stage: 'work', base_sha: 'abc123',
       started_at: '2024-01-01T00:00:00.000Z', last_session_id: null, context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     });
     await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-no-base');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
@@ -153,7 +154,7 @@ describe('handleResume', () => {
       started_at: '2024-01-01T00:00:00.000Z',
       last_session_id: 'old-session-999',
       context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-resume-test', snapshot);
     await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-resume-test');
@@ -186,7 +187,7 @@ describe('handleResume', () => {
       started_at: '2024-01-01T00:00:00.000Z',
       last_session_id: null,
       context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-ctx-test', snapshot);
     const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-ctx-test');
@@ -206,7 +207,7 @@ describe('handleResume', () => {
       started_at: '2024-01-01T00:00:00.000Z',
       last_session_id: null,
       context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-gated', snapshot);
     const result = await handleResume(repo.repoRoot, 'test-flow', 'test-sess', 'test-flow/aborted-gated');
@@ -226,11 +227,105 @@ describe('handleResume', () => {
       started_at: '2024-01-01T00:00:00.000Z',
       last_session_id: null,
       context_size: 0,
-      context_warning: { warned: false, warned_at_pct: null, warned_at: null },
+      context_wrap_up: { at_pct: null },
     };
     createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-hist', snapshot);
     await handleResume(repo.repoRoot, 'test-flow', 'sess-resume', 'test-flow/aborted-hist');
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.history_session_ids).toEqual(['sess-resume']);
+  });
+
+  /**
+   * `history_session_ids` 的契约（state.ts）是 append-only：范围是「这个 flow instance
+   * 曾经的所有持有者」，而 resume 沿用快照的 flow_id / started_at，所以 abort/resume
+   * 前后是同一个 instance，历史必须贯通。这里曾经写的是 `[sessionId]`（照抄 start.ts，
+   * 那边新 flow 本来就没历史），于是每次 resume 都把已有历史冲掉。
+   *
+   * 上面那条「seeds ...」的快照里根本没有 history_session_ids 这个键，钉不住这条性质，
+   * 所以下面三条分别覆盖：有历史 / resuming session 已在历史里 / 旧快照没这个键。
+   */
+  it('快照里已有历史 → 追加 resuming session，历史在前顺序不变', async () => {
+    const repo = makeRepo();
+    const snapshot = {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'resume hist append',
+      current_stage: 'work',
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00.000Z',
+      last_session_id: null,
+      history_session_ids: ['sess-old-1', 'sess-old-2'],
+      context_size: 0,
+      context_wrap_up: { at_pct: null },
+    };
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-hist-append', snapshot);
+    await handleResume(repo.repoRoot, 'test-flow', 'sess-resume', 'test-flow/aborted-hist-append');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toEqual(['sess-old-1', 'sess-old-2', 'sess-resume']);
+  });
+
+  // 去重语义要和追加侧（session-handler.ts 的 `!historyIds.includes(session_id)`）一致。
+  it('resuming session 已在快照历史里 → 不重复追加', async () => {
+    const repo = makeRepo();
+    const snapshot = {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'resume hist dedupe',
+      current_stage: 'work',
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00.000Z',
+      last_session_id: null,
+      history_session_ids: ['sess-a', 'sess-resume'],
+      context_size: 0,
+      context_wrap_up: { at_pct: null },
+    };
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-hist-dedupe', snapshot);
+    await handleResume(repo.repoRoot, 'test-flow', 'sess-resume', 'test-flow/aborted-hist-dedupe');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toEqual(['sess-a', 'sess-resume']);
+  });
+
+  // 该字段是可选的，早于它存在的快照里没有这个键——那种快照必须仍然只记下 resuming session。
+  it('快照里没有 history_session_ids 这个键 → 仍然只记下 resuming session', async () => {
+    const repo = makeRepo();
+    const snapshot: Record<string, unknown> = {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'resume hist legacy',
+      current_stage: 'work',
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00.000Z',
+      last_session_id: null,
+      context_size: 0,
+      context_wrap_up: { at_pct: null },
+    };
+    expect('history_session_ids' in snapshot).toBe(false);
+    createAbortBranch(repo.repoRoot, 'test-flow', 'test-flow/aborted-hist-legacy', snapshot);
+    await handleResume(repo.repoRoot, 'test-flow', 'sess-resume', 'test-flow/aborted-hist-legacy');
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toEqual(['sess-resume']);
+  });
+
+  // 端到端：abort 写快照（整份 state 原样落盘）→ resume 读回，审计历史必须贯通。
+  // 上面三条用手写快照，这条确认真实 abort 产出的快照也带得动历史。
+  it('abort → resume 往返：审计历史贯通', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'roundtrip hist',
+      current_stage: 'work',
+      base_sha: execSync('git rev-parse HEAD', { cwd: repo.repoRoot, encoding: 'utf-8' }).trim(),
+      history_session_ids: ['sess-first', 'sess-second'],
+    });
+    const abortResult = await handleAbort(repo.repoRoot, 'test-flow', 'sess-second', '--confirm');
+    expect(abortResult.action).toBe('allow');
+    const branch = execSync('git branch', { cwd: repo.repoRoot, encoding: 'utf-8' })
+      .match(/test-flow\/aborted-[0-9T-]+/)?.[0];
+    expect(branch).toBeTruthy();
+
+    await handleResume(repo.repoRoot, 'test-flow', 'sess-third', branch!);
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(state!.history_session_ids).toEqual(['sess-first', 'sess-second', 'sess-third']);
   });
 });

@@ -64,7 +64,7 @@ interface FlowInfo {
  * The template ships none of these — they only exist once a flow has run. They are
  * also gitignored (`**‍/.ai-flow/**‍/state/`), so deleting one is unrecoverable: it
  * takes `active.json` (the whole control plane: which stage the flow is on, the diff
- * bases, the owning session), plus `signal`, `mark-base` and `transitions.log`. A
+ * bases, the owning session), plus `signal`, `mark-base` and `flow.log`. A
  * reinstall that removes them does not "reset" a running flow, it destroys it.
  */
 const ENGINE_OWNED_ENTRIES = new Set(['state']);

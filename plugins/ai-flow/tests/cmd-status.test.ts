@@ -67,7 +67,31 @@ describe('handleStatus', () => {
     expect(ctx).toMatch(/gate|approve/i);
   });
 
-  it('context warning state shown if warned: true', async () => {
+  // The old assertion here was `/context|75/` — no `i` flag against an output that
+  // says "Context", so only the "75" alternative ever matched and any wording would
+  // have passed. What the echo has to convey is the level AND what is refused at it.
+  it('context wrap-up state shown once the threshold has been crossed', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'review',
+      base_sha: 'abc',
+      context_wrap_up: { at_pct: 75 },
+    });
+    const result = await handleStatus(repo.repoRoot, 'test-flow');
+    const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
+    // MINIMAL_CONFIG's `review` stage declares docs_paths, so the refusal is live and
+    // the echo names both halves — including the resolved path, {flow_id} expanded.
+    expect(ctx).toContain('Context wrap-up started at 75% used');
+    expect(ctx).toContain('writes to the codebase are refused');
+    expect(ctx).toContain('docs/test-flow/test-flow-abc/');
+  });
+
+  // Same latch, on a stage that declares no docs_paths: there is no path the refusal
+  // could leave open, so pretool refuses nothing and the echo must not claim it does.
+  it('wrap-up on a stage with no docs_paths → echo says nothing is being refused', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -75,10 +99,13 @@ describe('handleStatus', () => {
       requirement: 'build',
       current_stage: 'work',
       base_sha: 'abc',
-      context_warning: { warned: true, warned_at_pct: 75, warned_at: '2024-01-01T00:00:00Z' },
+      context_wrap_up: { at_pct: 75 },
     });
     const result = await handleStatus(repo.repoRoot, 'test-flow');
     const ctx = (result as { action: 'allow'; additionalContext?: string }).additionalContext ?? '';
-    expect(ctx).toMatch(/context|75/);
+    expect(ctx).toContain('Context wrap-up started at 75% used');
+    expect(ctx).toContain('no docs_paths');
+    expect(ctx).toContain('no write is being refused');
+    expect(ctx).not.toContain('writes to the codebase are refused');
   });
 });

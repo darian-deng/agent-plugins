@@ -137,7 +137,7 @@ describe('cli/add — ensureGitignore', () => {
 /**
  * `install --force` used to `rmSync` the whole installed flow directory before copying
  * the template back. That took `state/` with it — `active.json`, `signal`, `mark-base`,
- * `transitions.log`. `state/` is gitignored, so a reinstall aimed at picking up a fixed
+ * `flow.log`. `state/` is gitignored, so a reinstall aimed at picking up a fixed
  * stage prompt silently destroyed any flow that was mid-run, with nothing to restore
  * from. These two guard the fix.
  */
@@ -154,7 +154,7 @@ describe('cli/add — --force 不能杀掉正在跑的 flow', () => {
     if (currentStage) {
       mkdirSync(join(dest, 'state'), { recursive: true });
       writeFileSync(join(dest, 'state', 'active.json'), JSON.stringify({ flow_id: 'demo-20260816', current_stage: currentStage }));
-      writeFileSync(join(dest, 'state', 'transitions.log'), 'STARTED\n');
+      writeFileSync(join(dest, 'state', 'flow.log'), 'STARTED\n');
     }
     return dest;
   }
@@ -166,7 +166,7 @@ describe('cli/add — --force 不能杀掉正在跑的 flow', () => {
     return src;
   }
 
-  it('清模板文件时保留 state/：陈旧文件删掉，active.json 与 transitions.log 原样留下', () => {
+  it('清模板文件时保留 state/：陈旧文件删掉，active.json 与 flow.log 原样留下', () => {
     const dest = installedFlow(['stage-1', 'stage-2'], 'stage-2');
     const before = readFileSync(join(dest, 'state', 'active.json'), 'utf-8');
 
@@ -179,7 +179,7 @@ describe('cli/add — --force 不能杀掉正在跑的 flow', () => {
     expect(existsSync(join(dest, 'helper.md'))).toBe(false);
     // 引擎拥有的一个都没动
     expect(readFileSync(join(dest, 'state', 'active.json'), 'utf-8')).toBe(before);
-    expect(readFileSync(join(dest, 'state', 'transitions.log'), 'utf-8')).toBe('STARTED\n');
+    expect(readFileSync(join(dest, 'state', 'flow.log'), 'utf-8')).toBe('STARTED\n');
   });
 
   it('没有正在跑的 flow → 直接放行，不报 live', () => {

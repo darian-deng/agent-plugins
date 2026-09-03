@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { readFileSync, existsSync, mkdtempSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { handleSessionStart } from '../src/lib/session-handler.js';
@@ -132,7 +132,7 @@ describe('handleSessionStart', () => {
     expect(out!.additionalContext).toContain('Stage: work');
   });
 
-  it('new session → context_warning reset in state', async () => {
+  it('new session → context_wrap_up reset in state', async () => {
     const repo = makeRepo();
     // last_session_id: null represents a cleanly ended prior session (SessionEnd cleared it)
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -142,14 +142,14 @@ describe('handleSessionStart', () => {
       current_stage: 'work',
       base_sha: 'abc',
       last_session_id: null,
-      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+      context_wrap_up: { at_pct: 80 },
     });
     await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.context_warning.warned).toBe(false);
+    expect(state!.context_wrap_up.at_pct).toBeNull();
   });
 
-  it('same session → context_warning NOT reset', async () => {
+  it('same session → context_wrap_up NOT reset', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -158,14 +158,14 @@ describe('handleSessionStart', () => {
       current_stage: 'work',
       base_sha: 'abc',
       last_session_id: 'same-session',
-      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+      context_wrap_up: { at_pct: 80 },
     });
     await handleSessionStart(makeInput(repo.repoRoot, 'same-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.context_warning.warned).toBe(true);
+    expect(state!.context_wrap_up.at_pct).toBe(80);
   });
 
-  it('last_session_id null (post-resume) → context_warning reset on new session', async () => {
+  it('last_session_id null (post-resume) → context_wrap_up reset on new session', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
       flow_id: 'test-flow-abc',
@@ -174,11 +174,11 @@ describe('handleSessionStart', () => {
       current_stage: 'work',
       base_sha: 'abc',
       last_session_id: null,
-      context_warning: { warned: true, warned_at_pct: 80, warned_at: '2024-01-01T00:00:00Z' },
+      context_wrap_up: { at_pct: 80 },
     });
     await handleSessionStart(makeInput(repo.repoRoot, 'brand-new-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.context_warning.warned).toBe(false);
+    expect(state!.context_wrap_up.at_pct).toBeNull();
   });
 
   it('last_session_id updated in active.json after session start', async () => {
@@ -248,39 +248,52 @@ describe('handleSessionStart', () => {
     expect(state!.context_size).toBe(1_000_000);
   });
 
-  it('new session → context_blocked reset to false in state', async () => {
+  // These two used to seed `context_blocked` directly. That field is gone — the
+  // wrap-up latch is `context_wrap_up.at_pct` — so they now write the shape the
+  // TWO-LEVEL engine left on disk and assert SessionStart still behaves. Real
+  // flows are mid-run with state files in that shape, and this is the path they
+  // take on their first SessionStart under the new engine.
+  function writeLegacyActiveState(repoRoot: string, ownerSessionId: string | null): void {
+    const dir = join(repoRoot, '.ai-flow', 'test-flow', 'state');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'active.json'), JSON.stringify({
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'work',
+      base_sha: 'abc',
+      started_at: '2024-01-01T00:00:00Z',
+      last_session_id: ownerSessionId,
+      context_size: 0,
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z', block_reminded_at_pct: 72 },
+    }, null, 2));
+  }
+
+  it('new session on a legacy active.json → wrap-up latch cleared, old keys gone', async () => {
     const repo = makeRepo();
     // null = prior session ended cleanly; new session may claim ownership
-    writeActiveState(repo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'build',
-      current_stage: 'work',
-      base_sha: 'abc',
-      last_session_id: null,
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z' },
-    });
+    writeLegacyActiveState(repo.repoRoot, null);
     await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.context_blocked).toBe(false);
+    expect(state!.context_wrap_up).toEqual({ at_pct: null });
+    // SessionStart patches, and patchActiveState spreads the normalized read, so
+    // the removed keys must not survive on disk.
+    const onDisk = JSON.parse(readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8'));
+    expect(onDisk).not.toHaveProperty('context_blocked');
+    expect(onDisk).not.toHaveProperty('context_warning');
   });
 
-  it('same session → context_blocked NOT reset', async () => {
+  it('same session on a legacy active.json → latch carried over, not cleared', async () => {
     const repo = makeRepo();
-    writeActiveState(repo.repoRoot, 'test-flow', {
-      flow_id: 'test-flow-abc',
-      flow_name: 'test-flow',
-      requirement: 'build',
-      current_stage: 'work',
-      base_sha: 'abc',
-      last_session_id: 'same-session',
-      context_blocked: true,
-      context_warning: { warned: true, warned_at_pct: 70, warned_at: '2024-01-01T00:00:00Z' },
-    });
+    writeLegacyActiveState(repo.repoRoot, 'same-session');
     await handleSessionStart(makeInput(repo.repoRoot, 'same-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
-    expect(state!.context_blocked).toBe(true);
+    // The old file had context_blocked: true, so the wrap-up had genuinely started
+    // at 70% — pretool must keep refusing code writes and keep naming that level.
+    // toEqual: `block_reminded_at_pct: 72` throttled a repeat reminder that no
+    // longer exists, so nothing on the new object may carry it.
+    expect(state!.context_wrap_up).toEqual({ at_pct: 70 });
   });
 
   it('missing stage prompt file → injects summary without crash', async () => {

@@ -141,6 +141,16 @@ const SPLIT_STAGES: SplitStage[] = [
       'per-ticket-review.md', 'quality-chain.md', 'revision-protocol.md',
     ],
     resident: [
+      // `## 入场` 的 Step 0 三条预检。它们完全符合本字段的定义却一直没被钉住：`worktree.cjs` 从主仓
+      // `git branch --show-current` 取需求分支名（脚本注释里写着），但**从不检查**它是不是 main；
+      // `gate-stage-3.cjs` 的机器门⑤ 确实查残留 worktree，但那是 stage-3 的**出口**、且只按当前
+      // `<flow_id>-` 前缀收窄（`gate-stage-3.cjs` 的「⑤ worktree 已收口」段），入场那一刻和别的
+      // flow 留下的树都不在它视野里；`start.ts` 也没有分支检查。
+      // 在 main 上开工的后果是每张票逐个从 main 开出再 ff-merge 回 main，不可逆——而搬走它们
+      // （或把「停」改写成建议）不会让任何脚本、测试或退出码变红。
+      ['Step 0 预检①：在 main/master 上不许开工', /`git branch --show-current` — 在 main\/master → 停/],
+      ['Step 0 预检②：工作树有代码改动就停下问开发者', /`git status --porcelain` — 含代码改动 → 停问开发者/],
+      ['Step 0 预检③：残留 worktree 先收口，别新开', /`git worktree list` — 有 `wt\/<flow_id>-` 分支的条目 → 上一轮残留/],
       ['记账顺序：rm:pending 必须在 qc:done 之前', /`rm:pending`\s*必须排在\s*`qc:done`\s*之前/],
       ['batch: 必须写在票行内或其缩进子项', /写在该票那条行内或其缩进子项/],
       ['车道模式派发前要落的是 wip: 而不是 lane:', /派发前真正要落的是\s*`wip: R<n>`/],

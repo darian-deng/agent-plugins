@@ -18,20 +18,35 @@ import { join, dirname, resolve, relative } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 import { lookupSession, listBindings, removeBinding } from './session-registry.js';
 
-export interface ContextWarning {
-  warned: boolean;
-  warned_at_pct: number | null;
-  warned_at: string | null;
+/**
+ * One field, still an object. The wrapper earns its place at the read boundary:
+ * `normalizeActiveState` tells the current shape from the pre-wrap-up one by
+ * whether this key holds an object, and a bare nullable number would make
+ * "present and null" versus "absent" load-bearing instead. A second field later
+ * (the stage that latched, a timestamp) then costs nothing at the ~15 write sites.
+ */
+export interface ContextWrapUp {
   /**
-   * Water mark of the LAST block-threshold reminder that was actually emitted.
-   * Distinct from `warned_at_pct`, which freezes at the moment the block latched
-   * and never moves again — reusing it for throttling would either spam every
-   * sample or silence every reminder after the first. This one advances, so the
-   * block branch can say the full wrap-up brief once and then a one-liner per
-   * further percent. Absent on flows created before this field existed; treat
-   * undefined as "no block reminder emitted yet".
+   * Context occupancy at the FIRST crossing of the flow's `wrap_up_at_pct`, or
+   * null while it has never been crossed. This doubles as the latch: non-null
+   * means the wrap-up has started, which is what pretool-handler reads to refuse
+   * writes to the codebase (the flow's own docs stay writable). It freezes at the
+   * first crossing, so the refusal can name the level it happened at — and,
+   * since the latch is persistent (only a new session / `/clear` clears it),
+   * "already wrapping up" needs no repeated injection to stay true.
    */
-  block_reminded_at_pct?: number | null;
+  at_pct: number | null;
+}
+
+/** Shape written by the two-level (warn + block) engine. Read-side only. */
+interface LegacyContextFields {
+  context_warning?: {
+    warned?: boolean;
+    warned_at_pct?: number | null;
+    warned_at?: string | null;
+    block_reminded_at_pct?: number | null;
+  };
+  context_blocked?: boolean;
 }
 
 export interface ActiveState {
@@ -43,8 +58,7 @@ export interface ActiveState {
   started_at: string;
   last_session_id: string | null;
   context_size: number;
-  context_warning: ContextWarning;
-  context_blocked: boolean;
+  context_wrap_up: ContextWrapUp;
   /**
    * Whether this session's first non-command user prompt has already been
    * given the resume guidance (Layer 2 in userprompt-handler). Reset to false
@@ -77,11 +91,38 @@ function stateDir(repoRoot: string, flowName: string): string {
   return join(repoRoot, '.ai-flow', flowName, 'state');
 }
 
+/**
+ * Bring an active.json written by the two-level engine (`context_warning` +
+ * `context_blocked`) onto the single wrap-up threshold. Real flows are mid-run
+ * with state files in the old shape, and every read in the codebase goes through
+ * `readActiveState`, so this is the one place that needs to know the old shape:
+ * the next `patchActiveState` spreads the normalized object, and the old keys
+ * stop being written from then on.
+ *
+ * `at_pct` is carried over ONLY when the old file had actually latched
+ * (`context_blocked: true`). The old `warned_at_pct` also moved for the mere warn
+ * level — 50% against a 60% block — so carrying it unconditionally would tell the
+ * new engine the wrap-up had already started at 55% and make pretool refuse code
+ * writes to a session that was never blocked. Not latched → null, and the next
+ * context sample latches on its own once the occupancy reaches the threshold.
+ */
+function normalizeActiveState(parsed: unknown): ActiveState {
+  const { context_warning: legacy, context_blocked: legacyLatched, ...rest } =
+    parsed as ActiveState & LegacyContextFields;
+  if (rest.context_wrap_up && typeof rest.context_wrap_up === 'object') return rest;
+  const latched = legacyLatched === true;
+  const atPct = latched ? (legacy?.warned_at_pct ?? null) : null;
+  // `block_reminded_at_pct` is read off the old file only to be discarded: the
+  // repeat reminder it throttled no longer exists, so there is no water mark to
+  // carry forward.
+  return { ...rest, context_wrap_up: { at_pct: atPct } };
+}
+
 export async function readActiveState(repoRoot: string, flowName: string): Promise<ActiveState | null> {
   const path = statePath(repoRoot, flowName, 'active.json');
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as ActiveState;
+    return normalizeActiveState(JSON.parse(readFileSync(path, 'utf-8')));
   } catch {
     return null;
   }

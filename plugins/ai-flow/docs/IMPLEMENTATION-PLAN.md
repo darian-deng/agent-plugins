@@ -3,6 +3,28 @@
 Execution method: TDD (red → green → refactor), strictly in dependency order.
 Target: 100% line + branch coverage. Python3 tests use `skipIf(!hasPython3())`.
 
+> **历史文档，不是当前实现的参考。** 这份计划记录的是引擎重写当时的设计意图，此后未再维护
+> （最后一次改动是 Phase 9 的 `feat-flow` → `ai-flow` 改名）。多处命名与结构后来在实现中变了，
+> 例如 Phase 3 列出的 `transitions.log` / `violations.log` 已合并为单一 `flow.log`（commit
+> `2969545`），`gate-token` 整个机制已不存在。
+>
+> Phase 1 / 3 / 6e / 7c / 7d / 8 描述的两级 context（上下文窗口占用）保护也已经不是现在的样子：
+> 原来的 `warn_at_pct`（到点注入提醒）+ `block_at_pct`（到点拒写）两个旋钮，已合并成单一的
+> `wrap_up_at_pct`（默认 60）。越过阈值时一次性注入一份「开始为 /clear 收尾」的简报，此后主
+> session 对代码的写入被拒，而当前 stage 的 `docs_paths` 仍然放行，正是为了让交接文档写得下去；
+> 若该 stage 没有声明 `docs_paths`（schema 只在 `write_scope: 'docs_only'` 时要求它，所以
+> `unrestricted` 的 stage 合法地可以没有），引擎在那个 stage 上一个写入都不拒 —— 拒了就连交接
+> 都写不进去，而唯一的出路 `/clear` 恰恰要求先把交接落盘 —— wrap-up 在这种 stage 上退化成
+> 「只通知、不强制」。状态字段上，Phase 3 的 `context_warning` 和当时另有的 `context_blocked`
+> 已合并为一个 `context_wrap_up`：它非空就表示这个 session 已经进入收尾，同时兼作 latch（闩锁，
+> 置上后不再重复注入简报）。日志事件名 `CONTEXT_WARN` / `CONTEXT_BLOCK` 已统一为
+> `CONTEXT_WRAP_UP`（带 `pct` / `threshold` 和首次越线的 `first` 标记）。而 Phase 6a 提到的
+> `block_start_if_above_pct` 已经**不是配置项**了：它现在是 `commands/start.ts` 里的常量
+> `BLOCK_START_IF_ABOVE_PCT = 95`，`FlowConfigSchema` 里没有这个字段。照这份文档往
+> `config.json` 里写它不会报错——zod 会静默 strip 掉未知键，所以它是**静默无效**。
+>
+> **要了解引擎当前行为，读 `src/`，不要读这份文档。**
+
 ---
 
 ## Phase 0 — Delete dead code (no tests needed)

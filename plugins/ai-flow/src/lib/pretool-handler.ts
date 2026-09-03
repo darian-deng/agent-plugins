@@ -202,7 +202,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // "progress won't be lost" — is false while a subagent is running.
   //
   // Scope it to the main session, mirroring the measurement side (`posttool-handler`
-  // skips accounting when `agent_id` is present). `context_blocked` is latched on the
+  // skips accounting when `agent_id` is present). `context_wrap_up.at_pct` is latched on the
   // shared flow state by whoever crossed the threshold, so without this the latch
   // reaches every subagent too — including ones that started after it and carry a
   // fraction of the context that caused it. Observed: a session latched at 61% and
@@ -224,9 +224,25 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // 614K → 665K. Which is also why the block message now reads as "start wrapping up"
   // rather than "stop touching tools" — a signal the model can honour while still
   // landing a handoff beats one it either obeys into paralysis or routes around.
-  if (state.context_blocked && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
+  if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
     const stageCfgForBlock = getStageConfig(config, state.current_stage);
     const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
+    // A stage with no docs_paths has no safe exit, so this guard refuses nothing at
+    // all there and the wrap-up degrades to the brief posttool already injected.
+    // `docs_paths` is only *required* for `write_scope: 'docs_only'` (flow-schema.ts),
+    // so `/ai-flow:create` legitimately emits `unrestricted` stages without it — and
+    // on those, refusing the codebase left the session nowhere to write while this
+    // very message claimed the flow's docs were open ("none configured"). Since the
+    // prescribed remedy is `/clear` and that costs whatever is not on disk, the guard
+    // is what gives way, not the handoff. It also cannot fall back to some invented
+    // path: the writable directory is the flow's own contract, not the engine's.
+    // Both shipped flows set docs_paths on every stage, so this branch is for custom
+    // flows only. Reaching it means the flow has no wrap-up enforcement — the brief
+    // (and `status`) still say the context is spent, nothing refuses a write.
+    // "Nothing" includes the signal, so the stage can still advance here, which the
+    // configured case refuses. Deliberate: carving out signal alone would recreate
+    // this very defect one size down — a session that can neither write nor advance,
+    // with `/clear` (costing whatever is not on disk) as its only move.
     // Resolve the target here rather than reusing the one computed further down —
     // this check has to run before the write-tool path handling begins.
     const blockAbs = resolvePath(repoRoot, String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? ''));
@@ -235,12 +251,11 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       const norm = p.endsWith('/') ? p : p + '/';
       return relForBlock.startsWith(norm) || blockAbs.startsWith(join(repoRoot, norm));
     });
-    if (!isFlowDocs) {
-      const blockedPct = state.context_warning.warned_at_pct;
-      const pctInfo = blockedPct !== null ? ` at ${blockedPct}%` : '';
+    if (docsPaths.length > 0 && !isFlowDocs) {
+      const wrapUpPct = state.context_wrap_up.at_pct;
       return deny(
-        `Context blocked${pctInfo}. Writes to the codebase are refused; writes to this flow's own docs `
-        + `(${docsPaths.join(', ') || 'none configured'}) are still allowed so you can land a handoff.\n\n`
+        `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs `
+        + `(${docsPaths.join(', ')}) are still allowed so you can land a handoff.\n\n`
         + `Before /clear: write whatever a later session cannot reconstruct into those docs — which lane is `
         + `where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any `
         + `decision you have made but not recorded.\n`

@@ -70,8 +70,19 @@ docs/feat-flows/<flow_id>/
 ├── current-prompt.md        # **最近一次落盘时那个 stage** 的提示词渲染副本（占位符已展开、写盘长度纪律已在内）。只在「提示词超注入上限」与「gate-pending 重入」这两条指路路径上生成；每次 stage 推进与 flow 收尾都会删掉它。文件开头有 `stage=<id>` 头——**与你当前 stage 不符就是旧件，别照它执行**
 ├── signal                   # AI → 引擎 完成信号（内容语义化，见下方说明）
 ├── mark-base                # AI 写此 marker → 引擎捕获 HEAD 为 base_sha_code（Stage 4 Step 1）
-├── transitions.log          # 引擎记录 stage 切换历史（状态机事件）
-└── hooks.log                # hook 执行诊断（SESSION / SIGNAL_INTERCEPT / GATE_SIGNAL_WRITTEN / ADVANCED）
+└── flow.log                 # 引擎的单一事件日志（`appendLog` 写入，每行 `<ISO 时间> [<flow>] [session=<id>] <事件>`）。
+                             #   记的不只是 stage 切换，而是引擎全部可观测行为：
+                             #   stage 生命周期（STARTED / ADVANCED / APPROVED / COMPLETED / RESUMED / ABORTED）、
+                             #   session 归属与恢复（SESSION / SESSION_NORMAL / SESSION_READONLY /
+                             #   SESSION_GATE_PENDING / SESSION_SELF_HEAL_* / SESSION_END）、signal 与 gate
+                             #   （SIGNAL_INTERCEPT / SIGNAL_INVALID / GATE_SIGNAL_WRITTEN / POSTTOOL_GATE_PENDING）、
+                             #   写入拦截与越界（NON_OWNER_WRITE_BLOCKED / SCOPE_VIOLATION / BLOCKED / CWD_MISMATCH）、
+                             #   signal 放行与推进（SIGNAL_ALLOW / POSTTOOL_SIGNAL_ADVANCE）、
+                             #   base 捕获（BASE_CAPTURED / BASE_CAPTURE_FAIL）、gate script 结果（SCRIPT_FAIL /
+                             #   APPROVE_SCRIPT_OK / APPROVE_SCRIPT_FAIL）、abort（ABORT_REFUSED_WORKTREES /
+                             #   ABORT_ERROR）、context 收尾阈值（CONTEXT_WRAP_UP，带 pct/threshold；
+                             #   ⚠️ 尾巴恒为 `first`，跨线只写这一行、没有 repeat 变体）、
+                             #   以及 hook 内部异常 ERROR
 
 **signal 文件语义**：AI 统一写入固定关键词 `done`，引擎自动计算下一步：
 - 任意 stage 完成（包括最后一个 stage）→ 写 `done`

@@ -85,7 +85,7 @@ describe('FlowConfigSchema — valid configs', () => {
   it('config with custom context overrides is valid', () => {
     const config = {
       ...minimalConfig,
-      context: { warn_at_pct: 70, block_at_pct: 90, rewarn_delta_pct: 5 },
+      context: { wrap_up_at_pct: 70 },
     };
     expect(FlowConfigSchema.safeParse(config).success).toBe(true);
   });
@@ -180,14 +180,53 @@ describe('FlowConfigSchema — invalid configs', () => {
     expect(FlowConfigSchema.safeParse(config).success).toBe(false);
   });
 
-  it('context.warn_at_pct: 101 → parse error (max 99)', () => {
-    const config = { ...minimalConfig, context: { warn_at_pct: 101 } };
+  it('context.wrap_up_at_pct: 101 → parse error (max 99)', () => {
+    const config = { ...minimalConfig, context: { wrap_up_at_pct: 101 } };
     expect(FlowConfigSchema.safeParse(config).success).toBe(false);
   });
 
-  it('context.block_at_pct: 0 → parse error (min 1)', () => {
-    const config = { ...minimalConfig, context: { block_at_pct: 0 } };
+  it('context.wrap_up_at_pct: 0 → parse error (min 1)', () => {
+    const config = { ...minimalConfig, context: { wrap_up_at_pct: 0 } };
     expect(FlowConfigSchema.safeParse(config).success).toBe(false);
+  });
+
+  // The removed keys — the two-level `warn_at_pct` / `block_at_pct` pair and the
+  // `rewarn_delta_pct` that throttled the repeat reminder between them — are
+  // DROPPED, not rejected. Rejecting would make
+  // loadFlowConfig throw, and pretool-handler's catch-all turns a throw into
+  // `return null` — so every guard that runs AFTER the config load would fail OPEN
+  // for any install whose config.json still carries them: the write-scope guard, the
+  // control-plane Bash interception (signal / active.json / scripts / stages) and the
+  // wrap-up refusal. The non-owner write guard is not one of them — it runs before
+  // `loadFlowConfig` on purpose, so a broken config cannot let a foreign session
+  // write. Installed copies (including live per-ticket worktrees) are only rewritten
+  // by `/ai-flow:update`, so they must stay loadable.
+  it('removed warn_at_pct / block_at_pct / rewarn_delta_pct → still parses, keys stripped', () => {
+    const config = {
+      ...minimalConfig,
+      context: { warn_at_pct: 50, block_at_pct: 60, rewarn_delta_pct: 1 },
+    };
+    const parsed = FlowConfigSchema.safeParse(config);
+    expect(parsed.success).toBe(true);
+    const ctx = parsed.success ? (parsed.data.context as Record<string, unknown>) : {};
+    expect(ctx).not.toHaveProperty('warn_at_pct');
+    expect(ctx).not.toHaveProperty('block_at_pct');
+    expect(ctx).not.toHaveProperty('rewarn_delta_pct');
+    // …which means the engine's own default has to land on the value those stale
+    // configs asked for. Both shipped flows used block_at_pct: 60. That default is
+    // pinned end-to-end in posttool.test.ts ('no context block in config → engine
+    // default 60 applies'); asserting it here would only restate that the schema
+    // has no `.default()`, which is what the stripping above already shows.
+  });
+
+  // A config that carries ONLY the dead throttle key still loads, and still gets
+  // the wrap-up threshold from the engine default rather than a parse error.
+  it('rewarn_delta_pct alone → still parses, key stripped', () => {
+    const config = { ...minimalConfig, context: { rewarn_delta_pct: 1 } };
+    const parsed = FlowConfigSchema.safeParse(config);
+    expect(parsed.success).toBe(true);
+    const ctx = parsed.success ? (parsed.data.context as Record<string, unknown>) : {};
+    expect(ctx).not.toHaveProperty('rewarn_delta_pct');
   });
 });
 

@@ -40,8 +40,7 @@ function makeActiveState(overrides?: Partial<ActiveState>): ActiveState {
     started_at: '2024-01-01T00:00:00.000Z',
     last_session_id: null,
     context_size: 0,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
     ...overrides,
   };
 }
@@ -70,6 +69,84 @@ describe('readActiveState', () => {
     writeFileSync(join(stateDir, 'active.json'), '{ not valid json ');
     const result = await readActiveState(root, 'test-flow');
     expect(result).toBeNull();
+  });
+
+  // Real flows are mid-run with active.json in the two-level engine's shape
+  // (`context_warning` + `context_blocked`). Every read in the codebase funnels
+  // through readActiveState, so the migration lives there and these pin it.
+  function writeLegacy(root: string, legacy: Record<string, unknown>): void {
+    const stateDir = join(root, '.ai-flow', 'test-flow', 'state');
+    mkdirSync(stateDir, { recursive: true });
+    const { context_wrap_up: _drop, ...base } = makeActiveState();
+    writeFileSync(join(stateDir, 'active.json'), JSON.stringify({ ...base, ...legacy }));
+  }
+
+  it('legacy state that had latched → carried over as the wrap-up latch', async () => {
+    const root = makeTmp();
+    writeLegacy(root, {
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 61, warned_at: '2024-01-01T00:00:00.000Z', block_reminded_at_pct: 68 },
+    });
+    const s = (await readActiveState(root, 'test-flow'))!;
+    // toEqual, not a field probe: `block_reminded_at_pct: 68` throttled a repeat
+    // reminder that no longer exists, so it must not survive under any name.
+    expect(s.context_wrap_up).toEqual({ at_pct: 61 });
+    // The removed keys must not linger on the object the engine reasons about.
+    expect(s).not.toHaveProperty('context_blocked');
+    expect(s).not.toHaveProperty('context_warning');
+  });
+
+  // The decisive case. The old `warned_at_pct` also moved for the mere warn tier
+  // (50% against a 60% block), so carrying it unconditionally would tell the new
+  // engine the wrap-up had started at 55% — and pretool would refuse code writes
+  // on a session that had never been blocked.
+  it('legacy state that had only warned → NOT treated as latched', async () => {
+    const root = makeTmp();
+    writeLegacy(root, {
+      context_blocked: false,
+      context_warning: { warned: true, warned_at_pct: 55, warned_at: '2024-01-01T00:00:00.000Z' },
+    });
+    const s = (await readActiveState(root, 'test-flow'))!;
+    expect(s.context_wrap_up).toEqual({ at_pct: null });
+  });
+
+  // The exact shape one of the live flow files is in: it had reached the old warn
+  // tier and recorded a reminder water mark, but never blocked. The water mark is
+  // discarded, and discarding it must not be what decides the latch — only
+  // `context_blocked` may.
+  it('legacy state with a reminder water mark but never blocked → NOT latched', async () => {
+    const root = makeTmp();
+    writeLegacy(root, {
+      context_blocked: false,
+      context_warning: { warned: true, warned_at_pct: 53, warned_at: '2024-01-01T00:00:00.000Z', block_reminded_at_pct: null },
+    });
+    const s = (await readActiveState(root, 'test-flow'))!;
+    expect(s.context_wrap_up).toEqual({ at_pct: null });
+  });
+
+  // A latched file old enough to predate `block_reminded_at_pct` at all — still a
+  // real on-disk variant, and it latches off `warned_at_pct` like any other.
+  it('legacy latched state with no reminder water mark → latches at the warn level', async () => {
+    const root = makeTmp();
+    writeLegacy(root, {
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 64, warned_at: '2024-01-01T00:00:00.000Z' },
+    });
+    const s = (await readActiveState(root, 'test-flow'))!;
+    expect(s.context_wrap_up).toEqual({ at_pct: 64 });
+  });
+
+  it('a patch after the migration stops writing the removed keys to disk', async () => {
+    const root = makeTmp();
+    writeLegacy(root, {
+      context_blocked: true,
+      context_warning: { warned: true, warned_at_pct: 61, warned_at: '2024-01-01T00:00:00.000Z' },
+    });
+    await patchActiveState(root, 'test-flow', { current_stage: 'review' });
+    const onDisk = JSON.parse(readFileSync(join(root, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8'));
+    expect(onDisk).not.toHaveProperty('context_blocked');
+    expect(onDisk).not.toHaveProperty('context_warning');
+    expect(onDisk.context_wrap_up).toEqual({ at_pct: 61 });
   });
 });
 
@@ -129,18 +206,18 @@ describe('patchActiveState', () => {
     await patchActiveState(root, 'test-flow', { current_stage: 'review' });
     await patchActiveState(root, 'test-flow', { base_sha_code: 'CODE_SHA' });
 
-    const warning = { warned: true, warned_at_pct: 62, warned_at: '2024-01-01T00:00:00.000Z' };
-    await patchActiveState(root, 'test-flow', { context_warning: warning });
+    const wrapUp = { at_pct: 62 };
+    await patchActiveState(root, 'test-flow', { context_wrap_up: wrapUp });
 
     const after = (await readActiveState(root, 'test-flow'))!;
     expect(after.current_stage).toBe('review');
     expect(after.base_sha_code).toBe('CODE_SHA');
-    expect(after.context_warning.warned_at_pct).toBe(62);
+    expect(after.context_wrap_up.at_pct).toBe(62);
 
     // Same intent expressed as a whole-document write — the shape every mutating
     // call site used to have. It loses both fields, which is why writeActiveState
     // is reserved for start/resume.
-    await writeActiveState(root, 'test-flow', { ...stale, context_warning: warning });
+    await writeActiveState(root, 'test-flow', { ...stale, context_wrap_up: wrapUp });
     const clobbered = (await readActiveState(root, 'test-flow'))!;
     expect(clobbered.current_stage).toBe('work');
     expect(clobbered.base_sha_code).toBeUndefined();
@@ -152,13 +229,13 @@ describe('patchActiveState', () => {
     await Promise.all([
       patchActiveState(root, 'test-flow', { current_stage: 'review' }),
       patchActiveState(root, 'test-flow', { base_sha_code: 'CODE_SHA' }),
-      patchActiveState(root, 'test-flow', { context_blocked: true }),
+      patchActiveState(root, 'test-flow', { context_wrap_up: { at_pct: 65 } }),
       patchActiveState(root, 'test-flow', { first_prompt_handled: true }),
     ]);
     const after = (await readActiveState(root, 'test-flow'))!;
     expect(after.current_stage).toBe('review');
     expect(after.base_sha_code).toBe('CODE_SHA');
-    expect(after.context_blocked).toBe(true);
+    expect(after.context_wrap_up.at_pct).toBe(65);
     expect(after.first_prompt_handled).toBe(true);
   });
 

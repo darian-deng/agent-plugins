@@ -5,7 +5,7 @@
 // 为什么不用 `ai-flow install --flow <f> --dir <d> --force`：
 //   0.57.0 之前那条命令会 `rmSync` 整个 flow 目录再拷模板，`state/` 一起没——而 `state/`
 //   被 gitignore（`.ai-flow/*/state/`），里面是 active.json（flow 停在哪个 stage、两个 diff
-//   基准、归属 session）、signal、mark-base、transitions.log。删了不可恢复：一次「想升级
+//   基准、归属 session）、signal、mark-base、flow.log。删了不可恢复：一次「想升级
 //   stage 提示词」的重装会静默杀死正在跑的 flow。0.57.0 起已修，但**这个脚本不依赖你装的是
 //   哪个版本**——它自己只删模板拥有的条目。
 //

@@ -1,5 +1,5 @@
 import { readActiveState, readSignal, isGatePending, nextStage } from '../state.js';
-import { loadFlowConfig } from '../flow-config-loader.js';
+import { loadFlowConfig, getStageConfig, resolveDocsPaths } from '../flow-config-loader.js';
 import type { CommandResult } from '../types.js';
 
 export async function handleStatus(repoRoot: string, flowName: string): Promise<CommandResult> {
@@ -17,11 +17,21 @@ export async function handleStatus(repoRoot: string, flowName: string): Promise<
 
   let gateActive = false;
   let gateTerminal = false;
+  // Empty means "nothing is refused", and it says so for both reasons it can be
+  // empty: the stage declares no docs_paths (pretool then skips the wrap-up refusal
+  // — it has no safe exit to keep open), or the config would not load at all (in
+  // which case pretool's catch-all has already dropped every guard). Both end in the
+  // same observable state, so one line covers them.
+  let wrapUpDocs: string[] = [];
   try {
     const config = await loadFlowConfig(repoRoot, flowName);
     const signal = readSignal(repoRoot, flowName);
     gateActive = isGatePending(signal, config, state.current_stage);
     gateTerminal = nextStage(config, state.current_stage) === null;
+    wrapUpDocs = resolveDocsPaths(
+      getStageConfig(config, state.current_stage).docs_paths ?? [],
+      state.flow_id
+    );
   } catch { /* non-fatal */ }
 
   if (gateActive) {
@@ -30,8 +40,10 @@ export async function handleStatus(repoRoot: string, flowName: string): Promise<
       : `Gate pending — run '${flowName} approve' to advance to the next stage.`);
   }
 
-  if (state.context_warning.warned) {
-    lines.push('', `Context warning: ${state.context_warning.warned_at_pct}% used`);
+  if (state.context_wrap_up.at_pct !== null) {
+    lines.push('', wrapUpDocs.length > 0
+      ? `Context wrap-up started at ${state.context_wrap_up.at_pct}% used — writes to the codebase are refused; writes to ${wrapUpDocs.join(', ')} stay open so a handoff can land.`
+      : `Context wrap-up started at ${state.context_wrap_up.at_pct}% used — stage '${state.current_stage}' declares no docs_paths, so no write is being refused (refusing them would leave nowhere to write the handoff). Land the handoff in the repo and /clear.`);
   }
 
   return { action: 'allow', additionalContext: lines.join('\n') };

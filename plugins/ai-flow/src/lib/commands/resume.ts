@@ -98,12 +98,17 @@ export async function handleResume(
     // block, finds no `base_sha_code`, and is told that case is "extremely rare".
     ...(snapshot.base_sha_code ? { base_sha_code: snapshot.base_sha_code } : {}),
     last_session_id: null,
-    // Record the resuming session so it isn't lost (mirrors start.ts). Ownership
+    // Append the resuming session to the audit trail instead of replacing it.
+    // `history_session_ids` is declared append-only (state.ts) and its scope is the flow
+    // instance, which survives abort/resume — `flow_id` and `started_at` above are carried
+    // over from the same snapshot. `start.ts` can write `[sessionId]` because a brand-new
+    // flow has no history to keep; copying that shape here dropped every earlier owner,
+    // even though `abort` serialises the whole state and so hands the old list back.
+    // Deduplicated to match the append side in session-handler.ts. Ownership
     // (last_session_id) is left null so the next SessionStart binds normally.
-    history_session_ids: [sessionId],
+    history_session_ids: [...new Set([...(snapshot.history_session_ids ?? []), sessionId])],
     context_size: 0,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
     first_prompt_handled: false,
   };
 

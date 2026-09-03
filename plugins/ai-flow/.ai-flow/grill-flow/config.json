@@ -3,9 +3,7 @@
   "name": "grill-flow",
   "description": "mattpocock v1.1 方法论工作流（散文 spec + tracer-bullet 切片 + 主 session 只调度、实施与评审全外包子代理）：5 stage 覆盖需求对齐（含 wayfinder 迷雾子模式）→ 散文规格+方案审查+切片（每票声明 Blocked by / Touches）→ 逐票实施（写集不相交的票各开 worktree 并行，sonnet 实施 + 并行 opus 三评审 Standards/Spec/correctness + simplify + 注释清理，rebase 适配 + ff-only 回合、历史线性）→ 收尾组装审 → 知识沉淀。设计迷雾大走 stage-1 的 wayfinder 子模式。",
   "context": {
-    "warn_at_pct": 50,
-    "rewarn_delta_pct": 1,
-    "block_at_pct": 60
+    "wrap_up_at_pct": 60
   },
   "stages": [
     {

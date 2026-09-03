@@ -19,8 +19,11 @@ import { advanceStage } from './advance-stage.js';
 import { buildAiFlowPreamble } from './prompt-render.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
-const DEFAULT_WARN_AT_PCT = 50;
-const DEFAULT_REWARN_DELTA_PCT = 5;
+// Occupancy at which a flow with no `wrap_up_at_pct` of its own starts wrapping up.
+// 60 is not a fresh guess: it is the number both shipped flows carried as
+// `block_at_pct`, so every install still holding the removed key — the schema drops
+// it rather than rejecting it, see flow-schema.ts — keeps the timing it asked for.
+const DEFAULT_WRAP_UP_AT_PCT = 60;
 
 export async function handlePostTool(
   input: PostToolInput & { context_size_pct?: number }
@@ -140,12 +143,24 @@ export async function handlePostTool(
   // A subagent runs on its own context window, so its token usage says nothing
   // about the main session's budget — delegating implementation to subagents is
   // precisely how a stage avoids spending it. Measuring it here would not only
-  // mis-report: crossing block_at_pct latches context_blocked on the shared flow
-  // state, after which PreToolUse denies every write for the rest of the flow.
+  // mis-report: crossing wrap_up_at_pct latches `context_wrap_up.at_pct` on the
+  // shared flow state, after which PreToolUse refuses every write to the codebase
+  // for the rest of the flow.
   // The upstream contract is that agent_id appears only inside a subagent; a
   // client that never sends it falls back to today's behavior, which is why this
   // branches on presence and not on any particular value.
   if (input.agent_id !== undefined) return null;
+
+  // Same reason, second axis: only the session that OWNS the flow may move its
+  // context state. `active.json` is shared by every session in the checkout, so a
+  // read-only session (one that found the flow already held — session-handler.ts
+  // returns early for those) would otherwise latch the wrap-up at ITS occupancy.
+  // Observed: a second session at 77% latched the owner's flow, the owner — who had
+  // never crossed anything and never saw the brief — got `Context wrap-up started at
+  // 77%` on its next edit, and could not clear it either, because the read-only
+  // session's SessionStart returns before the reset on line below. Only `/clear` got
+  // out of it, at the cost of whatever was not on disk.
+  if (state.last_session_id !== null && state.last_session_id !== session_id) return null;
 
   // Load flow config for the per-flow context thresholds, and for the docs paths
   // the wrap-up brief has to name (pretool keeps writes to them open precisely so
@@ -165,93 +180,94 @@ export async function handlePostTool(
   // anchor isn't where the transcript lives in a monorepo sub-project).
   const pct = context_size_pct ?? contextPct(session_id, cwd, contextWindow, input.transcript_path);
 
-  const warning = state.context_warning;
-  const warnAt = flowContextCfg?.warn_at_pct ?? DEFAULT_WARN_AT_PCT;
-  const rewarnDelta = flowContextCfg?.rewarn_delta_pct ?? DEFAULT_REWARN_DELTA_PCT;
-  const blockAt = flowContextCfg?.block_at_pct;
+  const wrapUp = state.context_wrap_up;
+  const wrapUpAt = flowContextCfg?.wrap_up_at_pct ?? DEFAULT_WRAP_UP_AT_PCT;
 
-  // ─── Block threshold ───────────────────────────────────────────────────────
-  if (blockAt !== undefined && pct >= blockAt) {
-    const firstTime = !state.context_blocked;
-    // Throttle. This branch used to return its full text on every sample, which
-    // was survivable only while sampling was write-tool-only. With every tool
-    // sampling, replaying it would fire 18–63 times per session (simulated against
-    // the recorded pct series of three sessions). So: the full brief once, then one
-    // line per further `rewarnDelta` percent. `warned_at_pct` cannot carry this —
-    // it freezes when the block latches, by design, because pretool reports it as
-    // the level the block happened at.
-    const remindedAt = state.context_warning.block_reminded_at_pct ?? 0;
-    if (!firstTime && pct < remindedAt + rewarnDelta) return null;
+  // ─── Wrap-up threshold ─────────────────────────────────────────────────────
+  // One level, not two. The old warn tier fired ten points early with nothing
+  // behind it — a suggestion to "Ctrl+C 停止任务 → /clear" at a moment when
+  // nothing had been wrapped up yet, so acting on it lost work — and the repeat
+  // throttle it came with (`rewarn_delta_pct`, since removed) re-stated it on
+  // every percent of the way to the block (observed 50→60, ten times in one
+  // desktop session). What remains is the level that actually does something:
+  // pretool refuses writes to the codebase from
+  // here on while keeping this flow's own docs_paths open, so crossing it *is*
+  // "start wrapping up", not just a nudge. On a stage that declares no docs_paths
+  // there is nothing to keep open, so pretool refuses nothing and this brief is all
+  // the wrap-up there is — which is why the text below branches on that instead of
+  // naming a docs directory the config never granted.
+  if (pct < wrapUpAt) return null;
 
-    const nowIso = new Date().toISOString();
-    await patchActiveState(repoRoot, flowName, (cur) => ({
-      context_blocked: true,
-      context_warning: {
-        warned: true,
-        warned_at_pct: firstTime ? pct : cur.context_warning.warned_at_pct,
-        warned_at: firstTime ? nowIso : cur.context_warning.warned_at,
-        block_reminded_at_pct: pct,
-      },
-    }));
-    await appendLog(
-      repoRoot, flowName, session_id,
-      `CONTEXT_BLOCK pct=${pct} threshold=${blockAt} ${firstTime ? 'first' : 'repeat'}`
-    );
+  // Once, at the crossing, and never again. Sampling runs on EVERY tool call, so
+  // anything that fires more than once fires 18–63 times per session (simulated
+  // against three recorded pct series) — and a repeat carries no new information:
+  //  1. The latch is persistent. `context_wrap_up.at_pct` stays non-null for the
+  //     rest of the flow (only a new session / `/clear` clears it), so the state
+  //     "already wrapping up" does not need re-injection to stay true.
+  //  2. The refusal is the standing reminder. Every attempt to write code hits
+  //     pretool-handler's denial, whose text already says the wrap-up has started,
+  //     that docs_paths remain writable, and what belongs in the handoff.
+  //  3. Repeats measured out as pure noise: at threshold 60 with the old
+  //     `rewarn_delta_pct: 1`, 60→99 meant up to 39 restatements — the 50→60
+  //     ten-times-in-one-session observation above is the same failure one tier up.
+  if (wrapUp.at_pct !== null) return null;
 
-    if (!firstTime) {
-      return {
-        additionalContext:
-          `[ai-flow] Context ${pct}%（已过 block 阈值 ${blockAt}%），收尾窗口在继续关闭。` +
-          `已经在收尾就不用管这条，接着做完；还没开始就现在开始。`,
-      };
-    }
+  // Both the freeze AND the decision to inject are made against the state as it is
+  // at WRITE time, not the copy read at hook entry. PostToolUse fires once per tool
+  // call and the model issues tool calls in parallel, so two samples really are in
+  // flight together; the entry-read check above would let both through and the brief
+  // (~1.4 KB) would land twice, with two `first` lines in flow.log. Same shape, same
+  // fix as the mark-base branch further up.
+  let alreadyLatched = false;
+  await patchActiveState(repoRoot, flowName, (cur) => {
+    alreadyLatched = cur.context_wrap_up.at_pct !== null;
+    return alreadyLatched ? {} : { context_wrap_up: { at_pct: pct } };
+  });
+  if (alreadyLatched) return null;
+  await appendLog(
+    repoRoot, flowName, session_id,
+    `CONTEXT_WRAP_UP pct=${pct} threshold=${wrapUpAt} first`
+  );
 
-    const docsList = docsPaths.join('、') || '本 flow 自己的 docs 目录';
-    return {
-      additionalContext:
-        `[ai-flow] Context 已达 ${pct}%（block 阈值 ${blockAt}%）。\n\n` +
-        `**现在开始做本 session 的收尾，不是立刻停手。** 挑一个不撕裂工作的时机` +
-        `（一票刚回合、一轮子代理刚回报完），把手上这一轮收干净再交班。\n\n` +
-        `⚠️ **写权限只收窄了一半**：对代码的写会被拒，但**对 ${docsList} 的写仍然放行**，` +
-        `正是为了让你能把交班落盘。⛔ 不要因为看到本条就认定「所有工具都不能用了」——` +
-        `实测有过一次：某 session 撞线后自己判定写盘已被拒，把交接文档写进了 session 私有 scratchpad，` +
-        `新 session 根本找不到；同时一条推翻既有裁定的正确性发现整个丢失。Bash 也没有被拦。\n\n` +
-        `**/clear 会带走什么**：flow 状态和已 commit 的东西在磁盘上，活得下来；` +
-        `**在飞子代理的回报活不下来**——它的 findings、真机待验项、安全自检，` +
-        `从它留下的那笔 commit 里重建不出来。所以有子代理在飞时，优先等它回来，` +
-        `或者先把它那棵树的状态摘进交接文档再走。\n\n` +
-        `**交接里只写后来的 session 重建不出来的东西**：哪棵树/哪条车道在做哪票、` +
-        `哪些子代理还在飞（在哪棵树上）、当前测试基线、以及你已经拍了但还没落盘的决策。\n\n` +
-        `收尾做完后告知开发者可以 /clear。并且**现在**就向开发者输出一条醒目提醒` +
-        `（用 > 引用块或加粗）："⚠️ Context 已达 ${pct}%，我开始做收尾交接，完成后你可以 /clear。"`,
-    };
-  }
-
-  // ─── Warn threshold ────────────────────────────────────────────────────────
-  if (pct < warnAt) return null;
-
-  const prevPct = warning.warned_at_pct ?? 0;
-  if (warning.warned && pct < prevPct + rewarnDelta) return null;
-
-  // Carry `block_reminded_at_pct` through: a full object patch would drop it, and
-  // if pct ever dips back under blockAt and climbs again the block branch would
-  // lose its throttle baseline.
-  await patchActiveState(repoRoot, flowName, (cur) => ({
-    context_warning: {
-      warned: true,
-      warned_at_pct: pct,
-      warned_at: new Date().toISOString(),
-      block_reminded_at_pct: cur.context_warning.block_reminded_at_pct ?? null,
-    },
-  }));
-  await appendLog(repoRoot, flowName, session_id, `CONTEXT_WARN pct=${pct} threshold=${warnAt}`);
+  // The brief may only promise what pretool actually keeps open. `docs_paths` is
+  // optional on an `unrestricted` stage (flow-schema.ts requires it only for
+  // `docs_only`), and on a stage that declares none there is no escape hatch to
+  // name — so pretool refuses nothing there, and this text must not say the
+  // codebase is fenced either. The earlier fallback string ("本 flow 自己的 docs
+  // 目录") did exactly that: it named a directory that did not exist in the config,
+  // while the very next write to it was denied.
+  const hasEscape = docsPaths.length > 0;
+  const docsList = docsPaths.join('、');
+  // Where the handoff goes. With no configured docs the model has to pick a spot in
+  // the repo and say which — anywhere but the session-private scratchpad, which a
+  // later session cannot find.
+  const landing = hasEscape
+    ? docsList
+    : `仓库里的交接文档（本 stage 没有配 docs_paths，自己选一个与需求相关的文档落盘，并在告知开发者时说清落点）`;
 
   return {
     additionalContext:
-      `[ai-flow] Context 当前 ${pct}%（warn 阈值 ${warnAt}%）。` +
-      `请向开发者输出一条醒目提醒（用 > 引用块或加粗），内容：` +
-      `"⚠️ Context 已达 ${pct}%。如需高质量执行，可 Ctrl+C 停止任务 → /clear → 重入后从断点继续（ai-flow 进度已持久化）。"` +
-      `输出提醒后继续正常执行当前工作，不要中断或停止。`,
+      `[ai-flow] Context 已达 ${pct}%（收尾阈值 ${wrapUpAt}%）。\n\n` +
+      `**现在开始为 /clear 做收尾，不是立刻停手。** 挑一个不撕裂工作的时机` +
+      `（一票刚回合、一轮子代理刚回报完），把手上这一轮收干净再交班。\n\n` +
+      (hasEscape
+        ? `⚠️ **写权限只收窄了一半**：从现在起对代码的写会被拒，但**对 ${docsList} 的写仍然放行**，` +
+          `正是为了让你能把交班落盘。⛔ 不要因为看到本条就认定「所有工具都不能用了」——` +
+          `实测有过一次：某 session 撞线后自己判定写盘已被拒，把交接文档写进了 session 私有 scratchpad，` +
+          `新 session 根本找不到；同时一条推翻既有裁定的正确性发现整个丢失。Bash 也没有被拦。\n\n`
+        : `⚠️ **写权限没有收窄**：本 stage（${state.current_stage}）没有配 docs_paths，` +
+          `引擎因此一个写入都没有拒——拒了就等于连交班都写不进去。收尾照旧要做，只是没有任何机械约束` +
+          `帮你停下继续产出。⛔ 交接不要写进 session 私有 scratchpad：实测有过一次，新 session 根本找不到，` +
+          `同时一条推翻既有裁定的正确性发现整个丢失。**顺带告诉开发者**：给这个 stage 配上 docs_paths` +
+          `（走 /ai-flow:update），引擎才能在撞线后拦住对代码的继续产出。\n\n`) +
+      `**/clear 会带走什么**：flow 状态和已 commit 的东西在磁盘上，活得下来，重入后从断点继续；` +
+      `**在飞子代理的回报活不下来**——它的 findings、真机待验项、安全自检，` +
+      `从它留下的那笔 commit 里重建不出来。所以有子代理在飞时，优先等它回来，` +
+      `或者先把它那棵树的状态摘进交接文档再走。\n\n` +
+      `**往 ${landing} 里只写后来的 session 重建不出来的东西**：哪棵树/哪条车道在做哪票、` +
+      `哪些子代理还在飞（在哪棵树上）、当前测试基线、以及你已经拍了但还没落盘的决策。\n\n` +
+      `收尾做完后告知开发者可以 /clear。并且**现在**就向开发者输出一条醒目提醒` +
+      `（用 > 引用块或加粗）："⚠️ Context 已达 ${pct}%，我开始做收尾交接，完成后你可以 /clear。"`,
   };
 
   } catch (e) {

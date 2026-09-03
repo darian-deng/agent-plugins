@@ -144,11 +144,11 @@ mattpocock 主线：`grill-with-docs → to-spec → to-tickets → implement（
 - **stage 内部无引擎停顿点**：`task_gates` 字段在 schema 里但**全库无消费代码**（死字段）。唯一引擎强制点是 **stage 边界**（完成门 script/gate）。→ per-ticket 层、wayfinder 逐决策层都加不了引擎门，只能靠 AI 纪律 + 人在场 + 产物落盘。
 - **session recovery 只到 stage 级**（`session-handler.ts:161-192`）：SessionStart 无条件重注**当前 stage 提示词**，不记 stage 内做到第几步——stage 内进度靠**产物落盘 + marker**，AI 重入自己读文件续。这是 wayfinder 子模式与 stage-3 循环能跨 /clear 存活的唯一依据。
   - **gate-pending 分支例外**（`session-handler.ts:118-140`）：一旦写了 signal，/clear 走的是 gate-pending 恢复，**不重注 stage 提示词**。→ wayfinder 期间**绝不能误写 signal**（见 §5.2 写 signal 前置条件）。
-- **context 分级**（per-flow 可配 `warn_at_pct`/`block_at_pct`/`rewarn_delta_pct`）：warn 只提示不中断；block（须显式配，无默认）拒绝写工具、逼 /clear。子代理有独立 context 窗口，主 transcript 只增记 Task 紧凑结果（度量有噪声但不影响正确性；grill-flow 不配 block）。
+- **context 单阈值**（per-flow 只可配 `wrap_up_at_pct`，缺省 60；旧的两级 `warn_at_pct`/`block_at_pct`、以及给重复提醒节流的 `rewarn_delta_pct` 都已删除，遗留 key 被静默 strip）：越过阈值把 `context_wrap_up.at_pct` 锁进 flow 状态（冻结在首次撞线那个百分比，拒写文案要用它报「at N%」），同时做两件事——PostToolUse 注入「开始为 /clear 收尾」的完整简报（**只在跨越阈值那一次注入，之后不再重述**：latch 是持久的，且每次试图写代码都会撞上拒写文案，那段文字已把该说的说全），PreToolUse 拒绝主 session 对**代码**的写入、但放行当前 stage 的 `docs_paths`（交接必须写得下去）。`grill-flow` 配 60。⚠️ 没配 `docs_paths` 的 stage 没有安全出口，引擎因此在那种 stage 上一个写入都不拒，只剩简报——所以每个 stage 都要配 `docs_paths`（grill-flow 5 个 stage 全配）。子代理有独立 context 窗口，既不参与度量也不被拒写拦（主 transcript 只增记 Task 紧凑结果，度量有噪声但不影响正确性）。
 - **无 reject/rollback**：命令只有 approve（前进）/abort（建快照分支+commit+切回+删 active.json）/resume（纯 rehydration）。gate 不批时只能"继续讨论改产物"或 abort。
 - **prompt 注入**：`renderPrompt` **只替换 `{{project_root}}`/`{{flow_root}}`**，不替换 `{{flow_id}}`。→ flow_id 从 `{{flow_root}}/state/active.json` 读（`node -p`，禁 jq/占位符）。gate stage 自动追加 gate 协议说明。
 - **base_sha_code**：AI 写 `mark-base` marker → 引擎捕获 git HEAD（幂等 skip-if-exists，git 在 repoRoot），供后续 stage 做 diff 基准。
-- **写保护**：非 owner 写拦截、context block 拦截、future-stage prompt 读禁止、cwd drift 相对写拦截、signal 校验、write_scope（docs_only 只能写 docs_paths；**Bash 不受 write_scope 管**）。
+- **写保护**：非 owner 写拦截、context 收尾拒写拦截、future-stage prompt 读禁止、cwd drift 相对写拦截、signal 校验、write_scope（docs_only 只能写 docs_paths；**Bash 不受 write_scope 管**）。
 
 ---
 
@@ -295,7 +295,7 @@ mode: charting | working | clear
      - **有 commit 但无 `qc:done`** → 已提交、收尾没做完 → 补候选+qc+勾（不是"见 commit 就补勾"跳过收尾）。
      - **有 `qc:done` 无 [x]** → 直接补勾。
      - **有 commit+qc:done+[x]** → 完成，进下一个。
-- **context**：提示词只一句"进度在 tickets.md 勾选 + qc marker + candidates.md；/clear 后重读 tickets.md 从 frontier 续"。阈值叙述不写进提示词（引擎+config 管；grill-flow 配宽松 warn、不配 block）。
+- **context**：提示词只一句"进度在 tickets.md 勾选 + qc marker + candidates.md；/clear 后重读 tickets.md 从 frontier 续"。阈值叙述不写进提示词（引擎+config 管；grill-flow 只配单键 `wrap_up_at_pct: 60`，越线即开始收尾并拒写代码）。
 - **切片撑爆窗口** = 上游切片错 → **就地在 tickets.md 重切该 ticket 并知会开发者**（引擎无反向 stage 转移）。
 - **script 门（秒级，fail-closed）**：先 `[ -f "$TICKETS" ] || exit 1`；再用 awk **同时断言"≥1 个已勾 ticket 级项 AND 无未勾"**（`awk 'BEGIN{c=0}/^- \[x\] T/{c++}/^- \[ \] T/{bad=1}END{exit (bad||c==0)}'`）——**不能依赖"空文件自然非零"**（裸 awk 对空文件走 END、未置标志会 exit 0 = 误 PASS；stage-3 无 gate，误放行直接把空 tickets 冲进 stage-4）。**禁 `grep&&exit1||exit0` 反相 idiom**。**诚实定位**：防"忘做"（漏勾）+ 防编译破；**拦不住** AI 谎标[x]/空实现——真正反谎报靠 stage-4 全量测试 + 人工 gate。
   > ⚠️ 断言清单已过时：现版 `scripts/gate-stage-3.cjs` 断言**三条**（本文只写了第一条）——① ≥1 已勾且无未勾（非标准复选框的 ticket 级行直接拦）；② 每个 `[x]` ticket 在自己那条上（该行内或其缩进子项）写了 `qc:done`（不是全文计数——说明性文字会灌水）；③ 每个 `[x]` ticket 在 `base_sha_code..HEAD` 有属于自己的一笔 commit、**subject 首行含票号**（不看 body），一笔 commit 只能认领一个 ticket（缺 `base_sha_code` 即 fail-closed）。

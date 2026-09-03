@@ -33,8 +33,7 @@ function seedFlow(repoRoot: string, flowName: string, sessionId: string | null):
     started_at: '2026-01-01T00:00:00.000Z',
     last_session_id: sessionId,
     context_size: 1_000_000,
-    context_warning: { warned: false, warned_at_pct: null, warned_at: null },
-    context_blocked: false,
+    context_wrap_up: { at_pct: null },
   };
   // writeActiveState creates .ai-flow/<flow>/state/active.json
   return state;
