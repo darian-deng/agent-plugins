@@ -265,6 +265,94 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     }
   }
 
+  // ─── Bash: deliberately BEFORE the config load ────────────────────────────────
+  // Nothing in this block reads `config` — it needs only the flow name and the
+  // anchor — while everything after `loadFlowConfig` dies with it: a throw there is
+  // swallowed by the catch-all at the bottom, which returns null, i.e. every
+  // remaining guard fails OPEN (context wrap-up, future-stage reads, cwd-drift,
+  // signal interception, control-plane writes, write_scope — seven of them).
+  //
+  // The reachable cause is not exotic: since 0.69.0 the project-side config.json is
+  // an override layer developers are invited to edit, so one typo there takes all
+  // seven out. Observed once from the other direction — a session still running a
+  // pre-0.69.0 engine met the migrated `{}` config and logged four
+  // `ERROR pretool … [schema_version]` lines, each a Bash call running unfenced. It
+  // did no damage (that session never wrote), but `echo done > <flow>/state/signal`
+  // was one command away from advancing a flow it did not own: the non-owner guard
+  // above covers WRITE_TOOLS only, and leaves Bash to this fence by design.
+  //
+  // Load-bearing more than the guard count suggests: agents route most file access
+  // through Bash (149 Bash vs 0 Read/Write/Edit in one measured session).
+  // ─── Bash interception ────────────────────────────────────────────────────────
+  if (tool_name === 'Bash') {
+    const command = String(tool_input['command'] ?? '');
+    const flowRel = join('.ai-flow', activeFlowName);
+
+    // Control-plane files must only ever be mutated through the engine (signal
+    // via the Write tool; active.json/scripts not at all). Block Bash references
+    // to them in BOTH their absolute and repoRoot-relative forms — an agent that
+    // has not cd'd typically writes the relative path (`echo done >
+    // .ai-flow/<flow>/state/signal`), which the absolute-only match missed.
+    // Residual gap (accepted): a `cd` into the state dir followed by a bare
+    // filename (`cd .../state && echo done > signal`) is not caught here — the
+    // Write-tool interception below remains the precise, primary guard.
+    const stateFragments = [
+      signalPath(repoRoot, activeFlowName),
+      join(repoRoot, flowRel, 'state', 'active.json'),
+      join(flowRel, 'state', 'signal'),
+      join(flowRel, 'state', 'active.json'),
+    ];
+    const scriptFragments = [
+      join(repoRoot, flowRel, 'scripts'),
+      join(flowRel, 'scripts'),
+    ];
+    // `stages/` and `config.json` are control-plane too — `controlPlaneRole` has
+    // recognised both since the Write path was written, and Write/Edit refuse them.
+    // Bash did not, so the same change went through unopposed via `cp`, `sed -i`,
+    // or `git checkout <ref> -- <flow>/stages/`. "Stage prompts and machine gates
+    // are read-only while a flow runs" held on exactly one of the two routes.
+    // They join the `scripts` group so they share its execution carve-out, which
+    // costs nothing: `isFlowScriptExecution` requires a `.cjs`/`.mjs`/`.js` suffix,
+    // and neither of these can ever match it.
+    const docFragments = [
+      join(repoRoot, flowRel, 'stages'),
+      join(flowRel, 'stages'),
+      join(repoRoot, flowRel, 'config.json'),
+      join(flowRel, 'config.json'),
+    ];
+    const exemptFragments = [...scriptFragments, ...docFragments];
+    const cpFragments = [...stateFragments, ...exemptFragments];
+    // RUNNING a flow's own helper script must be allowed: stage prompts hand out
+    // commands like `node {{flow_root}}/scripts/worktree.cjs open <flow_id> <name>`
+    // (one per ticket at least), and a fragment match refuses the very command the
+    // flow just instructed — with a message about reads and writes, which is not
+    // what happened. Exempt exactly one shape, and only for the `scripts` fragments:
+    // a whole shell segment that is `node [--long-opts] <script under that dir> [args]`.
+    // Everything else stays denied: `cat <script>`, `echo > <script>`,
+    // `node -e "<reads script>"`, a segment that also names a second control-plane
+    // path, and any command touching signal / active.json (those fragments never
+    // take part in the exemption, so no spelling of them can be smuggled through).
+    const offending = command
+      .split(/&&|\|\||[;|\n]/)
+      .map((s) => s.trim())
+      .filter((seg) => cpFragments.some((f) => seg.includes(f)))
+      .filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
+    if (offending.length > 0) {
+      return deny(
+        'Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked — matching is by path fragment, so this covers reads too. ' +
+        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. ' +
+        'RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json.'
+      );
+    }
+
+    // cwd drift is no longer fenced for Bash: the flow is resolved by session
+    // binding (cwd-independent) and stage prompts anchor flow paths on the
+    // injected absolute {{project_root}}/{{flow_root}}, so the agent is free to
+    // `cd` into a sub-project to run scoped commands. git operations resolve
+    // `.git` upward, so they remain correct regardless of cwd.
+    return null;
+  }
+
   const config = await loadFlowConfig(repoRoot, activeFlowName);
 
   // ─── Context block enforcement ────────────────────────────────────────────────
@@ -348,75 +436,6 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     }
   }
 
-  // ─── Bash interception ────────────────────────────────────────────────────────
-  if (tool_name === 'Bash') {
-    const command = String(tool_input['command'] ?? '');
-    const flowRel = join('.ai-flow', activeFlowName);
-
-    // Control-plane files must only ever be mutated through the engine (signal
-    // via the Write tool; active.json/scripts not at all). Block Bash references
-    // to them in BOTH their absolute and repoRoot-relative forms — an agent that
-    // has not cd'd typically writes the relative path (`echo done >
-    // .ai-flow/<flow>/state/signal`), which the absolute-only match missed.
-    // Residual gap (accepted): a `cd` into the state dir followed by a bare
-    // filename (`cd .../state && echo done > signal`) is not caught here — the
-    // Write-tool interception below remains the precise, primary guard.
-    const stateFragments = [
-      signalPath(repoRoot, activeFlowName),
-      join(repoRoot, flowRel, 'state', 'active.json'),
-      join(flowRel, 'state', 'signal'),
-      join(flowRel, 'state', 'active.json'),
-    ];
-    const scriptFragments = [
-      join(repoRoot, flowRel, 'scripts'),
-      join(flowRel, 'scripts'),
-    ];
-    // `stages/` and `config.json` are control-plane too — `controlPlaneRole` has
-    // recognised both since the Write path was written, and Write/Edit refuse them.
-    // Bash did not, so the same change went through unopposed via `cp`, `sed -i`,
-    // or `git checkout <ref> -- <flow>/stages/`. "Stage prompts and machine gates
-    // are read-only while a flow runs" held on exactly one of the two routes.
-    // They join the `scripts` group so they share its execution carve-out, which
-    // costs nothing: `isFlowScriptExecution` requires a `.cjs`/`.mjs`/`.js` suffix,
-    // and neither of these can ever match it.
-    const docFragments = [
-      join(repoRoot, flowRel, 'stages'),
-      join(flowRel, 'stages'),
-      join(repoRoot, flowRel, 'config.json'),
-      join(flowRel, 'config.json'),
-    ];
-    const exemptFragments = [...scriptFragments, ...docFragments];
-    const cpFragments = [...stateFragments, ...exemptFragments];
-    // RUNNING a flow's own helper script must be allowed: stage prompts hand out
-    // commands like `node {{flow_root}}/scripts/worktree.cjs open <flow_id> <name>`
-    // (one per ticket at least), and a fragment match refuses the very command the
-    // flow just instructed — with a message about reads and writes, which is not
-    // what happened. Exempt exactly one shape, and only for the `scripts` fragments:
-    // a whole shell segment that is `node [--long-opts] <script under that dir> [args]`.
-    // Everything else stays denied: `cat <script>`, `echo > <script>`,
-    // `node -e "<reads script>"`, a segment that also names a second control-plane
-    // path, and any command touching signal / active.json (those fragments never
-    // take part in the exemption, so no spelling of them can be smuggled through).
-    const offending = command
-      .split(/&&|\|\||[;|\n]/)
-      .map((s) => s.trim())
-      .filter((seg) => cpFragments.some((f) => seg.includes(f)))
-      .filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
-    if (offending.length > 0) {
-      return deny(
-        'Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked — matching is by path fragment, so this covers reads too. ' +
-        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. ' +
-        'RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json.'
-      );
-    }
-
-    // cwd drift is no longer fenced for Bash: the flow is resolved by session
-    // binding (cwd-independent) and stage prompts anchor flow paths on the
-    // injected absolute {{project_root}}/{{flow_root}}, so the agent is free to
-    // `cd` into a sub-project to run scoped commands. git operations resolve
-    // `.git` upward, so they remain correct regardless of cwd.
-    return null;
-  }
 
   // ─── Read tools ──────────────────────────────────────────────────────────────
   if (READ_TOOLS.has(tool_name)) {

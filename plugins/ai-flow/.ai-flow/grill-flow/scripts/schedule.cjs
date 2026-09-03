@@ -79,6 +79,18 @@ function resolveFlowDir() {
   );
 }
 
+// `--help` 必须拦在 flowDir 解析**之前**：解析失败会先死，于是「我想知道怎么用」被答成一条定位失败的报错；不拦又会静默跑完一次全量调度报表（实测一个子代理想看用法，拿到的是一份 25 票的报表）。两种都不是用法。
+// 拿到的是一份 25 票的报表）——那不是错误结果，只是把「我想知道怎么用」答成了别的东西。
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  process.stdout.write(
+    '用法（--flow-dir 紧跟脚本路径）:\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' [--cap <正整数>]\n'
+    + '按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
+    + '--cap 是并发上限，缺省 3。判据与两种模式的代价见 references/execution-unit.md。\n'
+  );
+  process.exit(0);
+}
+
 const flowDir = resolveFlowDir();
 const projectRoot = join(flowDir, '..', '..');
 

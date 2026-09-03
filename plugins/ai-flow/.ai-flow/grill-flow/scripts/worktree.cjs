@@ -328,10 +328,15 @@ function installIn(root, prefix, label, noInstall) {
 
 const [, , cmd, flowId, ticket, ...rest] = process.argv;
 const noInstall = process.argv.includes('--no-install');
-const USAGE = '用法：node scripts/worktree.cjs open  <flow_id> <T<n>|R<n>> [--install "<cmd>"]\n'
-  + '      node scripts/worktree.cjs sync  <flow_id> <T<n>|R<n>> [--no-install]\n'
-  + '      node scripts/worktree.cjs close <flow_id> <T<n>|R<n>> [--keep] [--no-install]\n'
-  + '      node scripts/worktree.cjs status <flow_id>';
+// 用法字符串要和提示词里教的形状**逐字一致**。它曾停在 0.69.0 之前的样子（相对脚本路径、
+// 没有 --flow-dir），而那一版真的印给模型看过一次：本脚本住在插件里，照那个形状敲会在
+// flowDir 解析的第 4 级死掉——可恢复，但「留了例外的规则迟早被照着例外写」。
+const SELF = __filename;
+const USAGE = '用法（--flow-dir 紧跟脚本路径、在子命令之前）：\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' open   <flow_id> <T<n>|R<n>> [--install "<cmd>"]\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' sync   <flow_id> <T<n>|R<n>> [--no-install]\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' close  <flow_id> <T<n>|R<n>> [--keep] [--no-install]\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' status <flow_id>';
 if (!cmd || !flowId) die(USAGE);
 if (cmd !== 'status' && !ticket) die(USAGE);
 // `R<n>` = 一组一条长驻车道。⛔ 不要放宽成任意字符串：这个名字进 worktree 路径与分支名，

@@ -21,7 +21,8 @@ if (fdIdx !== -1) process.argv.splice(fdIdx, process.argv[fdIdx + 1] ? 2 : 1);
 
 const [file, startRe, endRe] = process.argv.slice(2);
 if (!file || !startRe) {
-  console.error('用法: read-section.cjs <file> <start-re> [end-re|EOF]');
+  console.error('用法（--flow-dir 本脚本用不到，但契约统一要求带上，会被就地剥掉）:\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/<flow> <file> <start-re> [end-re|EOF]');
   process.exit(2);
 }
 let lines;

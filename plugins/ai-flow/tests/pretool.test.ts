@@ -603,6 +603,42 @@ describe('handlePreTool — Bash control-plane + cd freedom', () => {
   // deleted. `Read` answered "File does not exist" and said nothing about where the
   // file went; one subagent recovered by reading its worktree's stale copy, another
   // by running `find /`.
+  // The project-side config.json is an override layer developers are invited to
+  // edit, so a typo there is a reachable input — and `loadFlowConfig` throws on it,
+  // which the catch-all turns into `return null`. Everything positioned after the
+  // load fails OPEN; the Bash fence must not be among them.
+  describe('config 坏掉时 Bash 控制面围栏仍然活着', () => {
+    function brokenConfigRepo() {
+      const repo = makeRepo();
+      activateFlow(repo.repoRoot, 'work');
+      writeFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'config.json'), '{}');
+      return repo;
+    }
+
+    it('写 signal 的 Bash 仍被拦(否则一条命令就能推进别人持有的流程)', async () => {
+      const repo = brokenConfigRepo();
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, 'echo done > .ai-flow/test-flow/state/signal')
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('碰 active.json 的 Bash 仍被拦', async () => {
+      const repo = brokenConfigRepo();
+      const out = await handlePreTool(
+        makeBashInput(repo.repoRoot, 'cat .ai-flow/test-flow/state/active.json')
+      );
+      expect(out?.permissionDecision).toBe('deny');
+    });
+
+    it('跑 flow 自己的脚本仍然放行(围栏上移没有把执行豁免一起带走)', async () => {
+      const repo = brokenConfigRepo();
+      const script = join(repo.repoRoot, '.ai-flow', 'test-flow', 'scripts', 'worktree.cjs');
+      const out = await handlePreTool(makeBashInput(repo.repoRoot, `node ${script} status f1`));
+      expect(out?.permissionDecision ?? 'allow').toBe('allow');
+    });
+  });
+
   describe('指向 0.69.0 之前定义位置的路径 → 重定向到插件那份', () => {
     // `grill-flow`, not the usual `test-flow`: the guard only has anything to say
     // about a flow the PLUGIN ships. For one it does not, `flowDefDir` falls back to
