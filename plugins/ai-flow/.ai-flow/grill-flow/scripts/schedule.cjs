@@ -275,7 +275,44 @@ if (satur !== null) {
   say(`一票一树放开上限到 ${tk.size}（等于不限）→ 仍是 ${satur} 轮。`);
   if (satur > lowerBound) {
     say(`  ↑ 比下限 ${lowerBound} 高出 ${satur - lowerBound} 轮，而且再加并发也不降 —— 瓶颈是**写集相交**，`);
-    say(`    不是并行度。这正是车道模式能赢的情形（它把写集相交的票放进同一棵树顺序做）。`);
+    say(`    不是并行度。`);
+    // ⚠️ 这句结论以前是无条件跟在上一行后面的，而它的触发条件 `satur > lowerBound` 几乎恒真。
+    // 实测两次它都指反了方向：218 票的真实 flow 里车道 217 轮 vs 一票一树 108 轮（差 2 倍），
+    // 6 张票都追加同一个汇聚文件的合成场景里两者都是 6 轮——两次都打印了「车道模式能赢」。
+    // 机理：汇聚点让所有票两两相交 ⇒ 连通分量退化成 1 个 ⇒ 车道模式变成全串行，
+    // 也就是说**写集相交严重到由单个汇聚文件造成时，它恰好是车道模式最不能赢的情形**。
+    // 所以这句必须按同一 cap 下两个真实轮数比出来才敢说，不能从「瓶颈是写集相交」推。
+    const rt = roundsPerTicket(cap), rl = roundsLanes(cap);
+    if (rt !== null && rl !== null && rl < rt) {
+      say(`    这种情形车道模式更快（它把写集相交的票放进同一棵树顺序做）——上表 cap=${cap} 处 ${rl} < ${rt} 轮。`);
+    } else if (rt !== null && rl !== null && rl > rt) {
+      say(`    ⚠️ 但**车道模式在这里明显更差**（上表 cap=${cap} 处 ${rl} 轮 > 一票一树 ${rt} 轮）：`);
+      say(`    ${tk.size} 票只分出 ${parts.length} 个连通分量（最大的那个 ${parts[0].n} 票），车道模式于是接近全串行。`);
+      say(`    分量少到这个程度 = 相交集中在少数「汇聚点」文件上（一个文件被大量票同时声明）。`);
+      say(`    ⛔ 这种情形靠换执行单位、放宽准入都压不下去，真解是把那个汇聚点 prefactor 掉——`);
+      say(`    判据与实测数字见 execution-unit.md 的「汇聚点」那节。`);
+      // 上面只说了「prefactor 掉那个汇聚点」，不点名的话读者还得自己去 grep 一遍才知道是哪个文件。
+      // 声明频次就是答案，而且要分开报：**文件级**高频项是真汇聚点（prefactor 它），**目录级**
+      // 高频项是粒度问题（写到文件级）——两者的解法和收益量级完全不同，实测差一个档：
+      // 放开真汇聚点省 3.7%，声明粒度做到完美（Touches = 实际改动）也只省 9.3%。
+      const freq = new Map();
+      for (const v of tk.values()) for (const x of new Set(v.touches.map(norm))) freq.set(x, (freq.get(x) || 0) + 1);
+      const top = [...freq.entries()].filter(([, n]) => n >= 5).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      if (top.length > 0) {
+        say('');
+        say('  被最多票声明的路径（相交就是从这里来的）：');
+        for (const [path, n] of top) {
+          const raw = [...tk.values()].some((v) => v.touches.some((x) => norm(x) === path && x.endsWith('/')));
+          const tag = raw
+            ? '目录级声明 → 先写到文件级（准入按目录前缀判相交，⑦ 却按实际文件判）'
+            : '文件级汇聚点 → prefactor 掉它才是真解';
+          const shown = raw ? path + '/' : path;   // norm 剥了尾斜杠，显示时加回去，否则看不出是目录
+          say(`    ${String(n).padStart(3)} 票  ${shown}${' '.repeat(Math.max(1, 44 - shown.length))}← ${tag}`);
+        }
+      }
+    } else if (rt !== null && rl !== null) {
+      say(`    两种模式在 cap=${cap} 处打平（各 ${rt} 轮），按下面那条结论选。`);
+    }
   }
 }
 say('');

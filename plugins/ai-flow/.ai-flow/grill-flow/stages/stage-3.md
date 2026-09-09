@@ -20,7 +20,7 @@
 | 执行中发现本期还要加一张票 | `mid-flight-ticket.md` |
 | 派实施子代理（一票的第一段） | `per-ticket-review.md` |
 | 实施回报了，派质量链子代理（第二段） | `quality-chain.md` |
-| 想停下来问开发者（先查证，别直接问） | `ask-before-asking.md` |
+| 想停下来问开发者（先查证；查完仍要问也**先派对抗审查**，⛔ 不许直接问） | `ask-before-asking.md` |
 | 要改前置产物（alignment / spec / tickets） | `revision-protocol.md` |
 
 ## 前置读取
