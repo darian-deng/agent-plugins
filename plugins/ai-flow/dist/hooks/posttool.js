@@ -198,6 +198,13 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+function isForeignCheckout(active, cwd) {
+  if (!active.viaSibling) return false;
+  const self = realPath(cwd) + "/";
+  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
+  return true;
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -4755,6 +4762,7 @@ async function handlePostTool(input2) {
     }
     if (input2.agent_id !== void 0) return null;
     if (state.last_session_id !== null && state.last_session_id !== session_id) return null;
+    if (isForeignCheckout(active, cwd)) return null;
     let flowContextCfg;
     let docsPaths = [];
     try {

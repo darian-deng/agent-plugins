@@ -4538,6 +4538,13 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+function isForeignCheckout(active, cwd) {
+  if (!active.viaSibling) return false;
+  const self = realPath(cwd) + "/";
+  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
+  return true;
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -5393,10 +5400,11 @@ async function handleUserPrompt(input2) {
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
   const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
+  const foreign = !!active && isForeignCheckout(active, cwd);
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
   if (!parsed) {
-    if (active && !isNonOwner && !(active.state.first_prompt_handled ?? false)) {
+    if (active && !isNonOwner && !foreign && !(active.state.first_prompt_handled ?? false)) {
       let gatePending = false;
       try {
         const config = await loadFlowConfig(active.repoRoot, active.flowName);

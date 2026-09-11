@@ -146,6 +146,13 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+function isForeignCheckout(active, cwd) {
+  if (!active.viaSibling) return false;
+  const self = realPath(cwd) + "/";
+  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
+  return true;
+}
 async function hasActiveFlow(cwd) {
   let dir = cwd;
   while (true) {
@@ -4499,8 +4506,9 @@ async function handlePreTool(input2) {
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName: activeFlowName, state, repoRoot } = active;
+  const foreign = isForeignCheckout(active, cwd);
   try {
-    if (state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
+    if (!foreign && state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
       await appendLog(repoRoot, activeFlowName, session_id, `NON_OWNER_WRITE_BLOCKED owner=${state.last_session_id} tool=${tool_name}`);
       const activeFile = activeJsonPath(repoRoot, activeFlowName);
       return deny(
@@ -4553,7 +4561,7 @@ async function handlePreTool(input2) {
       return null;
     }
     const config = await loadFlowConfig(repoRoot, activeFlowName);
-    if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
+    if (!foreign && state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input2.agent_id === void 0) {
       const stageCfgForBlock = getStageConfig(config, state.current_stage);
       const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
       const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
@@ -4592,7 +4600,7 @@ What /clear costs: flow state and commits are on disk and survive; **an in-fligh
     if (!WRITE_TOOLS.has(tool_name)) return null;
     const fp = String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? "");
     if (!fp) return null;
-    if (!fp.startsWith("/") && resolve3(cwd) !== resolve3(repoRoot)) {
+    if (!foreign && !fp.startsWith("/") && resolve3(cwd) !== resolve3(repoRoot)) {
       await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
       return deny(
         `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a relative path \u2014 the Write tool would resolve it against the current cwd and silently create it there. Re-issue the write with an absolute path to the location you actually intend:
@@ -4601,7 +4609,7 @@ What /clear costs: flow state and commits are on disk and survive; **an in-fligh
 Neither is "the right one" by default \u2014 pick by what the file IS. Code and tests belong to the tree you are working in; flow bookkeeping under docs/ belongs to the main checkout.`
       );
     }
-    const absPath = resolvePath(repoRoot, fp);
+    const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
     if (absPath === signalPath(repoRoot, activeFlowName)) {
       await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
       const stageCfg2 = getStageConfig(config, state.current_stage);
@@ -4658,6 +4666,7 @@ signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${si
 \u82E5\u4F60\u662F\u5728 worktree \u5185\u6267\u884C\u67D0\u4E00\u7968\u7684\u5B50\u4EE3\u7406\uFF1A\u4EA4\u4ED8\u65B9\u5F0F\u662F\u56DE\u62A5\u7ED9\u7F16\u6392\u5668\uFF0C\u4E0D\u8981\u5199 signal\u3002`
         );
     }
+    if (foreign) return null;
     const rel = relative2(repoRoot, absPath);
     const stageCfg = getStageConfig(config, state.current_stage);
     if (stageCfg.write_scope === "docs_only") {
