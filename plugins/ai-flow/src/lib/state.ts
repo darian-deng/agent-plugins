@@ -415,6 +415,37 @@ export type ResolvedFlow = {
   viaSibling?: boolean;
 };
 
+/**
+ * True when `cwd` is in a checkout of this repository that the resolved flow does
+ * NOT belong to — i.e. the cross-checkout fallback found the flow somewhere else
+ * and `cwd` is not one of that flow's own ticket worktrees.
+ *
+ * This is the "misfire" shape: the developer opened a session in another of their
+ * own worktrees (an unrelated branch, a second bugfix line) while a flow runs
+ * elsewhere in the repo. `git worktree list` cannot tell that tree apart from a
+ * ticket tree the flow opened itself, so RESOLUTION has to stay wide — narrowing it
+ * brings back the fail-OPEN that the fallback exists to remove (every subagent in a
+ * ticket tree losing control-plane protection, signal interception and accounting).
+ * What callers DO with the verdict is where the two shapes must part: a foreign
+ * checkout is a working copy the flow never writes to and never reads from, so the
+ * flow's ownership mutex, context wrap-up and write_scope have nothing to say about
+ * edits there, while everything that fences the flow's own control plane still does.
+ *
+ * The ticket-tree test stays deliberately LOPSIDED. `.ai-flow-worktrees/` matches
+ * without checking the flow id, because a false "ticket tree" only keeps the old
+ * conservative behaviour (the session stays read-only), whereas a false "foreign"
+ * would drop the mutex inside a tree the flow is actively driving. The pre-0.69
+ * location `.worktrees/` is a name a developer may well have chosen for their own
+ * trees, so there the flow id is required.
+ */
+export function isForeignCheckout(active: ResolvedFlow, cwd: string): boolean {
+  if (!active.viaSibling) return false;
+  const self = realPath(cwd) + '/';
+  if (self.includes('/.ai-flow-worktrees/')) return false;
+  if (self.includes('/.worktrees/' + active.state.flow_id + '-')) return false;
+  return true;
+}
+
 export async function hasActiveFlow(cwd: string): Promise<ResolvedFlow | null> {
   // Walk up from cwd to find the nearest .ai-flow directory (monorepo-safe).
   let dir = cwd;

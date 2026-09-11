@@ -7,6 +7,7 @@ import {
   signalPath,
   activeJsonPath,
   isInsideLinkedWorktree,
+  isForeignCheckout,
   realPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
@@ -217,6 +218,25 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
 
   const { flowName: activeFlowName, state, repoRoot } = active;
 
+  // `cwd` is in a checkout of this repository the flow does not belong to, and not in one
+  // of its ticket worktrees (see `isForeignCheckout`). Three guards below constrain edits
+  // to the FLOW's working copy and have nothing to say about this one — they are skipped,
+  // and skipping them is what makes such a session usable at all (before 0.73.0 each of
+  // the three refused on its own, so lifting only the SessionStart lock would have left
+  // every write denied anyway):
+  //
+  //  - the non-owner write guard: across checkouts there is no shared file to corrupt.
+  //  - the context wrap-up block: it gates writes on the OTHER session's occupancy.
+  //  - write_scope + the drifted-relative-write guard: both measure the path against the
+  //    foreign `repoRoot`, so every file here reads as "outside the flow's scope" and a
+  //    `docs_only` stage would refuse all of them.
+  //
+  // Everything that fences the flow's CONTROL PLANE stays on, and must: the Bash block,
+  // signal interception and `controlPlaneRole` all match by path (any checkout's
+  // `.ai-flow/<flow>/`), so a session here still cannot rewrite stage prompts, config or
+  // gate scripts, nor fake a gate by writing a signal copy.
+  const foreign = isForeignCheckout(active, cwd);
+
   try {
 
   // ─── Non-owner read-only guard ────────────────────────────────────────────────
@@ -229,7 +249,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // a foreign session write. Bash stays governed by the control-plane block below
   // (signal / active.json / scripts remain fenced for everyone), which is why Bash
   // is intentionally not blocked here.
-  if (state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
+  if (!foreign && state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
     await appendLog(repoRoot, activeFlowName, session_id, `NON_OWNER_WRITE_BLOCKED owner=${state.last_session_id} tool=${tool_name}`);
     const activeFile = activeJsonPath(repoRoot, activeFlowName);
     return deny(
@@ -393,7 +413,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // 614K → 665K. Which is also why the block message now reads as "start wrapping up"
   // rather than "stop touching tools" — a signal the model can honour while still
   // landing a handoff beats one it either obeys into paralysis or routes around.
-  if (state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
+  if (!foreign && state.context_wrap_up.at_pct !== null && WRITE_TOOLS.has(tool_name) && input.agent_id === undefined) {
     const stageCfgForBlock = getStageConfig(config, state.current_stage);
     const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
     // A stage with no docs_paths has no safe exit, so this guard refuses nothing at
@@ -473,7 +493,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // path. We can't know the intended base, so require an absolute path when drifted.
   // Stage prompts anchor flow artifacts on the injected absolute {{project_root}},
   // so well-formed writes pass; this only catches stray relative writes.
-  if (!fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
+  if (!foreign && !fp.startsWith('/') && resolve(cwd) !== resolve(repoRoot)) {
     await appendLog(repoRoot, activeFlowName, session_id, `CWD_MISMATCH cwd=${cwd} path=${fp}`);
     return deny(
       `The current working directory (${cwd}) is not the flow root (${repoRoot}), and '${fp}' is a ` +
@@ -486,7 +506,10 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     );
   }
 
-  const absPath = resolvePath(repoRoot, fp);
+  // In a foreign checkout a relative path means "relative to where the agent is
+  // working", not to the flow's anchor: resolving it against `repoRoot` would point the
+  // control-plane test at a file in the OTHER checkout that the write never touches.
+  const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
 
   // ─── Signal interception ─────────────────────────────────────────────────────
   if (absPath === signalPath(repoRoot, activeFlowName)) {
@@ -562,6 +585,9 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   }
 
   // ─── Write scope enforcement ──────────────────────────────────────────────────
+  // Past every control-plane fence, and the remaining checks are all relative to the
+  // flow's own working copy — see the `foreign` note at the top of this function.
+  if (foreign) return null;
   const rel = relative(repoRoot, absPath);
   const stageCfg = getStageConfig(config, state.current_stage);
   if (stageCfg.write_scope === 'docs_only') {

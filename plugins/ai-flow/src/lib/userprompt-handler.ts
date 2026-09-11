@@ -9,7 +9,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState } from './state.js';
+import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
@@ -59,6 +59,14 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // ownership check further down; project-file edits are blocked in PreToolUse.
   const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
 
+  // A session in ANOTHER checkout of this repository is not part of that flow at all (see
+  // `isForeignCheckout`), and unlike a non-owner it may hit this with `last_session_id`
+  // already null — the owner's SessionEnd clears it. Resume guidance there would tell a
+  // session working on an unrelated branch to report a flow status line and keep the
+  // flow's constraints, and marking `first_prompt_handled` would mutate the other
+  // checkout's active.json to say a prompt it never saw has been handled.
+  const foreign = !!active && isForeignCheckout(active, cwd);
+
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);
 
@@ -66,7 +74,7 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
     // Layer 2: first-prompt resume guidance — inject once per session per active
     // flow. Skip entirely for a non-owner session: it must not be told to drive the
     // flow, and must not mutate the owner's active.json (first_prompt_handled).
-    if (active && !isNonOwner && !(active.state.first_prompt_handled ?? false)) {
+    if (active && !isNonOwner && !foreign && !(active.state.first_prompt_handled ?? false)) {
       // Gather gate info BEFORE writing first_prompt_handled, so a config load
       // failure doesn't cause us to mark handled with incomplete information.
       let gatePending = false;

@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join, dirname } from 'path';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
 import { writeFileSync, chmodSync, mkdirSync, existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
@@ -1275,5 +1277,70 @@ describe('handlePreTool — context wrap-up enforcement', () => {
     const out = await handlePreTool(makeInput(repo.repoRoot, 'Write', { file_path: signalPath, content: '' }));
     expect(out?.permissionDecision).toBe('deny');
     expect(out?.permissionDecisionReason).toMatch(/context wrap-up started/i);
+  });
+});
+
+// 同一 git 仓库的两个检出：A 里跑着 flow，开发者在 B 里开 session 改自己的分支。解析会经
+// sibling 兜底落到 A 的 flow（这条路由不能收窄，票树全靠它），但 B 是另一份工作副本——
+// 约束 flow 自己工作副本的那几道守卫在 B 上没有可保护的东西，而围栏控制面的那几道必须照旧。
+describe('handlePreTool — 跨检出（flow 的锚点在另一个检出）', () => {
+  function makeCrossCheckout(stage: string, ownerOfA: string | null) {
+    const repo = makeRepo();
+    const parent = mkdtempSync(join(tmpdir(), 'ai-flow-xco-pre-'));
+    const a = join(parent, 'line-a');
+    const b = join(parent, 'line-b');
+    execSync(`git worktree add -q "${a}" -b feat/xa`, { cwd: repo.repoRoot });
+    execSync(`git worktree add -q "${b}" -b feat/xb`, { cwd: repo.repoRoot });
+    writeActiveState(a, 'test-flow', {
+      flow_id: 'flow-in-a', flow_name: 'test-flow', requirement: 'A 的需求',
+      current_stage: stage, base_sha: 'aaa111', last_session_id: ownerOfA,
+    });
+    cleanups.push(() => execSync(`rm -rf "${parent}"`));
+    return { a, b };
+  }
+
+  function writeIn(b: string, filePath: string): PreToolInput {
+    return {
+      hook_event_name: 'PreToolUse',
+      session_id: 'sess-in-b',
+      cwd: b,
+      tool_name: 'Edit',
+      tool_input: { file_path: filePath },
+    };
+  }
+
+  // 这是本轮要修掉的那个形态：A 有主 ⇒ 非持有者写守卫在 B 里拒掉每一次 Edit，
+  // 开发者看到的是「当前工程正在进行流程…禁止修改本项目文件」，而他改的是另一条开发线。
+  it('A 有主 → B 里改自己检出的文件仍然放行（跨检出没有共享文件可冲突）', async () => {
+    const { b } = makeCrossCheckout('work', 'owner-in-a');
+    const out = await handlePreTool(writeIn(b, join(b, 'src', 'app.ts')));
+    expect(out).toBeNull();
+  });
+
+  // docs_only 是第二道会独自拒掉一切的守卫：rel 是相对 A 算的，B 里每个文件都在 flow
+  // 的 docs 之外。第三道是「cwd 漂移时拒相对路径写」——cwd(B) 恒不等于 repoRoot(A)。
+  it('A 的当前 stage 是 docs_only → B 里的写照样放行，相对路径也放行', async () => {
+    const { b } = makeCrossCheckout('review', 'owner-in-a');
+    expect(await handlePreTool(writeIn(b, join(b, 'src', 'app.ts')))).toBeNull();
+    expect(await handlePreTool(writeIn(b, 'src/app.ts'))).toBeNull();
+  });
+
+  it('B 里改控制面副本仍然 DENY（改完 merge 回去就是改了 flow 本体）', async () => {
+    const { b } = makeCrossCheckout('work', 'owner-in-a');
+    const out = await handlePreTool(writeIn(b, join(b, '.ai-flow', 'test-flow', 'stages', 'work.md')));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/Stage prompt files are read-only/);
+  });
+
+  it('B 里写 A 的 signal 仍然 DENY（那会推进一条它不持有的流程）', async () => {
+    const { a, b } = makeCrossCheckout('work', 'owner-in-a');
+    const out = await handlePreTool({
+      hook_event_name: 'PreToolUse',
+      session_id: 'sess-in-b',
+      cwd: b,
+      tool_name: 'Bash',
+      tool_input: { command: `echo done > "${join(a, '.ai-flow', 'test-flow', 'state', 'signal')}"` },
+    });
+    expect(out?.permissionDecision).toBe('deny');
   });
 });

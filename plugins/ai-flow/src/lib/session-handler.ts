@@ -2,7 +2,6 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import type { SessionStartInput } from './types.js';
 import {
-  realPath,
   resolveActiveFlow,
   patchActiveState,
   readSignal,
@@ -11,6 +10,7 @@ import {
   appendLog,
   activeJsonPath,
   gcRegistry,
+  isForeignCheckout,
   type ActiveState,
   materializeRenderedPrompt,
 } from './state.js';
@@ -37,28 +37,58 @@ export async function handleSessionStart(
 
   const { flowName, state, repoRoot } = active;
 
-  // The flow resolved from a DIFFERENT checkout of this repository than `cwd`
-  // (`ResolvedFlow.viaSibling`), AND `cwd` is not one of the flow's own ticket worktrees.
+  // The flow resolved from a DIFFERENT checkout of this repository than `cwd`, and `cwd`
+  // is not one of the flow's own ticket worktrees (`isForeignCheckout`) — the developer
+  // opened a session in another of their own worktrees while a flow runs elsewhere in the
+  // repo.
   //
-  // Both halves are needed. `viaSibling` alone also fires inside a ticket tree — that is
-  // the route's whole reason for existing — and there the anchor living elsewhere is the
-  // expected shape: telling that session "the flow you found belongs to another checkout,
-  // consider parking its state" is worse than saying nothing, because parking the state of
-  // the flow that opened the tree is exactly wrong. `worktree.cjs` puts ticket trees under
-  // `<repo>.ai-flow-worktrees/` and the engine already relies on that name (`commands/abort.ts`
-  // finds and tears them down by it). Relying on it HERE is safe in a way relying on it for
-  // RESOLUTION is not: a wrong guess only adds or drops a paragraph of prose, whereas
-  // narrowing resolution by the same guess brings back the fail-OPEN this fallback exists
-  // to prevent (a flow that names its worktrees differently loses control-plane protection,
-  // signal interception and accounting for every subagent in one).
+  // This session is NOT part of that flow, so it returns here: no ownership mutex, no
+  // binding, no stage prompt, and nothing written to the anchor's active.json. Until
+  // 0.73.0 this shape went read-only and merely SAID it might be a misfire, which left
+  // the developer with a session that could not edit the checkout in front of it until
+  // they parked another checkout's state and restarted. The mutex it was enforcing does
+  // not apply across checkouts: two checkouts are two working copies, so a write here
+  // cannot collide with the flow's own files. What still applies is every fence around
+  // the flow's control plane (PreToolUse keeps refusing writes to any checkout's
+  // `.ai-flow/<flow>/`, the Bash control-plane block and signal interception) and the
+  // refusal of mutating flow commands routed at a foreign anchor (UserPromptSubmit).
   //
-  // Reached when the developer opens a session in another of their own worktrees while a
-  // flow runs elsewhere in the repo — the observed shape, where every session in the second
-  // checkout went read-only with nothing explaining why.
-  const crossCheckout = !!active.viaSibling && !realPath(cwd).includes('.ai-flow-worktrees/');
+  // The message is informational for exactly that reason: the developer has to be told
+  // why a flow they cannot see is being mentioned at all, and that `<flow> start` here is
+  // still blocked (start.ts refuses a viaSibling resolution) — that refusal is the one
+  // piece of the old lock that survives.
+  const foreign = isForeignCheckout(active, cwd);
 
   try {
   await appendLog(repoRoot, flowName, session_id, `SESSION source=${input.source} stage=${state.current_stage}`);
+
+  // ── Foreign checkout: not this session's flow ─────────────────────────────────
+  if (foreign) {
+    await appendLog(repoRoot, flowName, session_id, `SESSION_FOREIGN_CHECKOUT anchor=${repoRoot}`);
+    const stateDirOfOwner = dirname(activeJsonPath(repoRoot, flowName));
+    return {
+      systemMessage: `[ai-flow:${flowName}] 该 flow 的锚点在本仓库的另一个检出，本 session 不受它约束（可正常改本检出）`,
+      additionalContext: [
+        `[ai-flow] 本仓库的**另一个检出**正在进行流程 '${flowName}'：`,
+        `    本 session 的 cwd：${cwd}`,
+        `    该 flow 的锚点：  ${repoRoot}`,
+        `两者是同一个 git 仓库的不同检出（git worktree），是两份独立的工作副本。`,
+        ``,
+        `⇒ **本 session 不受那条 flow 约束**：本检出的文件可以正常修改，不必为它做任何事。`,
+        `   仍然被拦的只有两类：改任意检出下 '.ai-flow/${flowName}/' 里的控制面文件（stage 提示词 /`,
+        `   config / 脚本 / signal），以及在本检出执行会作用到对方锚点的流程命令。`,
+        ``,
+        `⛔ 不要在本检出执行 '${flowName} abort'/'approve'/'resume'：命令会作用在 ${repoRoot} 上。`,
+        `   要操作那条 flow，去它自己的检出里操作。`,
+        ``,
+        `如果开发者想在**本检出**跑一条自己的 flow：'${flowName} start' 在这里仍会被拒（解析会落到对方`,
+        `锚点）。做法是先把对方的流程状态挪走，再在本检出 start，然后挪回来：`,
+        `     mv ${stateDirOfOwner} ${stateDirOfOwner}.parked`,
+        `   ⚠️ 挪回之后它的 "last_session_id" 仍指向那个已经不在的 session，要接管得先把该字段改成 null。`,
+      ].join('\n'),
+    };
+  }
+  // ──────────────────────────────────────────────────────────────────────────────
 
   // ── Session Mutex (read-only mode) ────────────────────────────────────────────
   // Another session owns this flow. Rather than locking this session out entirely,
@@ -70,55 +100,24 @@ export async function handleSessionStart(
     await appendLog(repoRoot, flowName, session_id, `SESSION_READONLY owner=${state.last_session_id}`);
 
     const activeFile = activeJsonPath(repoRoot, flowName);
-    // Saying "当前工程" on the cross-checkout shape is actively misleading — it reads as
-    // "this working copy", and the two recovery routes below (go back to the owner session /
-    // null out last_session_id) do not address what the developer actually wants, which is
-    // to run a flow HERE. The mutex still applies either way; what changes is that the
-    // message must name both checkouts and give the route that fits this shape.
-    const statusLine = crossCheckout
-      ? `[ai-flow:${flowName}] 本 session 只读 —— 但该 flow 的锚点在本仓库的另一个检出，可能是误锁（详见注入说明）`
-      : `[ai-flow:${flowName}] 工程进行中，本 session 只读（禁止修改项目与流程命令）`;
-    const stateDirOfOwner = dirname(activeFile);
+    // The cross-checkout shape never reaches here: `foreign` returned above, and a
+    // session inside one of the flow's OWN ticket worktrees is meant to see the ordinary
+    // mutex — the anchor living elsewhere is the expected shape there, and telling that
+    // session to park the state of the flow that opened its tree is exactly wrong.
+    const statusLine = `[ai-flow:${flowName}] 工程进行中，本 session 只读（禁止修改项目与流程命令）`;
     const lines = [
-      crossCheckout
-        ? `[ai-flow] 本仓库已在进行流程 '${flowName}'（由另一 session 控制），但**它的锚点不在你现在这个检出里**。`
-        : `[ai-flow] 当前工程已在进行流程 '${flowName}'（由另一 session 控制）。`,
+      `[ai-flow] 当前工程已在进行流程 '${flowName}'（由另一 session 控制）。`,
       ``,
       `为避免多 session 并发改动冲突，本 session 仅可读取、检索、回答关于本项目的问题，`,
       `禁止修改本项目文件（Edit/Write/NotebookEdit 将被拒绝），也不要执行任何 ai-flow 流程命令。`,
       ``,
     ];
-    if (crossCheckout) {
-      lines.push(
-        `🔴 **先把这件事告诉开发者，别让他自己去猜为什么只读**：`,
-        `    本 session 的 cwd：${cwd}`,
-        `    该 flow 的锚点：  ${repoRoot}`,
-        `两者是同一个 git 仓库的**不同检出**（git worktree）。ai-flow 在当前检出找不到流程状态时`,
-        `会去同仓库的其它检出找同路径的锚点——这是为了让 flow 给票开的临时工作树里的子代理能找回`,
-        `真正的锚点（否则那里的控制面保护、signal 拦截、context 统计全部静默失效），代价就是它`,
-        `分辨不出「flow 自己开的票树」和「开发者手建的另一条独立开发线」。`,
-        ``,
-        `⇒ 如果 ${repoRoot} 是另一条与本检出无关的开发线，那么本次只读是**误锁**。三条出路：`,
-        `  1. 那条 flow 已经不需要了 → 在它的检出里 abort；或者把它的流程状态整个挪走（代码一行不动）：`,
-        `       mv ${stateDirOfOwner} ${stateDirOfOwner}.parked`,
-        `     ⚠️ 挪完必须**重启本 session 的上下文**（只读模式是 SessionStart 定的，挪走不会当场解锁）。`,
-        `  2. 那条 flow 还要继续 → 它和本检出二选一，先回它的 session 把它收口。`,
-        `  3. 想让两个检出各跑一个自己的 flow → 引擎**支持**这个形态（各自的 active.json 各归各的检出），`,
-        `     但**起步那一刻会被本次这个锁挡住**：本检出还没有 active.json，于是解析落到那条 flow 上。`,
-        `     做法：先按 1 挪走它的状态 → 在本检出 start 自己的 flow → 再把它挪回来。`,
-        `     ⚠️ 挪回之后它的 "last_session_id" 仍指向那个已经不在的 session，要接管得先把该字段改成 null。`,
-        ``,
-        `⛔ **不要在本检出执行 '${flowName} abort'**：命令会作用在 ${repoRoot} 上，`,
-        `那会销毁另一条开发线的流程状态。要 abort 就去它自己的检出里 abort。`,
-      );
-    } else {
-      lines.push(
-        `当用户要求修改本项目时，请如实告知：改动需在控制该流程的 session 中进行；`,
-        `若那个 session 已结束、需由本 session 接管流程，执行 /clear 即可接管`,
-        `（如确认原 session 已不存在却仍被锁定，先打开 ${activeFile}，`,
-        `把 "last_session_id" 改为 null 保存，再 /clear）。`,
-      );
-    }
+    lines.push(
+      `当用户要求修改本项目时，请如实告知：改动需在控制该流程的 session 中进行；`,
+      `若那个 session 已结束、需由本 session 接管流程，执行 /clear 即可接管`,
+      `（如确认原 session 已不存在却仍被锁定，先打开 ${activeFile}，`,
+      `把 "last_session_id" 改为 null 保存，再 /clear）。`,
+    );
     return { additionalContext: lines.join('\n'), systemMessage: statusLine };
   }
   // ─────────────────────────────────────────────────────────────────────────────
@@ -198,32 +197,12 @@ export async function handleSessionStart(
   // S2: flow-complete signal at terminal stage
   const isFlowComplete = signal === 'flow-complete' && expectedNext === null;
 
-  // Cross-checkout takeover. `active` came from the cross-checkout fallback, so this
-  // session's cwd is in a DIFFERENT checkout of the repository than the flow's anchor
-  // (see `ResolvedFlow.viaSibling`) — and since we got past the mutex, the flow was
-  // unowned and this session just became its owner. Everything below then writes to the
-  // anchor: stage docs, signal, accounting. That is worse than the read-only branch,
-  // which merely refuses; here the writes land in a checkout the developer is not
-  // looking at. The preamble prints the anchor paths but cannot say they are not where
-  // you are, so prepend that. Prepending to `pathsPreamble` covers every owner branch
-  // at once and is automatically counted against the injection budget (branches pass
-  // `pathsPreamble.length` to the budget math), which is correct — it does occupy that space.
-  //
-  // Known limit: once this session takes the flow over it gets bound to the anchor, and the
-  // binding route (checked before walk-up) does not tag viaSibling — so this note appears on
-  // the takeover turn and not on later ones. That is the turn that matters (it is where the
-  // developer still has a cheap way out) and `systemMessage` carries the same warning to the
-  // terminal, so it is not re-derived per turn.
-  const crossNote = crossCheckout
-    ? `🔴 [ai-flow] 本 flow 的锚点**不在你现在这个检出里**。\n` +
-      `    本 session 的 cwd：${cwd}\n` +
-      `    flow 的锚点：      ${repoRoot}\n` +
-      `两者是同一 git 仓库的不同检出（git worktree）。下面所有路径都指向锚点那一侧——stage 产物、\n` +
-      `signal、记账都会写到那里，**不是**写到你现在这个目录。\n` +
-      `⇒ 若这不是开发者要的（例如他想在当前检出跑一条自己的 flow），**先停下告知，别在这个 flow 上动手**：\n` +
-      `  一条 flow 只有一个锚点，写错检出之后只能人工搬。\n\n`
-    : '';
-  const pathsPreamble = crossNote + buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
+  // No cross-checkout takeover note is needed here any more: a session in a checkout the
+  // flow does not belong to returns at the `foreign` branch above without binding, so it
+  // never reaches this point. What does reach here with `viaSibling` set is a session
+  // inside one of the flow's OWN ticket worktrees, where the anchor living elsewhere is
+  // the expected shape and a warning would be noise pointing the wrong way.
+  const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
 
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {

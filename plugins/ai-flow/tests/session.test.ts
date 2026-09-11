@@ -449,15 +449,18 @@ describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）
     return { a, b };
   }
 
-  it('A 有主 → B 只读，消息点名两个检出并给出可执行出路（不再说「当前工程」）', async () => {
+  it('A 有主 → B 不被只读锁住，消息点名两个检出并说明本 session 不受约束', async () => {
     const { a, b } = makeCrossCheckout('owner-in-a');
     const out = await handleSessionStart(makeInput(b, 'sess-in-b'));
     expect(out).not.toBeNull();
     const ctx = out!.additionalContext;
     expect(ctx).toContain(a);                       // flow 的锚点
     expect(ctx).toContain(b);                       // 本 session 的 cwd
-    expect(ctx).toContain('mv ');                   // 出路可执行，不是「请自行处理」
-    expect(ctx).toMatch(/误锁|不在你现在这个检出/);
+    expect(ctx).toContain('mv ');                   // 想在本检出 start 的出路仍要给，且可执行
+    expect(ctx).toMatch(/不受.*约束|可以正常修改/);
+    // 只读是这次要去掉的行为：任何「本 session 只读 / 禁止修改本项目文件」的措辞都不该再出现。
+    expect(ctx).not.toContain('禁止修改本项目文件');
+    expect(out!.systemMessage).not.toMatch(/只读/);
     // 「当前工程」在这个形态下是错的：它读起来像 B 自己在跑流程。
     expect(ctx).not.toContain('当前工程已在进行流程');
     // ⛔ 不能建议在本检出 abort——那会销毁 A 的流程状态。
@@ -469,7 +472,7 @@ describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）
     expect(st!.last_session_id).toBe('owner-in-a');
   });
 
-  it('A 无主 → B 接管时注入必须先说「锚点不在这个检出」（否则产物静默写到 A）', async () => {
+  it('A 无主 → B 也不接管（不绑定、不注入 stage、不写 A 的 active.json）', async () => {
     const { a, b } = makeCrossCheckout(null);
     const out = await handleSessionStart(makeInput(b, 'sess-in-b'));
     expect(out).not.toBeNull();
@@ -477,10 +480,10 @@ describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）
     expect(ctx).toContain('锚点');
     expect(ctx).toContain(a);
     expect(ctx).toContain(b);
-    expect(ctx).toMatch(/先停下告知|别在这个 flow 上动手/);
-    // 接管本身仍然发生（这一轮只加告知，不改接管行为）
+    // 接管会让 stage 产物、signal、记账全部静默写到 A 那一侧——B 根本不在那条 flow 里。
+    expect(ctx).not.toContain('Do the work.');
     const st = await readActiveState(a, 'test-flow');
-    expect(st!.last_session_id).toBe('sess-in-b');
+    expect(st!.last_session_id).toBeNull();
   });
 
   // `viaSibling` 在 flow 自己的票树里同样会命中——那是这条解析路由存在的**理由**（票树的

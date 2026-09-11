@@ -11,6 +11,7 @@ import {
   markBasePath,
   readSignal,
   nextStage,
+  isForeignCheckout,
 } from './state.js';
 import { truncateError } from './format.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
@@ -161,6 +162,13 @@ export async function handlePostTool(
   // session's SessionStart returns before the reset on line below. Only `/clear` got
   // out of it, at the cost of whatever was not on disk.
   if (state.last_session_id !== null && state.last_session_id !== session_id) return null;
+
+  // Same reason, third axis: a session in another checkout of this repository is not part
+  // of this flow (see `isForeignCheckout`), and `last_session_id` being null — which the
+  // owner's SessionEnd leaves behind — is not consent for it to move the flow's context
+  // state. Without this it would latch the anchor's wrap-up at ITS occupancy, and the next
+  // session that actually owns the flow inherits a wrap-up it never triggered.
+  if (isForeignCheckout(active, cwd)) return null;
 
   // Load flow config for the per-flow context thresholds, and for the docs paths
   // the wrap-up brief has to name (pretool keeps writes to them open precisely so
