@@ -496,6 +496,57 @@ if (cmd === 'open') {
   } else {
     say(`\n派发给子代理时给绝对路径：${wtPath}`);
   }
+
+  // ── 「这一批你还漏了哪几张」──────────────────────────────────────────────
+  // 存在理由：主循环按批派实施，准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，
+  // 错的是**没有任何东西会在开树这一刻把「此刻还有哪几张票同样够格」摆到主 session 眼前**。
+  // 实测一条真实 flow：112 个批次里 62 个没装满（空掉 85 个槽位），50 个单票批里 39 个
+  // （78%）当时至少还能再加一张够格且写集不相交的票。落点选在 `open` 是因为它每开一棵树
+  // 必跑、而 stage-3 明写主 session 要读它的输出——这是当轮必然被读到的路径。
+  // 只对 `T<n>` 跑：`R<n>` 是一组一车道，那种模式下批宽由车道数定、票在车道内部串行做，
+  // 「这一批还能再塞一张票」的问法本身不成立。
+  //
+  // 🔴 fail-open，且只有这一段是：tickets.md 不在、子进程非零退出、超时、输出解析不了——
+  //    一律只提示一行然后照常成功退出。它是**附加信息**不是断言，把一次已经成功、且
+  //    已经改了磁盘和分支的开树变成失败，代价远大于少打一段提示（调用方多半会照着非零
+  //    退出码重跑 `open`，而那时分支已存在，只会撞上另一条报错）。`open` 本体的 fail-closed
+  //    （gitignore 检查、分支已存在、装依赖失败）一条都不放松。
+  if (/^T\d+$/.test(ticket)) {
+    try {
+      // 在飞票号：复用 `status` 那套（按落点前缀筛 `git worktree list`，票号从目录名取，
+      // 目录名就是分支名的后半段）。刚 add 的这棵已经登记在册，`ticket` 只是兜底去重。
+      const listed = gitQuiet(['worktree', 'list', '--porcelain']);
+      const prefixes = [join(lanesRoot, flowId + '-'), join(repoRoot, '.worktrees', flowId + '-')];
+      const names = (listed.ok ? listed.out.split('\n') : [])
+        .filter((l) => l.startsWith('worktree '))
+        .map((l) => l.slice('worktree '.length).trim())
+        .filter((p) => prefixes.some((pre) => p.startsWith(pre)))
+        .map((p) => basename(p).slice(flowId.length + 1) || basename(p));
+      const inflight = [...new Set([...names, ticket])];
+      const lanes = inflight.filter((t) => !/^T\d+$/.test(t));
+      const tids = inflight.filter((t) => /^T\d+$/.test(t));
+      if (lanes.length > 0) {
+        say(`\n（在飞的 ${lanes.join(' ')} 是车道不是票号，它们的写集没算进下面这段。）`);
+      }
+      // ⛔ `--flow-dir` 必须给本进程解析出来的 flowDir：0.69.0 起脚本住在插件里，
+      //    `join(__dirname, '..')` 推出来的是**插件自己的仓库**，于是这段会去读插件仓库的
+      //    tickets.md（多半不存在 → 一行提示），或者更糟：读到另一个项目的票面并照它报数。
+      //    子脚本就在同一个 scripts/ 目录，所以脚本路径可以用 __dirname，flowDir 不行。
+      const out = execFileSync(
+        process.execPath,
+        [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'missed', ...tids],
+        { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024 }
+      );
+      // 原样透传：这段文字的判据（未勾 ∧ 依赖已满足 ∧ 写集不相交）由 schedule.cjs 拥有，
+      // 在这里改写措辞就等于又复制了一份准入口径出来。
+      if (out && out.trim()) say('\n' + out.trimEnd());
+    } catch (e) {
+      // 超时同样落这里（execFileSync 超时抛 ETIMEDOUT），所以不会有子进程吊死 open。
+      const why = String((e && (e.stderr || e.message)) || e).trim().split('\n')[0];
+      say(`\n（跳过「还漏了哪几张」的探测：${why}——不影响本次开树；要看就手动跑 `
+        + `node ${join(__dirname, 'schedule.cjs')} --flow-dir ${flowDir} missed <在飞票号…>）`);
+    }
+  }
   process.exit(0);
 }
 

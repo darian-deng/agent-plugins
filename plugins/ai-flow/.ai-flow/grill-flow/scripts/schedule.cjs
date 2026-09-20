@@ -85,8 +85,10 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
   process.stdout.write(
     '用法（--flow-dir 紧跟脚本路径）:\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' [--cap <正整数>]\n'
-    + '按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' missed [<在飞票号> …]\n'
+    + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 3。判据与两种模式的代价见 references/execution-unit.md。\n'
+    + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票。只摆事实，不放行。\n'
   );
   process.exit(0);
 }
@@ -102,18 +104,32 @@ if (!state.flow_id) die('active.json 缺 flow_id');
 const ticketsPath = join(projectRoot, 'docs', 'grill-flows', state.flow_id, 'tickets.md');
 if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 
+// ── 子命令分发 ──────────────────────────────────────────────────────────────
+// 本脚本原先没有子命令，一跑就是那份全量调度报告。加分发时的硬约束是**不带子命令时逐字
+// 不变**（`--cap 6` 这类既有开关照旧走到下面），所以判据只能是「argv[2] 是不是一个不以
+// `-` 开头的词」：`--flow-dir <v>` 已经在 resolveFlowDir 里就地 splice 掉了，此刻 argv[2]
+// 要么是子命令、要么是 `--cap` 这类开关，两者分得开。
+// 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
+// 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
+const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
+if (SUB !== null && SUB !== 'missed') {
+  die('未知子命令: ' + SUB + '（只支持 `missed`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+}
+
 const capIdx = process.argv.indexOf('--cap');
 const cap = capIdx !== -1 ? Number(process.argv[capIdx + 1]) : 3;
 if (!Number.isInteger(cap) || cap < 1) die('--cap 要是正整数，收到: ' + process.argv[capIdx + 1]);
 
 // ── 解析（块边界与 gate-stage-3 的 qc:done 判定一致：票行 + 其后的缩进子行）──
 const lines = readFileSync(ticketsPath, 'utf-8').split('\n');
-const tk = new Map();   // T -> { blocked:[], touches:[], lane:null }
+// `done`：正则一直捕获着勾选状态（`m[1]`），却从没存下来——默认报告只关心「全量要跑几轮」，
+// 不关心跑到哪了。`missed` 要的正是「还没勾的里面谁够格」，所以这里把它落进来。
+const tk = new Map();   // T -> { blocked:[], touches:[], lane:null, done:bool }
 const order = [];       // 文件顺序 = 主循环的确定性 tiebreak
 let cur = null;
 for (const l of lines) {
   const m = /^- \[([ xX])\] (T\d+)/.exec(l);
-  if (m) { cur = m[2]; tk.set(cur, { blocked: [], touches: [], lane: null }); order.push(cur); continue; }
+  if (m) { cur = m[2]; tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ' }); order.push(cur); continue; }
   if (cur === null) continue;
   if (/^#{1,6}\s/.test(l)) { cur = null; continue; }
   if (!/^\s+\S/.test(l)) continue;
@@ -137,6 +153,77 @@ function overlap(a, b) {
     if (nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/')) return true;
   }
   return false;
+}
+
+// ── 子命令 `missed`：报「本可以一起开、却没开」的票 ──────────────────────────
+// 存在理由：stage-3 主循环的准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，
+// 错的是**没有任何东西会在开树那一刻把「你还漏了哪几张」摆到主 session 眼前**。实测一条
+// 真实 flow：112 个批次里 62 个没装满（空掉 85 个槽位），50 个单票批里 39 个（78%）当时
+// 至少还能再加一张够格且写集不相交的票——规则允许 96 轮，实际跑成 112 批。
+// 所以这里只做一件事：把够格的票摆出来。⛔ 不自动放行、不改批宽上限、不下「该不该开」的
+// 判断——那是主 session 的决定；脚本抢着替它决定，只会把一个可核对的事实换成一条不可核对
+// 的指令，而它判错时没有任何人能发现。
+if (SUB === 'missed') {
+  const args = process.argv.slice(3);
+  const ignored = args.filter((a) => !/^T\d+$/.test(a));
+  const given = args.filter((a) => /^T\d+$/.test(a));
+  const unknown = given.filter((t) => !tk.has(t));
+  const live = new Set(given.filter((t) => tk.has(t)));
+
+  // 在飞票写集的**并集**，交给已有的 overlap() 判。⛔ 不要另写一套前缀比较：overlap()
+  // 里 `none/无/-/—` 的「预估不了 ⇒ 只能独占」和目录前缀两种语义都是调过的，复制一份
+  // 出来迟早和主循环的准入判据分叉——那时两边都说自己对，而谁都不知道哪边在骗人。
+  const liveTouches = [...live].flatMap((t) => tk.get(t).touches);
+  const done = new Set([...tk.entries()].filter(([, v]) => v.done).map(([t]) => t));
+
+  // ⛔ 贪心选一个**两两不相交**的子集，不是逐票独立判。这一版最初只判了「与在飞票不相交」，
+  // 于是两张彼此写集相交的票会被一起列出来，而下面那句话让人把它们一起开出去 —— 照做就是
+  // 两棵写集相交的 worktree，rebase 必撞。主循环的准入是「与批内**其它已入选票**也不相交」
+  // （`roundsPerTicket` 里那句 `batch.some(...)`），这里必须同口径，否则这条提示在教人违规。
+  const eligible = [];
+  for (const t of order) {
+    if (done.has(t) || live.has(t)) continue;
+    // 与主循环同一口径：只看**本 tickets.md 里存在**的前驱。指向别处（已删的票、别的
+    // flow）的 Blocked by 永远勾不上，按它挡就等于把票永久冻住。
+    if (tk.get(t).blocked.some((b) => tk.has(b) && !done.has(b))) continue;
+    // 在飞集合为空时不做相交过滤：没有在飞票就无从相交。判据用 `live.size` 而不是
+    // `liveTouches.length` —— 在飞票存在、但它们的 `Touches` 解析不出来（执行期插的票不过
+    // stage-2 那道门）时 `liveTouches` 也是空数组，用长度判就会把**所有**票放行，包括
+    // `Touches: 无` 的独占票，而主循环那边 `overlap(['无'], [])` 是判它不够格的。
+    if (live.size > 0 && overlap(tk.get(t).touches, liveTouches)) continue;
+    if (eligible.some((o) => overlap(tk.get(t).touches, tk.get(o).touches))) continue;
+    eligible.push(t);
+  }
+
+  if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（missed 后面只认 T<n> 形态的票号）`);
+  if (unknown.length > 0) {
+    say(`⚠  这些在飞票号在 tickets.md 里找不到：${unknown.join(' ')}`);
+    say('   它们的写集进不了下面的相交判断，于是清单会偏宽（可能列出实际会撞车的票）。');
+  }
+  const noTouch = [...live].filter((t) => tk.get(t).touches.length === 0);
+  if (noTouch.length > 0) {
+    say(`⚠  这些在飞票在 tickets.md 里没有可解析的 \`Touches\` 行：${noTouch.join(' ')}`);
+    say('   它们的写集进不了相交判断，于是清单会偏宽（可能列出实际会撞车的票）。');
+  }
+  const liveDesc = live.size > 0 ? `${live.size} 张（${[...live].join(' ')}）` : '0 张';
+  const CRIT = '未勾 ∧ 全部 Blocked by 已勾 ∧ 写集与在飞票不相交 ∧ 彼此之间也不相交';
+  if (eligible.length === 0) {
+    // 无遗漏也必须响亮：静默会被读成「脚本没跑」，于是这条判据每轮都要人重新自己想一遍。
+    say(`✅ 无遗漏：在飞 ${liveDesc}，tickets.md 里没有别的票此刻够格同批开（${CRIT}）。`);
+  } else {
+    say(`📋 在飞 ${liveDesc}，另有 ${eligible.length} 张票此刻同样够格同批开（${CRIT}）：`);
+    say('   ' + eligible.join(' '));
+    // ⛔ 措辞必须是**有条件**的。`open` 每开一棵树都会跑这段，而一批要逐条 open：开第 1 棵
+    // 时后两票还没在飞，它们必然出现在这张清单里 —— 把话写成无条件的「要么一并开、要么写
+    // 理由」，happy path 上几乎每次都是假警报，而一条常年误报的红线会被训练成直接忽略。
+    say('   ⛳ **若本批到此为止**，就在本回合的回复里**逐张**写下不开的理由（一张一句）；');
+    say('      还要接着开就直接开，这几张下一次 open 时会自动从清单里消失。');
+    say('      ⚠️ 「已达批宽上限」是一条合法理由，照写即可 —— 要的是这一批漏没漏槽位有据可查，');
+    say('      不是逼你开满。两样都没有 = 漏了槽位，而漏批在事后是查不出来的。');
+  }
+  say(`   批宽上限由 stage 提示词定（stage-3 当前是 3），\`missed\` 既不读它也不改它：`
+    + `本命令只回答「还有谁够格」，不回答「该不该开」。`);
+  process.exit(0);
 }
 
 // 最长依赖链

@@ -1,6 +1,6 @@
 # Fowler Code Smell Baseline（Standards 轴基线）
 
-> per-ticket Standards 轴（stage-3）与收尾组装 Standards 轴（stage-4）的判断依据。子代理**携本文件全文** + diff，只报告 `/simplify` 自动修不动的**判断型** smell，report-only 不 apply。Fowler《Refactoring》经典清单，按本 flow 关注度排序。
+> per-ticket Standards 轴（stage-3）与收尾组装 Standards 轴（stage-4）的判断依据。子代理**携本文件全文** + diff。⛔ `/simplify` 已整步删除，所以本轴**两类都管**：判断型 smell report-only 交主 session 裁；原 simplify 那四类（可提取重复 / 可简化表达 / 明显低效 / altitude 不当）**能就地改掉的直接修**。Fowler《Refactoring》经典清单，按本 flow 关注度排序。
 
 ## 高优先（tracer-bullet 逐 ticket 实施最易滋生）
 
@@ -27,5 +27,6 @@
 
 ## 报告纪律
 
-- 只报 `/simplify` 修不动的**判断型**问题（需要架构判断的），机械型（局部复用/简化/效率）simplify 已 apply，不重复报。
+- **判断型**问题（需要架构判断的：架构级重复、错 altitude、过度工程）→ report-only、不 apply，交主 session 定夺。
+- **机械型**（局部复用 / 简化 / 效率 / altitude 不当，改法唯一的）→ **就地修**，条数计入质量链回报的 `fixed=`。⛔ 这一类以前归 `/simplify`，那一步已删除，现在归本轴——漏了就没有别人做。
 - 每条 finding 带：smell 类型 + 具体位置（file:符号）+ 为什么是问题 + 建议方向。不 apply、只报告，交主 session 定夺。

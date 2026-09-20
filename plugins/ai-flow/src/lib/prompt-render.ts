@@ -34,12 +34,22 @@ import { flowDefDir, flowAnchorDir } from './flow-paths.js';
  * byte-based budget understates the overflow by ~1.9x and would set the wrong
  * target size.
  *
- * Why we care: spilling is silent. The model gets the first ~10% of the stage
- * prompt and nothing tells it the rest exists — the path inside the preview
- * points at the HOST's copy of the injection, not at the stage file, and the
- * engine never says "there is more". Observed: a stage prompt at 2.1x this limit
- * delivered 3 of its 23 sections, and the ones that fell off the edge carried the
- * rules whose violation is silent.
+ * Why we care — but read `injectableStagePrompt` below before concluding anything
+ * from this number. Spilling USED to be silent: the model got the first ~10% and
+ * nothing told it the rest existed, because the path inside the host's preview
+ * points at the HOST's copy of the injection, not at the stage file. Observed back
+ * then: a stage prompt at 2.1x this limit delivered 3 of its 23 sections, and the
+ * ones that fell off the edge carried the rules whose violation is silent.
+ *
+ * That is NO LONGER what happens. Since v0.63.0 the engine never hands the host an
+ * oversize body: `injectableStagePrompt` materializes the RENDERED prompt to
+ * `state/current-prompt.md` and injects an order to read it. So going over budget
+ * costs one Read round-trip, not a silent loss of rules.
+ *
+ * ⛔ Do not describe this budget as a cliff where "one more character silently drops
+ * a rule" — that description is pre-0.63.0 and is now false. It has already misled
+ * readers of this file into writing it into flow docs. The budget still matters, but
+ * for a different reason: the model can skip that Read, or half-read it.
  */
 export const INLINE_INJECTION_BUDGET = 10_000;
 

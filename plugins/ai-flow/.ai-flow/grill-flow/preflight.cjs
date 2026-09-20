@@ -112,7 +112,7 @@ if (!mmdcSem) {
   }
 }
 
-// 注：stage-3 的 /simplify 是 Claude Code 内置命令，无独立文件可探测，故不在此检查。
+// 注：stage-3 曾用 /simplify（Claude Code 内置命令），2026-09-03 已整步删除，本 flow 不再依赖任何内置 slash 命令。
 // correctness 轴改由子代理携未提交 diff 审 bug（不依赖内置 slash 命令，无需 preflight 检测）。
 
 process.exit(PASS);

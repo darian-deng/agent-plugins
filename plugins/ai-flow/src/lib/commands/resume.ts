@@ -123,8 +123,10 @@ export async function handleResume(
   // the same character ceiling and must degrade to "go read the file" instead of spilling.
   // It used to have no check at all — and its wrapper is the largest of the four, because
   // `requirement` is the user's own text with no length bound: measured on this repo, a
-  // ~430-character requirement is enough to push the tightest stage page over the limit,
-  // at which point the host silently keeps ~2,000 characters of it.
+  // ~430-character requirement is enough to push the tightest stage page over the limit.
+  // That is handled, not silent: `assembledOverhead(assemble)` below already contains the
+  // real requirement, so `injectableStagePrompt` sees the true total and degrades to
+  // "go read the materialized file". The host never receives an oversize body from here.
   const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) +
     `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
