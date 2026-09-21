@@ -4,7 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { advanceStage } from '../src/lib/advance-stage.js';
 import { createFlowTestRepo, writeActiveState, BLOCKING_CONFIG } from './fixtures/helpers.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
+import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
 import { renderedPromptPath, materializeRenderedPrompt } from '../src/lib/state.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -84,35 +84,24 @@ function injectionOverhead(flow: string, gated: boolean): number {
 }
 
 /**
- * `requirement` 的下限。**为什么是一个数而不是「无上界所以不卡」**：需求原文确实没有上界，
- * 任何固定值都挡不住一条 5,000 字的需求——但「挡不住最坏情况」不等于「不该有下限」。没有下限时
- * 这两个注入点是恒绿的，而实测 `grill-flow/stage-3` 的翻车点只有 **179 字符**：任何一条像样的
- * 需求描述都会让它在 `/ai-flow:resume` 时走落盘兜底，而没有任何东西会告诉你这件事。
+ * `start` / `resume` 这两个注入点的包裹开销。它们比 `advance` / SessionStart 多两样**用户自由
+ * 文本**：需求原文，以及（`resume`）分支名。
  *
- * 400 的来历：本仓两条真实需求实测是 **178** 和 **706** 字符，400 落在两者之间。⛔ 别把它往下调
- * 来让某一页变绿——那一页真实的翻车点会跟着降，而降到多少没有人看得见。要变绿就去砍那一页。
+ * 🔴 **这里按最坏情况算，而且最坏情况现在是有界的。** v0.75.0 之前这两样整篇夹带、长度无上界，
+ * 这份测试只能按某个猜出来的需求长度去卡（选 400 还是 800 没有原理可依，而按 0 算等于让这两个
+ * 注入点恒绿——它们确实恒绿过）。现在 `capInjectedText` 把它们封到 `INJECTED_FREETEXT_CAP` /
+ * `INJECTED_BRANCH_CAP`，于是「最长可能的那条注入」是一个**可以算出来的定值** ⇒ 断言不再需要
+ * 任何猜出来的常量。⛔ 别把这里改回按某个具体长度算——那等于把这条门退回到猜。
+ *
+ * 逐字复刻 `commands/start.ts` 与 `commands/resume.ts` 的 `assemble`，取两者较大的那个，与上面
+ * `injectionOverhead` 取三个框架最大值同理：只要有一条路径会溢出，这页就该被判超限。
  */
-const REQUIREMENT_FLOOR = 400;
-
-/**
- * `start` / `resume` 这两个注入点的包裹开销。它们比 `advance` / SessionStart 多一个
- * `requirement: <用户原文>` 字段，所以**同一页在这条路径上的余量更小**。
- *
- * 逐字复刻 `commands/start.ts` 与 `commands/resume.ts` 的 `assemble`，取两者较大的那个——
- * 和上面 `injectionOverhead` 取三个框架的最大值同理：只要有一条路径会溢出，这页就该被判超限。
- *
- * ⚠️ **已知盲点，别以为这条断言兜住了全部**：`resume` 那条框架里还有**分支名**，它和
- * `requirement` 一样没有长度上界，而这里按一个 21 字符的样例写死。实测 `resumeFrame`(447)
- * 大于 `startFrame`(383)，所以取到的就是含分支名那条，开销随分支名 1:1 增长。当前最紧的两页
- * （`grill-flow` 的 stage-2 / stage-3）翻车点是 436 / 435，扣掉 `REQUIREMENT_FLOOR` 只剩
- * 35 字符余量 ⇒ **分支名超过约 57 字符（21 + 35），`/ai-flow:resume` 就会走落盘兜底，而这份
- * 测试看不见。** ⛔ 没有把分支名也加进 floor，是因为那要再从那两页砍掉约 40 字符，而它们刚被
- * 砍到底（再砍只剩「删实测数字」或「把只在那页出现的规则推下去」两条路，两条都是负优化）。
- * ⇒ 记在这里当已知欠账：真要治，正确动作是**拆注入点**（让 start/resume 不再把 requirement
- * 原文和分支名塞进同一条注入），不是继续榨那两页。
- */
-function resumeOverhead(flow: string, gated: boolean, requirementChars: number): number {
-  const req = '需'.repeat(requirementChars);
+function resumeOverhead(flow: string, gated: boolean): number {
+  // 喂一段远超上限的文本，`capInjectedText` 会把它压成「首段 + 去哪取全文」——那就是这两个字段
+  // 在任何真实输入下能达到的最长形态。⚠️ 用 `需` 这种 3 字节字符：预算按字符算不按字节算，
+  // 混用会让这里的最坏情况算小。
+  const req = capInjectedText('需'.repeat(5000), REQUIREMENT_SOURCE);
+  const branch = capInjectedText('b'.repeat(5000), '`git branch --show-current`', INJECTED_BRANCH_CAP);
   const startFrame = assembledOverhead((body) =>
     buildAiFlowPreamble(DEEP_ANCHOR, flow) +
     `Flow '${flow}' started!\n\n` +
@@ -120,7 +109,7 @@ function resumeOverhead(flow: string, gated: boolean, requirementChars: number):
     body);
   const resumeFrame = assembledOverhead((body) =>
     buildAiFlowPreamble(DEEP_ANCHOR, flow, 'a'.repeat(40)) +
-    `Flow '${flow}' resumed from branch: feat/some-branch-name\n` +
+    `Flow '${flow}' resumed from branch: ${branch}\n` +
     `current_stage: stage-N\nrequirement: ${req}\n\n` +
     body);
   return Math.max(startFrame, resumeFrame)
@@ -155,19 +144,16 @@ describe('stage 提示词的内联预算', () => {
     // `start` / `resume` 是另一条路：框架里多一个 `requirement: <用户原文>`，所以同一页在这里
     // 的余量更小。⛔ 这条用例在 2026-09 之前不存在（requirement 按 0 算），于是这两个注入点恒绿。
     if (known) continue;
-    it(`${p.id} 在 /ai-flow:start 与 resume 上撑得住 ${REQUIREMENT_FLOOR} 字符的需求原文`, () => {
+    it(`${p.id} 在 /ai-flow:start 与 resume 上也装得下（按封顶后的最坏情况）`, () => {
       const flow = p.id.split('/')[0]!;
       const rendered = renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow).length;
-      // 翻车点：多长的 requirement 会把这一页顶出上限。开销随 requirement 是 1:1 增长的，
-      // 所以它就是「requirement 为 0 时的余量」。把它写进断言消息里——这个数比「绿或红」有用：
-      // 谁把页面写胖了，它会跟着掉，而那在只有一个布尔结果时是看不见的。
-      const tipping = INLINE_INJECTION_BUDGET - rendered - resumeOverhead(flow, p.gated, 0);
-      const total = rendered + resumeOverhead(flow, p.gated, REQUIREMENT_FLOOR);
+      const overhead = resumeOverhead(flow, p.gated);
+      const total = rendered + overhead;
       expect(
         total,
-        `${p.id} 在 ${REQUIREMENT_FLOOR} 字符需求下组装后 ${total} 字符（提示词 ${rendered}）。`
-        + `这一页的翻车点是 ${tipping} 字符的需求原文——超过它，/ai-flow:start 与 resume 就只能落盘指路。`
-        + `⛔ 修法是砍这一页，不是调低 REQUIREMENT_FLOOR。`
+        `${p.id} 在 start/resume 的最坏情况下组装后 ${total} 字符（提示词 ${rendered} + 包裹 ${overhead}）。`
+        + `这两个注入点比 advance / SessionStart 多带需求原文与分支名，两者都已封顶，所以这个数是上界、不是估计。`
+        + `⛔ 修法是砍这一页或再收紧 INJECTED_FREETEXT_CAP，不是把这条断言改回按某个猜出来的长度算。`
       ).toBeLessThanOrEqual(INLINE_INJECTION_BUDGET);
     });
   }

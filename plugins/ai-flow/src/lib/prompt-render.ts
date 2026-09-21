@@ -87,6 +87,41 @@ export const INLINE_INJECTION_BUDGET = 10_000;
  * against the same ceiling. Its length varies with the flow name — it appears twice — which
  * is why this is a function and not a constant.
  */
+/**
+ * 注入框架里夹带的**用户自由文本**——`start` / `resume` 的需求原文，以及 `resume` 的分支名——
+ * 没有任何长度上界，而宿主的内联注入有 `INLINE_INJECTION_BUDGET` 这个硬上限。整篇夹带的代价
+ * 是它**直接从 stage 提示词的预算里扣**：实测两条真实需求是 178 / 706 字符，而本仓最紧的两页
+ * 余量只有 35 / 36 ⇒ 任何一条像样的需求描述都会把那一页顶出上限、退化成「落盘 + 指路」，而
+ * 那一页才是这一轮真正要用的东西。
+ *
+ * 而这段文本是**冗余**的：需求原文原样躺在 `<flow_root>/state/active.json` 的 `requirement`
+ * 字段里，而注入顶部的 `[ai-flow:paths]` 块刚好给了 `flow_root`；分支名一条 `git branch
+ * --show-current` 就能拿到。⇒ 超过上限只注首段 + 一句去哪取全文。
+ *
+ * 🔴 **封顶真正买到的东西不是「省几百字符」，是「开销从无界变成有界」**：在此之前
+ * `tests/stage-prompt-budget.test.ts` 对这两个注入点只能按某个猜出来的需求长度去卡（选 400
+ * 还是 800 没有原理可依），封顶之后可以直接按**最坏情况**断言。
+ */
+export const INJECTED_FREETEXT_CAP = 100;
+
+/** 分支名用更紧的上限：它只是上下文信息，而且真实分支名远短于此。 */
+export const INJECTED_BRANCH_CAP = 40;
+
+/**
+ * 把一段无上界的用户文本压到可预测的长度。`where` 是「全文去哪取」，必须是调用方能保证读得到
+ * 的东西（⛔ 不要写成本次注入里没有给出的路径——那等于指向一个模型找不到的地方）。
+ */
+/** 需求原文被截断时的「去哪取」。`flow_root` 由注入顶部的 `[ai-flow:paths]` 块给出。 */
+export const REQUIREMENT_SOURCE = '`<flow_root>/state/active.json`';
+
+export function capInjectedText(value: string | null | undefined, where: string, cap: number = INJECTED_FREETEXT_CAP): string {
+  const v = (value ?? '').trim();
+  if (v.length <= cap) return v;
+  // ⚠️ 后缀本身也进预算，所以它必须短。⛔ 别为了「说清楚」把它写长——这段文字在每一次
+  // start/resume 注入里都要付一遍，而它换来的信息只有「被截了、去哪取」两件事。
+  return `${v.slice(0, cap)}…（截断，全文见 ${where}）`;
+}
+
 export function commandOutputPrefix(flowName: string): string {
   return (
     `[ai-flow system] Hook intercepted this command for flow '${flowName}'. ` +

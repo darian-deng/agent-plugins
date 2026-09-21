@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
 import { hasActiveFlow, writeActiveState, appendLog, materializeRenderedPrompt, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, REQUIREMENT_SOURCE } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
@@ -164,12 +164,14 @@ export async function handleStart(
 
   const promptPath = stagePromptPath(repoRoot, flowName, firstStage.prompt);
   // Same budget contract as the advance / session-start injection points — see the note in
-  // `resume.ts`. This path had no check at all either, and its wrapper carries the user's
-  // own `requirement` text, which has no length bound.
+  // `resume.ts`. Its wrapper carries the user's own `requirement` text, which has no length
+  // bound, so it goes through `capInjectedText`: uncapped it is charged straight against the
+  // stage prompt's budget. The full text stays on disk in `active.json` (written just above),
+  // and the `[ai-flow:paths]` preamble hands the model `flow_root`.
   const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName) +
     `Flow '${flowName}' started!\n\n` +
-    `flow_id: ${flowId}\nrequirement: ${requirement.trim()}\ncurrent_stage: ${firstStage.id}\n\n` +
+    `flow_id: ${flowId}\nrequirement: ${capInjectedText(requirement, REQUIREMENT_SOURCE)}\ncurrent_stage: ${firstStage.id}\n\n` +
     body;
   const gateNote = firstStage.completion.gate ? '\n' + gateProtocolNote() : '';
   let stageContent = '';

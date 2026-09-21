@@ -9,7 +9,7 @@ import {
   materializeRenderedPrompt,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 import { stagePromptPath } from '../flow-paths.js';
 
@@ -121,16 +121,17 @@ export async function handleResume(
   // Same budget contract as the advance / session-start injection points: this path also
   // hands a rendered stage prompt to the host through `additionalContext`, so it is under
   // the same character ceiling and must degrade to "go read the file" instead of spilling.
-  // It used to have no check at all — and its wrapper is the largest of the four, because
-  // `requirement` is the user's own text with no length bound: measured on this repo, a
-  // ~430-character requirement is enough to push the tightest stage page over the limit.
-  // That is handled, not silent: `assembledOverhead(assemble)` below already contains the
-  // real requirement, so `injectableStagePrompt` sees the true total and degrades to
-  // "go read the materialized file". The host never receives an oversize body from here.
+  //
+  // `requirement` and the branch name are the user's own text with no length bound, so both
+  // go through `capInjectedText`: an uncapped requirement is charged straight against the
+  // stage prompt's budget, and the tightest pages have ~35 characters of room. Capping is
+  // safe because the full text stays on disk — `active.json` holds `requirement`, and the
+  // `[ai-flow:paths]` preamble right above hands the model `flow_root`. See that helper for
+  // why the real win is turning this frame's overhead from unbounded into bounded.
   const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) +
-    `Flow '${flowName}' resumed from branch: ${trimmedBranch}\n` +
-    `current_stage: ${currentStage}\nrequirement: ${restored.requirement}\n\n` +
+    `Flow '${flowName}' resumed from branch: ${capInjectedText(trimmedBranch, '`git branch --show-current`', INJECTED_BRANCH_CAP)}\n` +
+    `current_stage: ${currentStage}\nrequirement: ${capInjectedText(restored.requirement, REQUIREMENT_SOURCE)}\n\n` +
     body;
   const gateNote = stageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
   let stageContent = '';
