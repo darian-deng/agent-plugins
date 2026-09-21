@@ -86,9 +86,11 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     '用法（--flow-dir 紧跟脚本路径）:\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' [--cap <正整数>]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' missed [<在飞票号> …]\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' rm [<票号>]\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 3。判据与两种模式的代价见 references/execution-unit.md。\n'
     + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票。只摆事实，不放行。\n'
+    + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
 }
@@ -112,8 +114,8 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && SUB !== 'missed') {
-  die('未知子命令: ' + SUB + '（只支持 `missed`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && SUB !== 'missed' && SUB !== 'rm') {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
 }
 
 const capIdx = process.argv.indexOf('--cap');
@@ -124,15 +126,38 @@ if (!Number.isInteger(cap) || cap < 1) die('--cap 要是正整数，收到: ' + 
 const lines = readFileSync(ticketsPath, 'utf-8').split('\n');
 // `done`：正则一直捕获着勾选状态（`m[1]`），却从没存下来——默认报告只关心「全量要跑几轮」，
 // 不关心跑到哪了。`missed` 要的正是「还没勾的里面谁够格」，所以这里把它落进来。
-const tk = new Map();   // T -> { blocked:[], touches:[], lane:null, done:bool }
+const tk = new Map();   // T -> { blocked:[], touches:[], lane:null, done:bool, rmHits:[] }
 const order = [];       // 文件顺序 = 主循环的确定性 tiebreak
+
+// ── 真机验证三态（`rm:none` / `rm:pending` / `rm:done`）───────────────────────
+// 约定是每票**有且仅有一个**，所以这里收集**全部**命中、不取第一个：把「一个都没写」
+// 和「写了两个」分开报，是 `worktree.cjs close` 那道前置断言能成立的前提——只存一个
+// 状态字段的话，两个互相矛盾的标记（`rm:none` 和 `rm:done` 并排）会被静默压成一个，
+// 而那正是最该拦的形态。
+// 标记可以写在**票行本身**、也可以写在它的缩进子项，两处都扫。
+// `\b` 前缀边界挡掉 `arm:pending`、`confirm:done` 这类词中命中；中文字符不算 `\w`，
+// 所以「本票 rm:pending」这种紧挨中文的写法照样命中。
+const RM_MARK = /\brm:(none|pending|done)\b/g;
+function collectRm(rec, line) {
+  RM_MARK.lastIndex = 0;   // 全局正则的 lastIndex 会跨调用残留，不清就会漏命中
+  let m;
+  while ((m = RM_MARK.exec(line)) !== null) rec.rmHits.push({ state: m[1], text: line.trim() });
+}
+
 let cur = null;
 for (const l of lines) {
   const m = /^- \[([ xX])\] (T\d+)/.exec(l);
-  if (m) { cur = m[2]; tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ' }); order.push(cur); continue; }
+  if (m) {
+    cur = m[2];
+    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', rmHits: [] });
+    order.push(cur);
+    collectRm(tk.get(cur), l);   // 票行内的标记（约定允许写在这里）
+    continue;
+  }
   if (cur === null) continue;
   if (/^#{1,6}\s/.test(l)) { cur = null; continue; }
   if (!/^\s+\S/.test(l)) continue;
+  collectRm(tk.get(cur), l);     // 缩进子项里的标记
   const mb = /(?:^|\s)Blocked by:\s*(.+)$/.exec(l);
   if (mb) tk.get(cur).blocked = (mb[1].match(/T\d+/g) || []);
   const mt = /(?:^|\s)Touches:\s*(.+)$/.exec(l);
@@ -223,6 +248,99 @@ if (SUB === 'missed') {
   }
   say(`   批宽上限由 stage 提示词定（stage-3 当前是 3），\`missed\` 既不读它也不改它：`
     + `本命令只回答「还有谁够格」，不回答「该不该开」。`);
+  process.exit(0);
+}
+
+// ── 子命令 `rm`：真机验证三态的登记情况 ──────────────────────────────────────
+// 票面约定（stage-3 记账定的）：每票**有且仅有一个**标记，写在票行内或其缩进子项——
+//   rm:none    — <一句理由：不涉及真机 / 开发者豁免（谁、何时）>
+//   rm:pending
+//   rm:done    — <命令与输出>
+//
+// 存在理由：上一条真实 flow 实测 `rm:pending` 出现 215 次、`rm:done` 0 次——真机验证
+// 登记了但一次都没做过。而全流程唯一的真机落点在 stage-4 环节 C，也就是**全部票做完
+// 之后**；那次有两张 P0 缺陷就是在机器地板全绿的掩护下漏过去的。所以三态必须能被机器
+// 数出来，而不是靠人翻票面。
+//
+// ⛔ 本命令只报事实、不下判断、不改任何文件：该不该拒绝收口是 `worktree.cjs close` 的事。
+//
+// ⚠️ **退出码恒为 0**（只要它算得出结论）。缺标记 / 多于一个都是「算出来的结论」，不是
+//    脚本故障，所以不能用非零表达——`worktree.cjs` 那边把「子进程非零」一律当成工具坏了
+//    而 fail-open 放行，用非零报结论等于让这道门在最该拦的时候静默失效。
+if (SUB === 'rm') {
+  const args = process.argv.slice(3);
+  const ignored = args.filter((a) => !/^T\d+$/.test(a));
+  const want = args.filter((a) => /^T\d+$/.test(a));
+  if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（rm 后面只认 T<n> 形态的票号，且最多一个）`);
+
+  // verdict：`none` / `pending` / `done`（恰好一个标记）、`missing`（一个都没有）、
+  // `multi`（多于一个）、`unknown`（tickets.md 里没有这张票的 ticket 级行）。
+  const verdictOf = (t) => {
+    if (!tk.has(t)) return 'unknown';
+    const hits = tk.get(t).rmHits;
+    if (hits.length === 0) return 'missing';
+    if (hits.length > 1) return 'multi';
+    return hits[0].state;
+  };
+  const WHEN = '    三态各自什么时候用：\n'
+    + '      rm:none — <一句理由>   不涉及真机（纯逻辑/纯脚本），或开发者已明确豁免（写清谁、何时）\n'
+    + '      rm:pending             要真机验、还没验（合法的登记态，不是错误）\n'
+    + '      rm:done — <命令与输出> 已经在真机上验过，把命令和看到的输出抄一份在后面';
+
+  if (want.length > 0) {
+    const t = want[0];
+    if (want.length > 1) say(`⚠  给了多个票号，只报第一个（${t}）：${want.join(' ')}`);
+    const v = verdictOf(t);
+    if (v === 'unknown') {
+      say(`${t}：tickets.md 里找不到它的 ticket 级行（\`- [ ] ${t} …\` / \`- [x] ${t} …\`）。`);
+      say(`   票面上没有这张票，也就没有任何地方能放它的真机验证三态标记。`);
+    } else if (v === 'missing') {
+      say(`${t}：**缺标记** —— 票面上没有 rm:none / rm:pending / rm:done 中的任何一个。`);
+      say(WHEN);
+    } else if (v === 'multi') {
+      say(`${t}：**多于一个标记**（约定是有且仅有一个），命中如下：`);
+      for (const h of tk.get(t).rmHits) say(`     rm:${h.state}   ← ${h.text}`);
+      say(`   留一个、删掉其余的：两个互相矛盾的标记（比如 rm:none 和 rm:done 并排）之下，`);
+      say(`   「这票到底验没验」是读不出来的。`);
+    } else {
+      say(`${t}：rm:${v}`);
+      say(`     ${tk.get(t).rmHits[0].text}`);
+      if (v === 'pending') {
+        say(`   （\`rm:pending\` 是**合法的登记态**：它只说「要真机验、还没验」。`);
+        say(`   真正的收口在 stage-4 环节 C——那时它要么变成 \`rm:done\`，要么由开发者豁免并写进 review.md。）`);
+      }
+    }
+    // ⚠️ 机器可解析行：`worktree.cjs` 的 close 前置断言**只**靠这一行判定，正则是
+    //    `/^RM-STATE\s+\S+\s+(\S+)/m`。改前缀、改字段顺序、改 verdict 取值集合，
+    //    都必须同步改 `worktree.cjs` 里 close 分支那段——否则那道门要么恒拒、要么静默失效
+    //    （它认不出 verdict 时按「工具坏了」处理，一声不响地放行）。
+    say(`RM-STATE ${t} ${v}`);
+    process.exit(0);
+  }
+
+  // 不带票号：全量分布。
+  const buckets = { none: [], pending: [], done: [], missing: [], multi: [] };
+  for (const t of order) buckets[verdictOf(t)].push(t);
+  say(`${tk.size} 票的真机验证三态登记：`);
+  say(`  rm:none     ${String(buckets.none.length).padStart(4)} 张   不涉及真机 / 开发者已豁免`);
+  say(`  rm:pending  ${String(buckets.pending.length).padStart(4)} 张   要真机验、还没验`);
+  say(`  rm:done     ${String(buckets.done.length).padStart(4)} 张   已在真机上验过`);
+  say(`  缺标记      ${String(buckets.missing.length).padStart(4)} 张   三态一个都没写`);
+  say(`  多于一个    ${String(buckets.multi.length).padStart(4)} 张   写了两个以上，读不出结论`);
+  if (buckets.pending.length > 0) {
+    say(`仍 rm:pending：${buckets.pending.join(' ')}`);
+    say(`   ⚠️ 这些票在 stage-4 环节 C 收口前必须逐张变成 rm:done，或由开发者豁免并写进 review.md。`);
+    say(`   实测参照：上一条真实 flow 的 rm:pending 出现 215 次、rm:done 0 次——登记了从没做过。`);
+  }
+  if (buckets.missing.length > 0) {
+    say(`缺标记：${buckets.missing.join(' ')}`);
+    say(WHEN);
+  }
+  if (buckets.multi.length > 0) say(`多于一个：${buckets.multi.join(' ')}（每票留一个）`);
+  // 机器可解析行，同上：改它要同步改 `worktree.cjs`（那边目前只读 RM-STATE，
+  // 但两行是同一套 verdict 词汇表，分叉了一样会误导）。
+  say(`RM-SUMMARY total=${tk.size} none=${buckets.none.length} pending=${buckets.pending.length}`
+    + ` done=${buckets.done.length} missing=${buckets.missing.length} multi=${buckets.multi.length}`);
   process.exit(0);
 }
 

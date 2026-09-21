@@ -610,6 +610,61 @@ describe('grill-flow worktree.cjs', () => {
       expect(git(repo, 'log', '-1', '--format=%s')).toContain('T1');
     });
 
+    // ── `close` 的真机验证三态前置断言（一票一树形态）─────────────────────────
+    // ⚠️ 这一组存在的理由是**覆盖面**，不只是行为：上面全部 close 用例走的都是 `R1`/`R9`
+    // 车道，而这道门对车道刻意跳过（车道不是票，票面上没有它的行）⇒ 不补这几条，一道
+    // fail-closed 的门在 CI 里一次都不会被执行，而它就在回合的关键路径上。
+    function closeRmCase(ledger: string, ticket = 'T1') {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const f = join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md');
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, ledger);
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'docs: ledger');
+      run(anchor, 'open', 'f1', ticket, '--install', 'true');
+      const wt = join(lanes, `f1-${ticket}`);
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', `feat(${ticket}): one`);
+      return run(anchor, 'close', 'f1', ticket, '--keep');
+    }
+
+    it('票面没有真机三态标记 → close 拒，并把三态原样列出来', () => {
+      const out = closeRmCase('- [ ] T1 标题\n');
+      expect(out.code).not.toBe(0);
+      expect(out.stderr).toContain('没有真机验证三态标记');
+      // 报错必须给出「怎么改」，否则读的人只能去翻定义：三态要原样出现在报错里。
+      expect(out.stderr).toContain('rm:none');
+      expect(out.stderr).toContain('rm:pending');
+      expect(out.stderr).toContain('rm:done');
+    });
+
+    it('`rm:pending` 放行 —— 这道门只逼表态，不逼你去跑真机', () => {
+      // 回归锚：曾有人把这道门理解成「不许有 rm:pending」。那个形状 stage-4 已经警告过
+      // （要求为空会让豁免场景永不可满足，逼人把标记直接删掉）。pending 是合法登记态。
+      const out = closeRmCase('- [ ] T1 标题\n  - rm:pending\n');
+      expect(out.code).toBe(0);
+    });
+
+    it('`rm:none — <理由>` 放行', () => {
+      const out = closeRmCase('- [ ] T1 标题\n  - rm:none — 纯脚本改动，不涉及真机\n');
+      expect(out.code).toBe(0);
+    });
+
+    it('同一票写了两个三态标记 → close 拒（约定是有且仅有一个）', () => {
+      // 两个互相矛盾的标记之下「这票到底验没验」读不出来，压成一个就等于静默选一边。
+      const out = closeRmCase('- [ ] T1 标题\n  - rm:pending\n  - rm:done — 其实验过了\n');
+      expect(out.code).not.toBe(0);
+      // ⚠️ 只断言退出码等于假绿：open 失败、git 断言先拒，都会让它非 0。要钉住**是这道门拒的**。
+      expect(out.stderr).toContain('多于一个');
+    });
+
+    it('票面上根本没有这张票 → close 拒（它无处表态，且机器门③ 要求每笔 commit 归属某票）', () => {
+      const out = closeRmCase('- [ ] T5 别的票\n  - rm:none — x\n', 'T1');
+      expect(out.code).not.toBe(0);
+      expect(out.stderr).toContain('找不到 ticket 级行');
+    });
+
     // 主树里被 git 跟踪的 `.ai-flow/<flow>/**` 会在 flow 运行中被引擎自己改动。0.69.0 之前
     // 的来源是「运行中升级插件会重写落地的定义副本」；现在定义不再落地，来源换成了
     // `legacy-cleanup` —— 它在 SessionStart 把 0.69.0 之前装下的 `stages/` `references/`

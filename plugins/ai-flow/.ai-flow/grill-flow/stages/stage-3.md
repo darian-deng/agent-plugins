@@ -135,7 +135,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 逐票记账（留工作树、不单独 commit），**顺序照这个来**：
 
 1. 落 candidates.md（带 ticket ID 前缀、append 前 grep 去重）
-2. 需真机的票加 `rm:pending`，并往 tickets.md `## 待真机验证` 段 append 一条 `- T<n> — <一句话验什么>`
+2. **每票有且仅有一个真机三态**（`close` 拒缺标记的票）：需真机 → `rm:pending` + 往 `## 待真机验证` append `- T<n> — <验什么>`；已验 → `rm:done — <命令与输出>`；不需要 / 开发者豁免 → `rm:none — <理由，豁免写谁何时>`。🔴 是「必选其一」，**不是「不许 pending」**：pending 今天自愿，最省力的过法是不写——实测 215 次 pending / **0** 次 done，两张 P0 在全绿下漏过。
 3. **把质量链回报第二行的 `qc-metrics: …` 原样抄到该票那条**（与 `qc:done` 同一口径）。⛔ 别重算、别改格式——它是「小票该不该减配质量链」的唯一样本来源，commit body 留不住（squash 连分支一起删）
 4. 在该票那条上写 `qc:done`（行内或其缩进子项，别处不算）
 5. 勾 `[x]`

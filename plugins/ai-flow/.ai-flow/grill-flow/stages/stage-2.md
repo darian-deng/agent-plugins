@@ -33,7 +33,7 @@
    - 切完 tickets 后**补审两项**（结论写进 `## 方案审查` 段下的 `### 切票后补审` 小节——**这个小标题是重入探测判「补审做没做」的唯一锚**，两项都无 finding 也要写「已补审，无 finding」）：
      - 逐票核 `Touches`，找**为了并行而拆散耦合**的切片。征兆是两票的 `Touches` 是同一模块/目录下互补的文件集、却互相没有 `Blocked by`。写 tickets 的一方现在有明确的过度拆分动机（拆开就能并行、就更快），下面那条纪律没有检测方，靠这一审补上。
      - **抽查票面事实**：挑 3–5 张：优先取 `AC` / `delivers` 里**可证伪陈述条数最多**的票（数括号依据的条数），其中**一条括号依据都没有的一律优先入选**。让审查子代理照那些依据实地复核一遍（依据缺失的直接报出来）。这一条与下面「票面断言必须实读核过」互为检测方——写票的一方没有检测方时，这类错误只会在 stage-3 被实施子代理撞出来，而那时纠正成本已经是一次往返。
-4. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:` + `Touches:`（ticket 内 acceptance criteria 用 `AC:` 前缀子项，不参与 frontier/门）。
+4. **切 tickets**（照 to-tickets）→ `tickets.md`：tracer-bullet 垂直切片，每片穿透各层、可独立验证/commit。**prefactor 前置**（要改处先重构才好改 → 排第一个 ticket）；wide-refactor 用 expand→分批迁移→contract。每条 **ticket 级** `- [ ] T<n> <标题>` + `delivers:` + `Blocked by:` + `Touches:`（acceptance criteria 用 `AC<n>:` 子项，形如 ``AC1: <一句话> => `<命令>` => `<期望输出片段>` ``；**只能真机验的写 `=> rm`** 并登记进 `## 待真机验证`——那类跑不了，契约禁子代理起 Electron。⚠️ 机器门只查**形状**不查真伪（`echo ok => ok` 也能过），真伪由质量链逐条跑；它存在的理由是逼 AC 在**这里还来得及改的时候**就写成可跑的形状。AC 不参与 frontier。）
    - **`Blocked by:`** = 实施先后（前置票没做完，这票没法做/没法验证）。写票号列表 `T1, T3`，无前置写 `none`。机器门校验引用完整性 + 无自依赖 + 无环——`TBD`/散文过不去，stage-3 要按它算 frontier。
    - **`Touches:`** = 本票**预计改哪些文件**。stage-3 用「Touches 不相交」判定哪些票可以各开一个 worktree 并行做，stage-3 机器门还会按该票 commit 的实际改动核对它。预估不了写 `none`——该票只能串行。写法（机器门会校验，不合直接拦）：
      - 路径**相对 flow 锚点**（就是 `{{project_root}}`），空格或逗号分隔：`src/lib/state.ts src/hooks/ tests/*.test.ts`

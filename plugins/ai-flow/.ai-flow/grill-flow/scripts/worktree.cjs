@@ -55,7 +55,7 @@
 //   把本票 replay 到 main 之上，此后 ff 永久失败而它自己看不出错在哪。需求分支名由
 //   本脚本从主仓 `git branch --show-current` 取。
 //
-// close：四条前置断言 → `git merge --ff-only` 回合 → `git worktree remove`（`--keep` 时不拆）。
+// close：一串前置断言 → `git merge --ff-only` 回合 → `git worktree remove`（`--keep` 时不拆）。
 //   - `--keep` 的存在理由是**让断言照跑**：车道模式下想「合了但不拆」，不给这个开关就只能
 //     在主树手敲 `git merge --ff-only`，于是组内每一票的回合都绕过了下面四条断言——而它们
 //     恰好是最值钱的那几条。组内末票收口时去掉 `--keep`，让机器门⑤ 的「无残留 worktree」
@@ -73,6 +73,9 @@
 //     机器防线。
 //   - **本票分支相对 HEAD 有 commit**：零 commit 的分支 ff 会返回 "Already up to date"，
 //     拆掉后看起来像"这票交付了"，实则一行代码没有。
+//   - **本票在 tickets.md 里有且仅有一个真机验证三态标记**（`rm:none` / `rm:pending` /
+//     `rm:done`）：这条只逼**表态**，不逼人去跑真机——`rm:pending` 是放行的。理由与选址
+//     见 close 分支里那段注释。
 'use strict';
 
 const { execFileSync } = require('child_process');
@@ -691,6 +694,94 @@ if (cmd === 'close') {
       + `所以只能在这里拦。\n`
       + `    怎么改：确认该票到底做了什么。改动落在别处（主树？另一票的 worktree？）→ 归位后 amend 进本票那笔；`
       + `确实无需改动 → 这张票本身该撤掉，别用空提交充数。`);
+  }
+
+  // ── 真机验证三态：本票必须表态 ──────────────────────────────────────────
+  // 本票在 tickets.md 里必须**有且仅有一个** `rm:none` / `rm:pending` / `rm:done`。
+  //
+  // 🔴 设计依据（不写下来下一个人会把它改回去）：
+  //
+  // 1) 数字。上一条真实 flow 实测：`rm:pending` 出现 **215** 次、`rm:done` **0** 次。
+  //    真机验证登记了、一次都没做过。而全流程唯一的真机落点在 stage-4 环节 C，
+  //    也就是**全部票做完之后**——两张 P0 缺陷就是在机器地板全绿的掩护下漏过去的。
+  //
+  // 2) ⛔ 为什么是「三态必选其一」而不是「不许有 `rm:pending`」：`stages/stage-4.md:55` 已经
+  //    写明后者的代价——「被豁免的票没有任何指令改写它的票行标记，要求为空会让豁免
+  //    场景永不可满足，**逼人把标记直接删掉、连『这票被豁免过』这个事实一起丢**」。
+  //    而「必须存在三者之一」堵的是**另一条**逃逸路径：`rm:pending` 今天是**自愿**标记，
+  //    最省力的过法是压根不写——215/0 就是这么来的。两条逃逸路径方向相反，堆在一起
+  //    才堵得住：不允许沉默（本条），也不强行抹掉豁免（stage-4 那条）。
+  //    ⚠️ 所以 **`rm:pending` 是放行的**：它是合法的登记态。本门不负责逼人去跑真机，
+  //    只负责逼人**表态**；真正的收口在 stage-4 环节 C。
+  //
+  // 3) ⛔ 为什么落在 `close` 不落在 `gate-stage-3.cjs`：那道门的断言① 在「尚有未勾票」时
+  //    `err` + `exit`（`scripts/gate-stage-3.cjs:187`），②–⑦ 全在它之后；实测某条 flow 的
+  //    232 笔 commit / 19 天里，②–⑦ 一次都没执行过。加在那儿产出恒为 0。`close` 每票必跑。
+  //
+  // ⚠️ **本条是 fail-closed**，和 `open` 里那段「漏票探测」的 fail-open **不是一回事**，别搞混：
+  //    那段是附加信息，这段是规则。**规则被违反**（缺标记 / 多于一个）→ die。
+  //    但**脚本自身的故障**（tickets.md 读不到、子进程挂了 / 超时、输出里没有 RM-STATE 行）
+  //    仍要 fail-open：那是工具坏了不是规则被违反，打一行提示后照常 close。
+  //
+  // ⚠️ 本门只对 `T<n>` 生效，`R<n>`（一组一车道）跳过：车道不是票，票面上没有它的行，
+  //    拿车道名去查标记只会恒拿到「票面上找不到」。车道内各票的表态由 stage-4 那道关口兵。
+  //
+  // ⛔ 不自己写第二份 tickets.md 解析器：调 `schedule.cjs rm <票号>`，做法照抄 `open`
+  //    分支末尾调 `schedule.cjs missed` 那段。两份解析器迟早分叉，那时两边都说自己对。
+  if (/^T\d+$/.test(ticket)) {
+    let rmOut = null;
+    let rmWhy = null;
+    try {
+      rmOut = execFileSync(
+        process.execPath,
+        [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'rm', ticket],
+        { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024 }
+      );
+    } catch (e) {
+      // 超时同样落这里（execFileSync 超时抛 ETIMEDOUT），所以不会有子进程吊死 close。
+      rmWhy = String((e && (e.stderr || e.message)) || e).trim().split('\n')[0];
+    }
+    // 机器可解析行：契约定在 `schedule.cjs` 的 `rm` 子命令里（搜 `RM-STATE`），形状是
+    // `RM-STATE <票号> <verdict>`。⚠️ 改这条正则、或改 verdict 的取值集合，必须同步改那边。
+    const verdict = rmOut ? ((/^RM-STATE\s+\S+\s+(\S+)/m.exec(rmOut) || [])[1] || null) : null;
+    if (verdict === null) {
+      // 工具坏了，不是规则被违反 → fail-open，但响亮地说一句。
+      say(`⚠️  真机验证三态断言没能跑起来，本次 close 照常进行：`
+        + (rmWhy || '`schedule.cjs rm` 的输出里没有 RM-STATE 行')
+        + `\n    这是工具坏了、不是规则被违反，所以不拦。但 ${ticket} 的真机验证表态**没有被核过**，`
+        + `手动补一句：node ${join(__dirname, 'schedule.cjs')} --flow-dir ${flowDir} rm ${ticket}`);
+    } else if (verdict === 'missing') {
+      die(`${ticket} 在 tickets.md 里没有真机验证三态标记，拒绝回合。\n`
+        + `    在本票票行内或其缩进子项写下三者中**有且仅有一个**：\n`
+        + `      rm:none — <一句理由：不涉及真机 / 开发者豁免（谁、何时）>\n`
+        + `      rm:pending\n`
+        + `      rm:done — <命令与输出>\n`
+        + `    各自什么时候用：\n`
+        + `      rm:none     这票压根不涉及真机（纯逻辑 / 纯脚本），或开发者已明确豁免——理由写在后面。\n`
+        + `      rm:pending  要真机验、还没验。**这是合法的，写了就放行**——本门不逼你去跑真机，只逼你\n`
+        + `                  表态；真正的收口在 stage-4 环节 C。\n`
+        + `      rm:done     已经在真机上验过，把命令和看到的输出抄一份在后面。\n`
+        + `    为什么拦在这里：上一条真实 flow 里 rm:pending 出现 215 次、rm:done 0 次，而标记本身是自愿的\n`
+        + `    ——最省力的过法就是不写。不表态的票一旦 ff 进需求分支，就再没有任何环节会问它一句。`);
+    } else if (verdict === 'multi') {
+      die(`${ticket} 的真机验证三态标记多于一个（约定是**有且仅有一个**），拒绝回合：\n`
+        + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '      ' + l).join('\n')
+        + `\n    （上面那段是 \`schedule.cjs rm ${ticket}\` 的原样输出。）留一个、删掉其余的，再重跑 close。`);
+    } else if (verdict === 'unknown') {
+      die(`${ticket} 在 tickets.md 里找不到 ticket 级行（\`- [ ] ${ticket} …\` / \`- [x] ${ticket} …\`），拒绝回合。\n`
+        + `    票面上没这张票，也就没有任何地方能放它的真机验证三态标记。\n`
+        + `    两种可能：票号敲错了（对一眼 \`node ${SELF} --flow-dir ${flowDir} status ${flowId}\`）；`
+        + `或这是执行期插的票、还没写进 tickets.md——那就先补上票行（机器门③ 本来也要求每笔 commit 归属某一票）。`);
+    } else if (verdict !== 'none' && verdict !== 'pending' && verdict !== 'done') {
+      // 没见过的 verdict = 两个脚本之间那行契约分叉了。这里故意 fail-closed：若改成放行，
+      // 一次重命名就能让这道门永久静默失效，而没有任何人会发现。
+      die(`读不懂 \`schedule.cjs rm ${ticket}\` 给的 verdict：${JSON.stringify(verdict)}，拒绝回合。\n`
+        + `    这是两个脚本之间那行机器可解析契约（\`RM-STATE <票号> <verdict>\`）分叉了：\n`
+        + `      ${join(__dirname, 'schedule.cjs')}  的 rm 子命令写出这一行\n`
+        + `      ${SELF}  的 close 分支读它\n`
+        + `    改一边必须同步改另一边。`);
+    }
+    // none / pending / done → 放行。⚠️ 含 `rm:pending`：见上面第 2 条。
   }
 
   // ff 之前的主树 HEAD，用来问「这次回合带进了哪些文件」（见下方依赖漂移检查）。
