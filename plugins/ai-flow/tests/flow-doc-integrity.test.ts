@@ -151,7 +151,13 @@ const SPLIT_STAGES: SplitStage[] = [
       ['Step 0 预检①：在 main/master 上不许开工', /`git branch --show-current` — 在 main\/master → 停/],
       ['Step 0 预检②：工作树有代码改动就停下问开发者', /`git status --porcelain` — 含代码改动 → 停问开发者/],
       ['Step 0 预检③：残留 worktree 先收口，别新开', /`git worktree list` — 有 `wt\/<flow_id>-` 分支的条目 → 上一轮残留/],
-      ['记账顺序：rm:pending 必须在 qc:done 之前', /`rm:pending`\s*必须排在\s*`qc:done`\s*之前/],
+      // 这条红线在 v0.75.0 搬过位：`worktree.cjs close` 开始 fail-closed 地要求真机三态，
+      // 而记账的触发点是「该票 close **成功**」⇒ 把三态留在记账清单里会死锁（每票第一次
+      // close 必被拒，而唯一的补救步骤要等 close 成功才可达）。三态因此整体移到第 5 步、
+      // close 之前——原来那条「必须排在 `qc:done` 之前」的约束不但没丢，还变强了
+      // （第 5 步整个在 `qc:done` 之前）。所以钉的是新不变量，⛔ 不是删掉这条红线。
+      ['真机三态在 close 之前落盘，不在 close 之后的记账清单里', /真机三态[\s\S]{0,40}close\s*\*{0,2}之前\*{0,2}/],
+      ['防搬回：记账清单那条明写三态不在这儿', /真机三态不在这清单里/],
       ['batch: 必须写在票行内或其缩进子项', /写在该票那条行内或其缩进子项/],
       ['车道模式派发前要落的是 wip: 而不是 lane:', /派发前真正要落的是\s*`wip: R<n>`/],
       ['close 必须单独成一条命令', /`close`\s*必须单独成一条命令/],

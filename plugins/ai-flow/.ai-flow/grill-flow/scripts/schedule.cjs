@@ -98,10 +98,26 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 const flowDir = resolveFlowDir();
 const projectRoot = join(flowDir, '..', '..');
 
+// ⚠️ `rm` 子命令下，active.json 读不到 / 缺 flow_id **同样是结论不是故障**（与 tickets.md
+// 那一半同理）：`abort` 会删 active.json（`src/lib/commands/abort.ts`），flow 正常跑完它
+// 也不在——而那时遗留的 worktree 还在。若照旧 die，`worktree.cjs close` 会把非零当工具坏了
+// 而 fail-open，于是「连活跃 flow 都没有」这种最该拦的情形直接合入。⇒ 报成 verdict。
+const RM_EARLY = process.argv[2] === 'rm';
 let state;
 try { state = require(join(flowDir, 'state', 'active.json')); }
-catch (e) { die('无法读取 state/active.json: ' + e.message); }
-if (!state.flow_id) die('active.json 缺 flow_id');
+catch (e) {
+  if (RM_EARLY) {
+    say('❌ 无法读取 state/active.json: ' + e.message);
+    say('   没有活跃 flow ⇒ 没有台账，也就没有任何票能有真机三态。abort 过、或 flow 已跑完时就是这样。');
+    say(`RM-STATE ${process.argv[3] || '?'} noledger`);
+    process.exit(0);
+  }
+  die('无法读取 state/active.json: ' + e.message);
+}
+if (!state.flow_id) {
+  if (RM_EARLY) { say('❌ active.json 缺 flow_id'); say(`RM-STATE ${process.argv[3] || '?'} noledger`); process.exit(0); }
+  die('active.json 缺 flow_id');
+}
 
 const ticketsPath = join(projectRoot, 'docs', 'grill-flows', state.flow_id, 'tickets.md');
 // ── `rm` 子命令的两种「算得出结论」的异常，⛔ 不许 die ──────────────────────────────
@@ -116,7 +132,11 @@ const RM_ARGV = process.argv[2] === 'rm';
 // 台账，若它恰好也有同号票且带标记，这道门会拿错票的证据放行。
 const fidIdx = process.argv.indexOf('--flow-id');
 const expectFlowId = fidIdx !== -1 ? process.argv[fidIdx + 1] : null;
-if (fidIdx !== -1) process.argv.splice(fidIdx, expectFlowId ? 2 : 1);
+// ⛔ 无值时响亮地死，别静默降级：`expectFlowId` 落空会让下面那个 `&&` 短路，flow 不匹配
+// 检查整条跳过、退回改动之前「拿另一条 flow 的台账判票」的行为，且不报任何警告。
+// 一个打错的旗标应该炸，不该把一道门悄悄变没。
+if (fidIdx !== -1 && !expectFlowId) die('--flow-id 后面要跟 flow_id');
+if (fidIdx !== -1) process.argv.splice(fidIdx, 2);
 if (RM_ARGV && expectFlowId && expectFlowId !== state.flow_id) {
   say(`❌ 要 close 的是 flow \`${expectFlowId}\` 的票，而当前活跃 flow 是 \`${state.flow_id}\`。`);
   say('   本脚本的台账路径取自 state/active.json，这时读到的是**另一条 flow** 的 tickets.md，');

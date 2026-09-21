@@ -780,7 +780,10 @@ if (cmd === 'close') {
       // `state/active.json`，两者在「关掉上一条 flow 遗留的 worktree」时会分叉。那时读到的是
       // 当前 flow 的台账，若它恰好也有同号票且带标记，这道门就会拿错票的证据放行。
       die('真机三态核不了，拒绝回合：\n'
-        + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '    ' + l).join('\n'));
+        + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '    ' + l).join('\n')
+        + '\n    ⚠️ 这道门拒得对，但它给不出「那这棵树怎么办」——出口在 `references/recovery.md`'
+        + '\n       的「`close` 说「要 close 的是另一条 flow 的票」」那节（多半是上一条 flow 跑完/abort'
+        + '\n       后留下的树，归宿是手工清掉而不是 close）。⛔ 别改 active.json 骗过这道门。');
     } else if (verdict === 'unknown') {
       die(`${ticket} 在 tickets.md 里找不到 ticket 级行（\`- [ ] ${ticket} …\` / \`- [x] ${ticket} …\`），拒绝回合。\n`
         + `    票面上没这张票，也就没有任何地方能放它的真机验证三态标记。\n`

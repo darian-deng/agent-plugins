@@ -47,6 +47,23 @@
 
 `close` 的其它断言（主仓确实在需求分支上、worktree 干净、票分支上无 merge commit、主树无非记账改动、票分支确有 commit 且 diff 非空）失败时，脚本会说清是哪一条、怎么处置——**照它说的做，别绕过**。
 
+### `close` 说「要 close 的是另一条 flow 的票」／「本 flow 的 tickets.md 不在」
+
+这两条（v0.75.0 起）是真机三态那道门报的，它们拒得对但**本身没有出口**——门只能告诉你「核不了」，给不出「那这棵树怎么办」。形态是：**上一条 flow 已经跑完或 abort 了，它的 worktree 还留着**（`abort` 会删 `state/active.json`，flow 正常跑完它也不在），而你现在在另一条 flow 里。
+
+⛔ **别去改 `active.json` 骗过这道门**——那会让当前 flow 的引擎读到别的 flow_id。那棵树属于一条已经结束的 flow，它的归宿是**手工清掉，不是 close**（`close` 会把它 ff 进当前需求分支，而它的commit 不归属当前 flow 的任何一张票，机器门③ 在 stage-3 收口时才会炸，那时它已经在历史里了）：
+
+```sh
+# 先看清它是谁、有没有还没要的东西
+git -C <那棵树> log --oneline -5
+git -C <那棵树> status --porcelain
+# 确认可丢之后
+git worktree remove <那棵树>          # 有未提交改动要 --force，先确认上面那条是空的
+git branch -D wt/<旧 flow_id>-T<n>
+```
+
+⚠️ 真有东西要留（那条 flow 没收完、你想接着做）：**先把那条 flow 恢复成活跃的**（`/ai-flow:resume`），在它自己的上下文里 close，⛔ 不要在别的 flow 里绕过这道门。
+
 ## 三、收口测试失败（worktree 已拆）
 
 `--amend` 折回中间那笔票 commit 做不到。就在主树修，然后把修复**squash 进它真正属于的那张票**那笔里（机器门要求区间内每笔 commit 都归属某一票，所以不能留一笔独立的 `fix:`）。两条命令，都能在无人值守下跑完：
