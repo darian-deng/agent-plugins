@@ -4226,6 +4226,16 @@ function flowStatusLine(opts) {
 
 // src/lib/prompt-render.ts
 var INLINE_INJECTION_BUDGET = 1e4;
+var INJECTED_FREETEXT_CAP = 100;
+var INJECTED_BRANCH_CAP = 40;
+var REQUIREMENT_SOURCE = "`<flow_root>/state/active.json`";
+var BRANCH_SOURCE = "`git branch --show-current`";
+function capInjectedText(value, where, cap = INJECTED_FREETEXT_CAP) {
+  const v = (value ?? "").trim();
+  if (v.length <= cap) return v;
+  const out = `${v.slice(0, cap)}\u2026\uFF08\u622A\u65AD\uFF0C\u5168\u6587\u89C1 ${where}\uFF09`;
+  return out.length < v.length ? out : v;
+}
 function commandOutputPrefix(flowName) {
   return `[ai-flow system] Hook intercepted this command for flow '${flowName}'. Do NOT invoke a skill named '${flowName}' \u2014 proceed directly with the instructions below.
 
@@ -4907,7 +4917,7 @@ ${result.reason}`
   const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName) + `Flow '${flowName}' started!
 
 flow_id: ${flowId}
-requirement: ${requirement.trim()}
+requirement: ${capInjectedText(requirement, REQUIREMENT_SOURCE)}
 current_stage: ${firstStage.id}
 
 ` + body;
@@ -5254,9 +5264,9 @@ resume \u53EA\u7528\u4E8E\u4ECE abort \u7559\u4E0B\u7684\u5FEB\u7167\u5206\u652F
   await appendLog(repoRoot, flowName, sessionId, `RESUMED from_branch=${trimmedBranch} stage=${currentStage}`);
   const stageCfg = getStageConfig(config, currentStage);
   const promptPath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
-  const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${trimmedBranch}
+  const assemble = (body) => buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) + `Flow '${flowName}' resumed from branch: ${capInjectedText(trimmedBranch, BRANCH_SOURCE, INJECTED_BRANCH_CAP)}
 current_stage: ${currentStage}
-requirement: ${restored.requirement}
+requirement: ${capInjectedText(restored.requirement, REQUIREMENT_SOURCE)}
 
 ` + body;
   const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
