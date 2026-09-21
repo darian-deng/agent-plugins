@@ -143,82 +143,101 @@ demand and cost nothing here) and spend stage-page characters only on a pointer.
 
 **Stall watchdog**
 The engine's answer to a session that stopped when it should have kept going — most
-often after a side conversation the model settled and then never returned from. It has
-three moving parts and no process of its own:
+often after a side conversation the model settled and then never returned from.
 
 | | what it is | where |
 |---|---|---|
-| the clock | `CronCreate`, a Claude Code session-scoped scheduled prompt, `*/5 * * * *` | created by the MODEL, lives in the host |
-| the arming check | `Stop` hook reads `session_crons` and asks the model to create the cron when it is missing | `stop-handler.ts` |
-| the decision | `UserPromptSubmit` recognises the tick and either blocks it or forwards it | `watchdog-tick.ts`, policy in `watchdog.ts` |
+| the clock + the decision | a background process that reads the flow state and **exits only when a stall is confirmed** | `src/watchdog/watch.ts`, policy in `watchdog.ts` |
+| the wake | the host waking the session with that process's stdout when it exits | the host |
+| the arming check | `Stop` reads `background_tasks` and asks the model to start the watcher when it is missing | `stop-handler.ts` |
+| the foreground guard | `PreToolUse` refuses the watcher command unless `run_in_background` is true — foreground it hangs the session until the Bash timeout, a stall produced by the anti-stall feature | `pretool-handler.ts` |
+| re-arming | the nudge text carries the command to start a replacement, so the woken turn does it for free instead of costing a `Stop` continuation | `watchdog.ts` |
+| the clock's inputs | `Stop` stamps `last_stop_at`; `UserPromptSubmit` and (throttled) `PostToolUse` stamp `last_activity_at` | `stop-handler.ts`, `userprompt-handler.ts`, `posttool-handler.ts` |
 
-There is no timer hook — every hook is event-driven, and "the turn ended and nobody
-came back" is the absence of events. Two mechanisms were rejected before this one:
+**Why a background process, and not a timer**
+There are four ways to wake an idle session: the developer types, a scheduled task
+fires, a background task finishes, or another session posts to the inbox socket. The
+first two attempts used the last two, and both failed for the same structural reason
+— they decide AFTER the wake, and there is no silent way to take a wake back:
 
-- **A `Stop` hook that simply continues the turn.** `Stop` fires at the ZEROTH second
-  of idleness, while the developer is still reading what they just got, and at that
-  instant nothing mechanical separates a legitimate hand-back from a stall. Its only
-  clock is the next turn end, which is exactly what a stalled session never produces,
-  so it cannot express "five minutes later" at all.
-- **A detached process posting to the session's inbox socket**
-  (`CLAUDE_CODE_MESSAGING_SOCKET`). Measured on macOS / Claude Code 2.1.278 against a
-  real receiving session: a session running with permission prompts bypassed receives
-  nothing and the sender gets no failure signal; when delivery does work the host
-  frames the text as coming from another session and tells the receiver it carries no
-  consent, and the observed reaction was the model stopping to ask the developer
-  whether the message was legitimate — the nudge producing the stall it exists to
-  break. The frame format that design assumed (`{"type":"message",…}`) is also not the
-  one the host accepts, and a wrong frame is accepted, closed and discarded silently.
+- **`CronCreate`.** Fires on wall-clock minutes, only while the session is idle, and
+  a fire missed during a turn is delivered the moment that turn ends. So the most
+  common tick arrives at "stopped 0 seconds ago" — precisely when it must be
+  discarded. Discarding is never silent: every path ends in a `hook_blocking_error`
+  the host renders, and an empty `reason` is replaced by a default string (verified
+  in the 2.1.278 binary). Letting it through instead costs a full turn that re-reads
+  the conversation to conclude nothing is wrong. A wall clock also cannot express
+  "five minutes after the turn ended", which is the only thing this needs.
+- **The inbox socket** (`CLAUDE_CODE_MESSAGING_SOCKET`). Measured on macOS / 2.1.278
+  against a real receiving session: a session that bypasses permission prompts
+  receives nothing and the sender gets no failure signal; when delivery works, the
+  host frames the text as coming from another session and tells the receiver it
+  carries no consent — the observed reaction was the model stopping to ask the
+  developer whether the message was legitimate, i.e. the nudge producing the stall it
+  exists to break. The frame that design assumed (`{"type":"message",…}`) is also not
+  the one the host accepts, and a wrong frame is accepted, closed and discarded
+  silently.
 
-**Tick, and the sentinel**
-A tick is the cron firing: an ordinary prompt whose text starts with
-`[ai-flow:watchdog]` (`WATCHDOG_SENTINEL`). Three places key off it — `Stop` matching
-`session_crons[].prompt` to tell whether the cron exists, `UserPromptSubmit` routing
-the prompt to `decideTick` instead of the command parser, and the same handler
-declining to treat it as developer activity. That last one is load-bearing: a tick that
-reset the nudge budget would re-arm its own watchdog every interval with nobody in the
-room.
+A background process inverts the order: the decision runs inside the process, and
+"not stalled" means it simply does not exit. Silence is free. It also gets, for free,
+what a detached daemon had to hand-roll — the host owns the task's lifetime, lists it
+among the session's background tasks, and reaps it with the session.
 
-Recognition is the sentinel AND `UserPromptSubmit`'s `source` field (verified against
-the 2.1.278 binary: `["user","sdk","system","loop_wakeup","schedule_wakeup",
-"poll_event"]`, optional). `source` cannot carry the identity alone — a developer's own
-`/loop` arrives as a wakeup too — but a prompt that arrives as `user` is never a tick,
-so typing or pasting the prefix is not swallowed. An absent `source` falls back to the
-text match.
+**The idle test needs two stamps, not one**
+`last_stop_at > last_activity_at && now - last_stop_at >= idle_minutes`. The second
+stamp is what keeps the watcher out of a turn that no prompt started: a background
+task finishing, or a `Stop`-hook continuation, begins a turn with no
+`UserPromptSubmit`, leaving `last_stop_at` pointing at the PREVIOUS turn's end, which
+can be arbitrarily old. `PostToolUse` therefore stamps activity too, throttled to
+`ACTIVITY_STAMP_THROTTLE_MS` — the stamp only has to answer "is a turn running right
+now" against a five-minute threshold.
 
-**Suppression is the common case, and it is free**
-`decideTick` blocks a tick when a gate is pending, when the last turn ended with
-background work still in flight, when the session stopped more recently than
-`idle_minutes`, when the stage's nudge budget is spent, or when the watchdog is off.
-Blocking happens in `UserPromptSubmit` via top-level `decision: "block"`, so the model
-is never invoked and the developer gets one line. That is what makes a five-minute poll
-affordable to leave running: a tick that woke the model each time would re-read the
-whole conversation to conclude nothing.
+The activity stamp EXPIRES (`ACTIVITY_STALE_MS`, 15 minutes), and that is what makes
+the two no-Stop endings safe rather than fatal. A turn the developer interrupted (Stop
+does not run on a user interrupt) and one that died on an API error (StopFailure fires
+instead) both leave activity permanently ahead of the last stop; unbounded, the watcher
+would read that as a turn running forever and go quiet for the rest of the session — in
+exactly the unattended case it exists for. With the bound it waits out the window and
+then nudges, which is the safe direction: the session really is sitting there. 15
+minutes is set by the longest gap a LIVE turn can have between stamps — a foreground
+Bash call is capped at 10 minutes by the host, and a long subagent stamps through its
+own tool calls, which is why subagent calls stamp too even though context accounting
+deliberately ignores them.
 
-Note which way the background-task check cuts against the failure this repo actually
-measured (`grill-flow/references/subagent-lifecycle.md`): a session that CLAIMS
-background work it never started reports an empty array, so it is NOT suppressed. The
-claim is invisible to the engine; the absence is not. A missing array (older host, task
-registry unreachable) is read as "nothing running" rather than "unknown", because the
-failure to prefer is the visible one — suppressing on absence would make the watchdog
-do nothing forever, indistinguishable from a flow that never stalls.
+**What "not stalled" covers**
+A pending gate; background work in flight; a turn still running; a stop more recent
+than the threshold; the stage's nudge budget spent. Note which way the background
+check cuts against the failure this repo measured
+(`grill-flow/references/subagent-lifecycle.md`): a session that CLAIMS background work
+it never started reports an empty array, so it is NOT suppressed. The claim is
+invisible to the engine; the absence is not. The watcher excludes ITSELF from that
+array (`isWatcherTask`, matched on `WATCHER_MARKER` in the command line) — counting it
+would make its own presence suppress every nudge it exists to deliver. A missing array
+is read as "nothing running" rather than "unknown", because suppressing on absence
+would make the watchdog do nothing forever, indistinguishably from a flow that never
+stalls.
+
+**`arm_asks` counts failures, not arms**
+It resets to 0 whenever `Stop` actually sees a watcher. It has to: delivering a nudge
+KILLS the watcher (the exit is the wake), so over a long flow the asks are routine
+re-arms. Left accumulating, three successful arms would exhaust `MAX_ARM_ASKS` and
+`<flow> status` would report "asked three times, never started" about a watcher that
+started every time.
 
 **Nudge budget**
-`watchdog.nudges_this_stage`, default cap 3, reset by any developer prompt and by every
-stage advance. Not configurable, deliberately: it is the only bound on an unattended
-loop. A nudged model that answers "I'm waiting for you" and stops produces a new turn
-end, so the next tick sees a fresh `last_stop_at` and the cycle would otherwise repeat
-until the cron's 7-day expiry, each iteration a fully-billed turn carrying the whole
-flow context.
+`watchdog.nudges_this_stage`, cap 3, reset by any developer prompt and by every stage
+advance. Not configurable, deliberately: it is the only bound on an unattended loop. A
+nudged model that answers "I'm waiting for you" and stops produces a new turn end, the
+watcher is restarted, and the cycle would otherwise repeat for as long as the session
+lives — each iteration a fully billed turn carrying the whole flow context.
 
 **Owner test: `!== null &&`, not `=== session_id`**
-Both watchdog entry points use posttool-handler's lenient owner test. `<flow> resume`
+Every watchdog entry point uses posttool-handler's lenient owner test. `<flow> resume`
 writes `last_session_id: null` on purpose — "left null so the next SessionStart binds
 normally" — while the session that typed the command carries straight on driving the
 flow. Under a strict test that session never gets its turn ends stamped and is never
-asked for a cron, `<flow> status` reports the watchdog unarmed for the rest of its life,
-and nothing ever arms it. Same reasoning for the tick side, which would additionally
-tell that session, every interval, that it is not the flow's executor.
+asked for a watcher, `<flow> status` reports the watchdog unarmed for the rest of its
+life, and nothing ever arms it.
 
 **Why the state lives in active.json**
 `ActiveState.watchdog` rather than a `state/watchdog.json`. Four processes write it, so

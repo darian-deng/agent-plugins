@@ -1,130 +1,192 @@
+import { join } from 'path';
+import { PLUGIN_ROOT } from './flow-paths.js';
+
 /**
- * Stall watchdog: the engine's answer to "the session stopped, and stopping was
- * not the right move".
+ * Stall watchdog: the engine's answer to a session that stopped when it should
+ * have kept going — most often after a side conversation the model settled and
+ * then never came back from.
  *
- * ── Why a cron and not a hook timer ────────────────────────────────────────────
- * There is no timer hook. Every hook is event-driven, and the one event that
- * matters here — "the turn ended and nobody came back" — is precisely the absence
- * of events. What the host does provide is a session-scoped scheduler
- * (`CronCreate`), whose documented semantics are the ones this needs:
- * tasks fire ONLY while Claude Code is running and idle, never mid-turn; a fire
- * missed during a long request happens once when the session next goes idle, not
- * once per missed interval; `/clear` drops them; recurring tasks expire after 7
- * days. That "never mid-turn" guarantee is load-bearing — it is why nothing here
- * has to infer whether a 40-minute Bash is still running.
+ * ── Why a background process and not a timer ───────────────────────────────────
+ * There are four ways to wake an idle Claude Code session: the developer types, a
+ * scheduled task fires, a background task finishes, or another session posts to the
+ * inbox socket. The first two versions of this used the last two, and both failed
+ * for the same structural reason — they decide AFTER the wake, not before:
  *
- * ── Why not post into the session's inbox socket ───────────────────────────────
- * The rejected design had a detached process post to `CLAUDE_CODE_MESSAGING_SOCKET`
- * on a 5-minute timer. Measured on macOS / Claude Code 2.1.278 against a real
- * receiving session, it fails two ways:
- *   1. A session running with permission prompts bypassed does not receive the
- *      message at all (the host holds it for approval unless the SENDER also
- *      declares it bypasses), and the sender gets no failure signal — silent.
- *   2. When it does arrive, the host frames it as coming from ANOTHER session and
- *      tells the receiver it carries no consent. The observed reaction was the
- *      model stopping to ask the developer whether the message was legitimate —
- *      i.e. the nudge produced the very stall it exists to break.
- * A cron prompt is the session's own scheduled prompt, so it carries none of that.
+ *  - **Scheduled task (`CronCreate`).** Fires on wall-clock minutes, only while the
+ *    session is idle, and a fire missed during a turn is delivered the moment the
+ *    turn ends. So the most common tick lands at "stopped 0 seconds ago", exactly
+ *    when it must be discarded — and discarding a prompt is never silent: every
+ *    path ends in a `hook_blocking_error` the host renders, with a default string
+ *    when `reason` is empty. Letting it through instead costs a full turn, which
+ *    re-reads the whole conversation to conclude that nothing is wrong. A wall
+ *    clock also cannot express the one thing this needs: "five minutes after the
+ *    turn ended".
+ *  - **Inbox socket.** Measured on macOS / Claude Code 2.1.278 against a real
+ *    receiving session: a session that bypasses permission prompts receives nothing
+ *    and the sender gets no failure signal; when delivery works, the host frames the
+ *    text as coming from another session and tells the receiver it carries no
+ *    consent — the observed reaction was the model stopping to ask the developer
+ *    whether the message was legitimate, i.e. the nudge producing the stall it
+ *    exists to break.
  *
- * ── Who creates it, and why the engine can still trust it ──────────────────────
- * Only the model can call `CronCreate`; a hook cannot. That would normally make
- * this a prompt-level discipline, and prompt-level discipline is exactly what this
- * flow has already measured failing (`grill-flow/references/subagent-lifecycle.md`
+ * A backgrounded process inverts it. The host wakes the session when the process
+ * EXITS, so the process itself decides when — and while it is not stalled it simply
+ * keeps sleeping: no wake, no output, no tokens. The decision moved in front of the
+ * wake, and with it the entire noise problem. It also gets, for free, what the
+ * detached daemon of the socket version had to hand-roll: the host owns the task's
+ * lifetime (it is listed in the session's background tasks and dies with the
+ * session), and the wake arrives as the session's own task finishing rather than as
+ * a message from elsewhere.
+ *
+ * ── Who starts it, and why the engine can still trust it ──────────────────────
+ * Only the model can start a background task; a hook cannot. That would normally
+ * make this a prompt-level discipline, and prompt-level discipline is exactly what
+ * this flow has measured failing (`grill-flow/references/subagent-lifecycle.md`
  * records a main session ending turns with "it's running in the background" while
- * nothing was started — 335 minutes of silence, 43.9% of that session's wall
- * clock). What closes the loop is that `Stop` hook input carries `session_crons`,
- * including each task's `prompt` text: the engine can SEE whether the cron exists
- * and re-ask until it does. Verification, not trust.
+ * nothing was started — 335 minutes of silence, 43.9% of that session's wall clock).
+ * What closes the loop is that `Stop` hook input carries `background_tasks`,
+ * including each shell task's command line: the engine can SEE whether the watcher
+ * is running and ask again until it is. Verification, not trust.
  */
+
+/** Prefix on everything this feature says, so its lines are recognisable at a glance. */
+export const WATCHDOG_LABEL = '[ai-flow:watchdog]';
 
 /**
- * Prefix that marks a prompt as a watchdog tick rather than something a developer
- * typed. Three separate places key off it, so it is defined once:
- *   - `Stop` matches it against `session_crons[].prompt` to tell whether the cron
- *     this flow asked for actually exists;
- *   - `UserPromptSubmit` matches it against the incoming prompt to route the tick
- *     into `decideTick` instead of the ordinary command parser;
- *   - the same handler uses it to decide NOT to treat the tick as developer
- *     activity (a tick that reset the nudge counter would re-arm itself, and the
- *     watchdog would nudge every interval forever with nobody in the room).
- * Recognition is the sentinel AND the host's `source` field: a prompt that arrives
- * as `user` is never a tick, however it starts, so a developer who types or pastes
- * the prefix is not swallowed. `source` cannot carry the identity on its own — a
- * developer's own `/loop` arrives as a wakeup too — and it is optional in the host's
- * schema, so its absence falls back to the text match.
+ * Literal token in the watcher's command line. The `Stop` hook matches it against
+ * `background_tasks[].command` to answer two questions it has no other source for:
+ * is the watcher running, and is a given background task the watcher (which must not
+ * count as "work in flight" — if it did, its own presence would suppress every nudge).
  */
-export const WATCHDOG_SENTINEL = '[ai-flow:watchdog]';
-
-/** Every-5-minutes. The host adds up to 10% of the period as deterministic jitter. */
-export const WATCHDOG_CRON = '*/5 * * * *';
+export const WATCHER_MARKER = 'ai-flow-watchdog-watch';
 
 export const DEFAULT_IDLE_MINUTES = 5;
+
+/** How often the watcher re-reads the flow state. */
+export const WATCHER_POLL_MS = 20_000;
+
+/**
+ * The watcher stops watching after this long and says so on the way out. Not a
+ * safety bound — the host already kills it with the session — but an upper limit on
+ * how stale its idea of the flow can get.
+ */
+export const WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1000;
 
 /**
  * Nudges allowed per stage before the watchdog goes quiet. Reset by any developer
  * prompt and by every stage advance.
  *
- * A cap is not optional. Without one the loop is unbounded in the one situation
- * the watchdog is built for: nobody is in the room, so nothing else ends it. A
- * nudged model that answers "I'm waiting for you" and stops produces a new turn
- * end, the next tick sees a fresh `last_stop_at`, and the cycle repeats every
- * interval until the cron's 7-day expiry — each iteration a fully-billed turn
+ * A cap is not optional. Without one the loop is unbounded in the one situation the
+ * watchdog is built for: nobody is in the room, so nothing else ends it. A nudged
+ * model that answers "I'm waiting for you" and stops produces a new turn end, the
+ * watcher gets restarted, and the cycle repeats — each iteration a fully billed turn
  * carrying the whole flow context.
  */
 export const DEFAULT_NUDGE_CAP = 3;
 
-/** How many times one session may be asked to create the cron before giving up. */
-export const MAX_CRON_ASKS = 3;
+/** How many times one session may be asked to start the watcher before giving up. */
+export const MAX_ARM_ASKS = 3;
+
+/**
+ * Two watchers that reach the same conclusion within this window count as one: the
+ * second keeps sleeping instead of waking the session again.
+ *
+ * Duplicates are not hypothetical — a watcher left over from a previous arming can
+ * outlive the turn that started it, and `Stop` only asks for a new one when it sees
+ * none. Without this the pair delivers two wakes and spends two of the stage's three
+ * nudges within seconds of each other (observed in the end-to-end smoke run). The
+ * loser cannot simply exit, because an exit IS a wake — so it goes back to sleeping.
+ */
+export const NUDGE_DEDUPE_MS = 60_000;
+
+/** True when another watcher already delivered a nudge close enough to count as this one. */
+export function withinDedupeWindow(lastNudgeAt: string | null, now: number): boolean {
+  if (!lastNudgeAt) return false;
+  const t = Date.parse(lastNudgeAt);
+  return !Number.isNaN(t) && now - t < NUDGE_DEDUPE_MS;
+}
 
 export interface WatchdogState {
   /**
    * When the owner session last ENDED A TURN, ISO. Written by the Stop hook, and
-   * the only clock the tick decision has.
+   * half of the watcher's idle test.
    *
    * Two stoppages do not update it, both documented host behavior: a turn the
    * developer interrupted (Stop does not run on a user interrupt) and a turn that
-   * died on an API error (that fires StopFailure instead). Both leave a stale,
-   * older timestamp, so the next tick sees a LONGER idle span than really elapsed
-   * and nudges — which is the safe direction: the session is in fact sitting there
-   * doing nothing.
+   * died on an API error (that fires StopFailure instead). Both leave an older
+   * timestamp, so the next check sees a LONGER idle span than really elapsed and
+   * nudges — the safe direction, since the session is in fact sitting there. That
+   * only holds because the activity stamp below expires (`ACTIVITY_STALE_MS`):
+   * neither ending clears it, so without expiry both would read as "a turn is still
+   * running", forever.
    */
   last_stop_at: string | null;
   /**
-   * Whether the last turn ended with background work still in flight (`shell`,
-   * `subagent`, `monitor`, …) or a scheduled wakeup other than this watchdog's own
-   * cron. Such a session is not stalled — the host will wake it when the work
-   * lands — so a tick is suppressed.
+   * When the session last showed signs of working: a developer prompt, or a tool
+   * call (stamped at most every `ACTIVITY_STAMP_THROTTLE_MS`). The other half of the
+   * idle test, and the reason the watcher cannot fire in the middle of a turn that
+   * no prompt started — a background task's completion, or a Stop-hook continuation,
+   * both of which leave `last_stop_at` pointing at the PREVIOUS turn's end.
+   */
+  last_activity_at: string | null;
+  /**
+   * Whether the last turn ended with background work still in flight — the watcher
+   * itself excluded. Such a session is not stalled: the host will wake it when the
+   * work lands.
    *
-   * Note which way this cuts on the failure this flow actually measured: a session
+   * Note which way this cuts on the failure this repo actually measured: a session
    * that CLAIMS background work it never started reports an empty array, so it is
-   * not suppressed. The claim is invisible to the engine; the absence is not.
+   * NOT suppressed. The claim is invisible to the engine; the absence is not.
    */
   background: boolean;
-  /** Whether the watchdog cron was present in `session_crons` at the last turn end. */
-  cron_seen: boolean;
-  /** How many times this session has been told to create the cron. Caps at MAX_CRON_ASKS. */
-  cron_asks: number;
-  /** Nudges let through for the CURRENT stage. Reset on developer prompt and stage advance. */
+  /** Whether the watcher was present in `background_tasks` at the last turn end. */
+  watcher_seen: boolean;
+  /** How many times this session has been told to start the watcher. Caps at MAX_ARM_ASKS. */
+  arm_asks: number;
+  /** Nudges spent on the CURRENT stage. Reset by a developer prompt and by stage advance. */
   nudges_this_stage: number;
-  /** When a nudge was last let through, ISO. Shown by `<flow> status`. */
+  /** When a nudge last fired, ISO. Reported by `<flow> status`. */
   last_nudge_at: string | null;
 }
+
+/**
+ * Minimum gap between two activity stamps. PostToolUse fires on every tool call, and
+ * the stamp only has to be accurate to "is a turn running right now", which a
+ * 15-second resolution answers against a five-minute threshold.
+ */
+export const ACTIVITY_STAMP_THROTTLE_MS = 15_000;
+
+/**
+ * How stale an activity stamp may be while still counting as "a turn is running".
+ *
+ * Without a bound, the two turn endings that never fire `Stop` — the developer
+ * interrupting with ESC, and a turn dying on an API error (StopFailure fires instead)
+ * — leave `last_activity_at` permanently ahead of `last_stop_at`, and the watcher
+ * reads that as a turn running forever. It would then never nudge again for the rest
+ * of the session, in exactly the unattended case this exists for.
+ *
+ * 15 minutes, because the bound has to clear the longest gap a LIVE turn can have
+ * between two stamps: a foreground Bash call is capped at 10 minutes by the host, and
+ * a long subagent stamps through its own tool calls (which is why subagent calls are
+ * stamped too — see posttool-handler). Past that, nothing is running.
+ */
+export const ACTIVITY_STALE_MS = 15 * 60_000;
 
 export function emptyWatchdog(): WatchdogState {
   return {
     last_stop_at: null,
+    last_activity_at: null,
     background: false,
-    cron_seen: false,
-    cron_asks: 0,
+    watcher_seen: false,
+    arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null,
   };
 }
 
 /**
- * Read the watchdog block off a state object that may predate it. Flows created
- * before this version have no such key, and a partially-written one must not make
- * a caller read `undefined.nudges_this_stage`.
+ * Read the watchdog block off a state object that may predate it, or be partially
+ * written. Flows created before this version have no such key.
  */
 export function readWatchdog(state: { watchdog?: Partial<WatchdogState> } | null | undefined): WatchdogState {
   return { ...emptyWatchdog(), ...(state?.watchdog ?? {}) };
@@ -137,9 +199,9 @@ export interface WatchdogConfig {
 }
 
 /**
- * `AI_FLOW_WATCHDOG=0` turns the whole thing off without touching any config file
- * — the escape hatch for a developer who finds it noisy mid-flow and does not want
- * to edit a flow definition to get quiet.
+ * `AI_FLOW_WATCHDOG=0` turns the whole thing off without touching a config file —
+ * the escape hatch for a developer who wants quiet mid-flow and should not have to
+ * edit a flow definition to get it.
  */
 export function resolveWatchdogConfig(
   cfg: { enabled?: boolean | undefined; idle_minutes?: number | undefined } | undefined,
@@ -153,91 +215,135 @@ export function resolveWatchdogConfig(
   };
 }
 
-export interface TickFacts {
+export interface StallFacts {
   now: number;
   lastStopAt: number | null;
+  lastActivityAt: number | null;
   background: boolean;
   gatePending: boolean;
   nudgesThisStage: number;
   config: WatchdogConfig;
 }
 
-export type TickDecision =
-  /** Block the tick. `note` is shown to the developer and costs the model nothing. */
-  | { nudge: false; note: string }
-  /** Let the tick reach the model. `idleMs` is how long the session has been quiet. */
-  | { nudge: true; idleMs: number; remaining: number };
+export type StallVerdict =
+  /** Keep sleeping. `note` is for the log and for `<flow> status`; nobody is woken. */
+  | { stalled: false; note: string }
+  /** Wake the session. */
+  | { stalled: true; idleMs: number; remaining: number };
 
 /**
- * The whole suppression policy, as a pure function so every branch is testable
- * without a session.
+ * The whole policy, as a pure function so every branch is testable without a session.
  *
- * Suppression is the common case and it is FREE: `UserPromptSubmit` blocks the
- * prompt before the model sees it, so a tick that finds nothing wrong costs one
- * hook run and one line in the terminal. That is the reason this feature can be
- * left on at all — a tick that woke the model every interval would re-read the
- * whole conversation each time.
+ * Everything that returns `stalled: false` costs exactly nothing — the watcher loops
+ * and the session never learns a check happened. That is the property the previous
+ * design could not have, and the reason this one can be left on.
  */
-export function decideTick(f: TickFacts): TickDecision {
-  if (!f.config.enabled) {
-    return { nudge: false, note: 'watchdog 已关闭，这条定时自检可以删掉（CronList → CronDelete）' };
+export function decideStall(f: StallFacts): StallVerdict {
+  if (!f.config.enabled) return { stalled: false, note: 'watchdog 已关闭' };
+  if (f.lastStopAt === null) return { stalled: false, note: '本 session 还没结束过回合' };
+  // A turn is running. `last_stop_at` alone cannot see this: a turn started by a
+  // background task finishing, or by a Stop-hook continuation, carries no prompt, so
+  // the last recorded stop is the PREVIOUS turn's end and can be arbitrarily old.
+  //
+  // The staleness bound is not optional — see ACTIVITY_STALE_MS. An ESC interrupt and
+  // an API-killed turn both end without a `Stop`, leaving activity permanently ahead
+  // of the last stop; unbounded, this branch would then hold forever and the watchdog
+  // would go quiet for the rest of the session.
+  if (
+    f.lastActivityAt !== null &&
+    f.lastActivityAt > f.lastStopAt &&
+    f.now - f.lastActivityAt < ACTIVITY_STALE_MS
+  ) {
+    return { stalled: false, note: '正在干活（最后一个事件不是「停下」）' };
   }
-  if (f.lastStopAt === null) {
-    return { nudge: false, note: '本 session 还没结束过回合，无从判断停滞' };
-  }
-  if (f.gatePending) {
-    return { nudge: false, note: '在等开发者 approve，停下来是对的' };
-  }
-  if (f.background) {
-    return { nudge: false, note: '上一轮结束时还有后台任务在跑，等它把你叫醒' };
-  }
+  if (f.gatePending) return { stalled: false, note: '在等开发者 approve，停下来是对的' };
+  if (f.background) return { stalled: false, note: '有后台任务在跑，等它把你叫醒' };
   const idleMs = f.now - f.lastStopAt;
   if (idleMs < f.config.idleMs) {
-    return {
-      nudge: false,
-      note: `刚停下 ${Math.round(idleMs / 1000)} 秒，未到 ${Math.round(f.config.idleMs / 60_000)} 分钟阈值`,
-    };
+    return { stalled: false, note: `刚停下 ${Math.round(idleMs / 1000)} 秒` };
   }
   if (f.nudgesThisStage >= f.config.cap) {
-    return {
-      nudge: false,
-      note: `本 stage 已催 ${f.nudgesThisStage}/${f.config.cap} 次，不再催（开发者一说话就清零）`,
-    };
+    return { stalled: false, note: `本 stage 已催满 ${f.nudgesThisStage}/${f.config.cap} 次` };
   }
-  return { nudge: true, idleMs, remaining: f.config.cap - f.nudgesThisStage - 1 };
+  return { stalled: true, idleMs, remaining: f.config.cap - f.nudgesThisStage - 1 };
 }
 
-/** The prompt text the model is told to give CronCreate. Also what Stop matches on. */
-export function cronPromptFor(flowName: string): string {
-  return `${WATCHDOG_SENTINEL} ${flowName} 停滞自检`;
+/**
+ * The exact command the model is told to background, and what `Stop` matches on.
+ *
+ * The session id is baked in by the hook rather than asked of the model, which has
+ * no way to know its own. The watcher needs it to stay out of a flow it no longer
+ * owns: its output wakes the session that STARTED it, so a watcher that outlived a
+ * handover would be nudging a session the flow has moved on from.
+ */
+export function watcherCommand(
+  repoRoot: string,
+  flowName: string,
+  flowId: string,
+  sessionId: string
+): string {
+  const script = join(PLUGIN_ROOT, 'dist', 'watchdog', 'watch.js');
+  return `node "${script}" --marker ${WATCHER_MARKER} --repo "${repoRoot}" --flow "${flowName}"`
+    + ` --flow-id "${flowId}" --session "${sessionId}"`;
 }
 
-/** Injected by Stop when `session_crons` shows the cron is missing. */
-export function cronCreateInstruction(flowName: string): string {
+/**
+ * True when a `background_tasks` entry is this feature's own watcher — and, when
+ * `flowId` is given, the watcher for THAT flow instance.
+ *
+ * Scoping matters because a watcher whose flow ended keeps looping instead of exiting
+ * (exiting would wake the session to say nothing). Complete one flow and start another
+ * in the same session and the old process is still listed: matched on the marker
+ * alone, `Stop` would see it, believe the new flow is armed, never ask for a real
+ * watcher, and `<flow> status` would report 已武装 while nothing watches.
+ *
+ * The foreground guard in PreToolUse passes no `flowId` on purpose: it is refusing a
+ * command shape, and that refusal holds whichever flow the command names.
+ */
+export function isWatcherTask(command: string | undefined, flowId?: string): boolean {
+  const c = command ?? '';
+  if (!c.includes(WATCHER_MARKER)) return false;
+  return flowId ? c.includes(`--flow-id "${flowId}"`) : true;
+}
+
+/** Injected by `Stop` when `background_tasks` shows no watcher running. */
+export function armInstruction(
+  repoRoot: string,
+  flowName: string,
+  flowId: string,
+  sessionId: string
+): string {
   return [
-    `${WATCHDOG_SENTINEL} 现在调用 CronCreate 建一条停滞自检，参数照抄：`,
-    `    cron:   "${WATCHDOG_CRON}"`,
-    `    prompt: "${cronPromptFor(flowName)}"`,
-    `它是本 session 内的定时任务（/clear 后自动消失，7 天过期）。每次触发都先经引擎判定：`,
-    `没停滞就在到达你之前被拦掉，不消耗 token；只有确实停滞才会叫你。`,
-    `建完不用向开发者汇报，接着做你手上的事。`,
+    `${WATCHDOG_LABEL} 现在用 Bash 起一个后台停滞自检（\`run_in_background: true\`），命令照抄：`,
+    ``,
+    `    ${watcherCommand(repoRoot, flowName, flowId, sessionId)}`,
+    ``,
+    `description 写「ai-flow 停滞自检」。它是一个循环进程：盯着 flow 状态，**确认停滞才退出**，`,
+    `没停滞就一直睡着——不唤醒你、不打扰开发者、不消耗 token。它退出时宿主会用它的输出把你叫醒。`,
+    `⛔ 不要前台跑，不要等它，不要向开发者汇报这件事。起完接着做你手上的活。`,
   ].join('\n');
 }
 
-/** Injected when a tick is let through. */
+/** What the watcher prints on its way out — the text that wakes the session. */
 export function nudgeText(opts: {
   flowName: string;
   stageId: string;
   idleMs: number;
   remaining: number;
   wrapUpPct: number | null;
+  /**
+   * The command that starts a fresh watcher. Carried in the nudge so the model
+   * re-arms during the turn it was just woken for — free. Leaving it to the `Stop`
+   * hook to notice and ask instead would spend a whole extra turn on it, every time.
+   */
+  rearmCommand: string;
 }): string {
   const mins = Math.round(opts.idleMs / 60_000);
   const lines = [
-    `${WATCHDOG_SENTINEL} 这是引擎排的定时自检（本 session 自己的 cron），**不是开发者说的话**。`,
+    `${WATCHDOG_LABEL} 引擎的停滞自检把你叫醒了（不是开发者说的话）。`,
     ``,
     `机械事实：流程 '${opts.flowName}' 停在 stage '${opts.stageId}'，已静置约 ${mins} 分钟；`,
-    `没有后台任务在跑，也没有待批的 gate —— 也就是说没有任何东西会在将来把你叫醒。`,
+    `没有后台任务在跑，也没有待批的 gate —— 没有任何东西会在将来把你叫醒。`,
     ``,
     `先判断这次停下来是否合理，二选一：`,
     `· **在等开发者**（问题已经摆给他了、卡在必须他拍板或他去真机验证的点上、或者他刚明确叫停）`,
@@ -246,12 +352,16 @@ export function nudgeText(opts: {
     `  → 不要向开发者复述计划，直接接着 stage '${opts.stageId}' 往下做。`,
     ``,
     `本 stage 还剩 ${opts.remaining} 次自检（开发者一说话就清零）。`,
+    ``,
+    `⚠️ 这个自检进程刚才退出了（它就是靠退出把你叫醒的）。**在本回合内**用 Bash 重新起一个`,
+    `（\`run_in_background: true\`，不要前台跑、不要等它、不要向开发者汇报）：`,
+    ``,
+    `    ${opts.rearmCommand}`,
   ];
   if (opts.wrapUpPct !== null) {
     lines.push(
       ``,
-      `⚠️ context 已在 ${opts.wrapUpPct}% 进入收尾：如果交接文档还没落盘，先把它写完再停，` +
-        `别让这一轮的判断和在飞子代理的状态随 /clear 一起丢掉。`
+      `⚠️ context 已在 ${opts.wrapUpPct}% 进入收尾：如果交接文档还没落盘，先把它写完再停。`
     );
   }
   return lines.join('\n');

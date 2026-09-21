@@ -62,13 +62,13 @@ flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `
 
 **停滞自检（watchdog）**：执行 flow 的 session 停下来之后，如果五分钟内没人来、也没有任何东西会把它叫醒，engine 会让它自己判断一次「这次停下来合不合理」。
 
-- **定时器是 Claude Code 自带的**：由模型建一条 session 内的定时任务（`CronCreate`，`/clear` 后自动消失）。engine 不起任何常驻进程。
-- **建没建由 engine 核验**，不靠提示词纪律：Stop hook 的输入里带着本 session 所有定时任务的原文，没建就当场让模型补建（一个 session 最多要 3 次）。
-- **绝大多数触发不花钱**：定时任务每次触发，engine 先机械判定——在等 approve、有后台任务在跑、刚停下不到阈值、本 stage 已经催满——命中任意一条就在到达模型之前拦掉，终端留一行，模型不消耗 token。只有确认停滞才会叫醒模型，并告诉它「在等开发者就回一行，否则接着做」。
-- **每个 stage 最多催 3 次**，开发者一说话或阶段推进就清零。这是无人值守时唯一的上界。
-- **只作用于真正在执行的那个 session**：非 owner session、同仓库另一检出的 session、子代理，一律不参与。
+- **判定发生在唤醒之前**。模型起一个后台进程，它盯着 flow 状态，**确认停滞才退出**——宿主在它退出时用它的输出唤醒 session。没停滞就一直睡着：不唤醒、不出声、不花 token，开发者什么都看不到。反过来的做法（定时触发再由引擎拦下来）做不到这一点：拦一次就必然在终端留一条警告，而定时器只在会话空闲时触发、错过的那次在回合刚结束时补发，于是绝大多数触发恰好落在「刚停下 0 秒」这个必须拦的时刻。
+- **起没起由 engine 核验**，不靠提示词纪律：Stop hook 的输入里带着本 session 每个后台任务的命令行原文，没起就当场让模型补起（一个 session 最多要 3 次）。
+- **被唤醒时开发者看得见**：那条唤醒消息就是提醒——它会说明是 watchdog 让 AI 继续的、已静置多久、本 stage 用掉了第几次。
+- **每个 stage 最多催 3 次**，开发者一说话或阶段推进就清零。无人值守时这是唯一的上界。
+- **只作用于真正在执行的那个 session**：非 owner session、同仓库另一检出的 session、子代理，一律不参与。等 approve、有别的后台任务在跑、回合还没结束，都不算停滞。
 - **关掉**：`config.json` 里 `"watchdog": { "enabled": false }`，或环境变量 `AI_FLOW_WATCHDOG=0`；`"idle_minutes"` 改阈值（默认 5）。
-- **有没有生效是看得见的**：`{flow-name} status` 会报「已武装 / 未武装」以及本 stage 已催几次。
+- **有没有生效是看得见的**：`{flow-name} status` 会报「已武装 / 未武装」以及本 stage 已催几次。沉默既可能是「一切正常」也可能是「它死了」，这一行是唯一能分辨的地方。
 
 ### 安全保障
 
@@ -182,24 +182,30 @@ up exactly where you left off.
 with nobody returning and nothing scheduled to wake it, the engine has it check
 once whether stopping was the right move.
 
-- **The timer is Claude Code's own.** The model schedules a session-scoped task
-  (`CronCreate`, dropped on `/clear`). The engine runs no daemon of its own.
-- **The engine verifies it exists**, rather than trusting a prompt: `Stop` hook
-  input carries every scheduled task's prompt text, so a missing one is asked for
-  again (at most three times per session).
-- **Most ticks cost nothing.** On each tick the engine decides mechanically —
-  gate pending, background work in flight, stopped more recently than the
-  threshold, stage budget spent — and a tick matching any of those is blocked
-  before the model sees it: one line in your terminal, zero tokens. Only a
-  confirmed stall reaches the model.
+- **The decision happens before the wake.** The model starts a background process
+  that watches the flow state and **exits only once a stall is confirmed**; the host
+  wakes the session with that process's output. While nothing is wrong it just keeps
+  sleeping: no wake, no output, no tokens, nothing for you to read. The inverse
+  design — fire on a timer, then have the engine discard the ones that were
+  pointless — cannot do this: discarding a prompt always renders a warning, and a
+  scheduled task fires only while the session is idle, with a missed fire delivered
+  the instant a turn ends, so almost every fire lands exactly where it has to be
+  discarded.
+- **The engine verifies it is running**, rather than trusting a prompt: `Stop` hook
+  input carries each background task's command line, so a missing watcher is asked
+  for again (at most three times per session).
+- **You see it when it fires.** The wake-up message says the watchdog is why work
+  resumed, how long the session sat idle, and which of the stage's nudges this was.
 - **At most three nudges per stage**, reset by any developer prompt and by every
   stage advance. Unattended, that cap is the only bound there is.
 - **Only the session actually executing the flow** takes part — never a non-owner
-  session, a session in another checkout, or a subagent.
+  session, a session in another checkout, or a subagent. A pending gate, other
+  background work in flight, and a turn still running all count as "not stalled".
 - **Turning it off**: `"watchdog": { "enabled": false }` in `config.json`, or
   `AI_FLOW_WATCHDOG=0`. `"idle_minutes"` changes the threshold (default 5).
-- **Whether it is armed is visible**: `{flow-name} status` reports armed / not
-  armed and how much of the stage's budget is spent.
+- **Whether it is armed is visible**: `{flow-name} status` reports armed / not armed
+  and how much of the stage's budget is spent. Silence means either "nothing wrong"
+  or "it died", and that line is the only place the two are distinguishable.
 
 ### Security
 

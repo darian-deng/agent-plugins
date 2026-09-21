@@ -14,6 +14,7 @@ import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageB
 import { runScript } from './script-executor.js';
 import { truncateError } from './format.js';
 import { flowDefDir, flowAnchorDir, isBuiltinFlow, PLUGIN_ROOT } from './flow-paths.js';
+import { WATCHER_MARKER } from './watchdog.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
@@ -238,6 +239,27 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   const foreign = isForeignCheckout(active, cwd);
 
   try {
+
+  // ─── The stall watcher must be backgrounded ──────────────────────────────────
+  // It is a loop that runs until it finds a stall, i.e. potentially for hours. Run in
+  // the FOREGROUND it hangs the session until the Bash tool's own timeout fires, and
+  // the developer watches an unexplained stall — from the feature built to end stalls.
+  // The instruction that carries this command says `run_in_background: true` twice and
+  // "don't run it in the foreground" once; this is the part that does not depend on
+  // the model having read it.
+  // Matched on the marker AND `--flow-id`, i.e. on an actual invocation. The marker
+  // alone also appears in `ps aux | grep ai-flow-watchdog-watch` and
+  // `pkill -f ai-flow-watchdog-watch` — inspecting and killing a runaway watcher — and
+  // refusing those with "add run_in_background" is both wrong and removes the only way
+  // to stop one.
+  const bashCommand = tool_name === 'Bash' ? String(tool_input['command'] ?? '') : '';
+  if (bashCommand.includes(WATCHER_MARKER) && bashCommand.includes('--flow-id')
+      && tool_input['run_in_background'] !== true) {
+    return deny(
+      `[ai-flow:watchdog] 停滞自检必须后台跑：同一条命令加上 \`run_in_background: true\` 重发。\n` +
+      `它是个循环进程，确认停滞才退出——前台跑会把这个 session 卡到 Bash 超时为止。`
+    );
+  }
 
   // ─── Non-owner read-only guard ────────────────────────────────────────────────
   // Another session owns this flow. A second session in the same repo may read,

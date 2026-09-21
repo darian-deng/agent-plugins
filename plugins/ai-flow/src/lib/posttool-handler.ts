@@ -18,6 +18,7 @@ import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from './flow-config-loader.js';
 import { advanceStage } from './advance-stage.js';
 import { buildAiFlowPreamble } from './prompt-render.js';
+import { readWatchdog, ACTIVITY_STAMP_THROTTLE_MS } from './watchdog.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 // Occupancy at which a flow with no `wrap_up_at_pct` of its own starts wrapping up.
@@ -44,6 +45,39 @@ export async function handlePostTool(
   const { flowName, state, repoRoot } = active;
 
   try {
+
+  // ─── Stall watchdog: "a turn is running" ───────────────────────────────────
+  // Stamped here, before the control-plane branches below (each of which returns),
+  // because those two writes are tool calls like any other and a turn made only of
+  // them is still a turn in progress. The three filters are repeated rather than
+  // reused from further down for the same reason — the shared ones sit after the
+  // branches that return.
+  //
+  // Without this stamp the watcher cannot see a turn that no prompt started: a
+  // background task finishing, or a Stop-hook continuation, leaves `last_stop_at`
+  // pointing at the PREVIOUS turn's end, which can be arbitrarily old — and the
+  // watcher would wake a session in the middle of its work. Throttled because the
+  // stamp only has to answer "is a turn running right now" against a five-minute
+  // threshold, and this handler runs on every tool call.
+  //
+  // Unlike the context accounting further down, this one does NOT skip subagents. The
+  // two measure different things: context occupancy is per-window, so a subagent's
+  // usage says nothing about the main session's budget — but a subagent's tool call is
+  // direct evidence that the PARENT turn is still running, and a 20-minute subagent is
+  // the longest gap between stamps there is. Skipping them would make a turn that
+  // dispatches one look idle after five minutes.
+  if (
+    !(state.last_session_id !== null && state.last_session_id !== session_id) &&
+    !isForeignCheckout(active, cwd)
+  ) {
+    const stampedAt = readWatchdog(state).last_activity_at;
+    const age = stampedAt ? Date.now() - Date.parse(stampedAt) : Infinity;
+    if (!(age >= 0 && age < ACTIVITY_STAMP_THROTTLE_MS)) {
+      await patchActiveState(repoRoot, flowName, (cur) => ({
+        watchdog: { ...readWatchdog(cur), last_activity_at: new Date().toISOString() },
+      }));
+    }
+  }
 
   // ─── Control-plane markers: write tools only ───────────────────────────────
   // Signal and mark-base are recognised purely by comparing tool_input.file_path

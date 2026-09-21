@@ -64,6 +64,13 @@ export interface BackgroundTaskEntry {
   type?: string;
   status?: string;
   description?: string;
+  /**
+   * The shell command line, present only for `shell` tasks and capped at 1000
+   * characters by the host. This is how the engine recognises its own stall watcher
+   * among the session's background work — the only channel that carries a value the
+   * engine itself put there.
+   */
+  command?: string;
 }
 
 /** One session-scoped scheduled wakeup (CronCreate / ScheduleWakeup / /loop). */

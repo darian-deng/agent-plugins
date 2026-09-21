@@ -868,14 +868,23 @@ describe('handlePostTool — subagent context accounting', () => {
     });
   }
 
-  it('agent_id present → no warning injected and no state write', async () => {
+  it('agent_id present → no warning injected, and no CONTEXT state moved', async () => {
+    // Byte equality until 0.77.0, when the stall watchdog started stamping
+    // `watchdog.last_activity_at` from subagent calls too — deliberately, because a
+    // subagent's tool call proves the PARENT turn is still running, which is the one
+    // thing that keeps the watcher out of a live 20-minute dispatch. The invariant
+    // this test guards is about the shared CONTEXT state, which that stamp does not
+    // touch; the latch itself has its own test below.
     const repo = makeRepo();
     seed(repo.repoRoot);
-    const before = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8');
+    const before = await readActiveState(repo.repoRoot, 'test-flow');
     const out = await handlePostTool(makeSubagentInput(repo.repoRoot, 80));
     expect(out).toBeNull();
-    const after = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'), 'utf-8');
-    expect(after).toBe(before);
+    const after = await readActiveState(repo.repoRoot, 'test-flow');
+    expect(after!.context_wrap_up).toEqual(before!.context_wrap_up);
+    expect(after!.context_size).toBe(before!.context_size);
+    expect(after!.current_stage).toBe(before!.current_stage);
+    expect(after!.last_session_id).toBe(before!.last_session_id);
   });
 
   it('agent_id absent → brief injected (unchanged main-session behavior)', async () => {
