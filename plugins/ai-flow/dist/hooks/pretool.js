@@ -4454,6 +4454,11 @@ function truncateError(e, max = 120) {
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
 
+// src/lib/watchdog.ts
+var WATCHER_MARKER = "ai-flow-watchdog-watch";
+var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
+var ACTIVITY_STALE_MS = 15 * 6e4;
+
 // src/lib/pretool-handler.ts
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "LS"]);
@@ -4519,6 +4524,13 @@ async function handlePreTool(input2) {
   const { flowName: activeFlowName, state, repoRoot } = active;
   const foreign = isForeignCheckout(active, cwd);
   try {
+    const bashCommand = tool_name === "Bash" ? String(tool_input["command"] ?? "") : "";
+    if (bashCommand.includes(WATCHER_MARKER) && bashCommand.includes("--flow-id") && tool_input["run_in_background"] !== true) {
+      return deny(
+        `[ai-flow:watchdog] \u505C\u6EDE\u81EA\u68C0\u5FC5\u987B\u540E\u53F0\u8DD1\uFF1A\u540C\u4E00\u6761\u547D\u4EE4\u52A0\u4E0A \`run_in_background: true\` \u91CD\u53D1\u3002
+\u5B83\u662F\u4E2A\u5FAA\u73AF\u8FDB\u7A0B\uFF0C\u786E\u8BA4\u505C\u6EDE\u624D\u9000\u51FA\u2014\u2014\u524D\u53F0\u8DD1\u4F1A\u628A\u8FD9\u4E2A session \u5361\u5230 Bash \u8D85\u65F6\u4E3A\u6B62\u3002`
+      );
+    }
     if (!foreign && state.last_session_id && state.last_session_id !== session_id && WRITE_TOOLS.has(tool_name)) {
       await appendLog(repoRoot, activeFlowName, session_id, `NON_OWNER_WRITE_BLOCKED owner=${state.last_session_id} tool=${tool_name}`);
       const activeFile = activeJsonPath(repoRoot, activeFlowName);

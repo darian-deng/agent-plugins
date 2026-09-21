@@ -4446,17 +4446,21 @@ function truncateError(e, max = 120) {
 }
 
 // src/lib/watchdog.ts
-var WATCHDOG_SENTINEL = "[ai-flow:watchdog]";
-var WATCHDOG_CRON = "*/5 * * * *";
+import { join as join5 } from "path";
+var WATCHDOG_LABEL = "[ai-flow:watchdog]";
+var WATCHER_MARKER = "ai-flow-watchdog-watch";
 var DEFAULT_IDLE_MINUTES = 5;
+var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
 var DEFAULT_NUDGE_CAP = 3;
-var MAX_CRON_ASKS = 3;
+var MAX_ARM_ASKS = 3;
+var ACTIVITY_STALE_MS = 15 * 6e4;
 function emptyWatchdog() {
   return {
     last_stop_at: null,
+    last_activity_at: null,
     background: false,
-    cron_seen: false,
-    cron_asks: 0,
+    watcher_seen: false,
+    arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
   };
@@ -4472,17 +4476,24 @@ function resolveWatchdogConfig(cfg, env = process.env) {
     cap: DEFAULT_NUDGE_CAP
   };
 }
-function cronPromptFor(flowName) {
-  return `${WATCHDOG_SENTINEL} ${flowName} \u505C\u6EDE\u81EA\u68C0`;
+function watcherCommand(repoRoot, flowName, flowId, sessionId) {
+  const script = join5(PLUGIN_ROOT, "dist", "watchdog", "watch.js");
+  return `node "${script}" --marker ${WATCHER_MARKER} --repo "${repoRoot}" --flow "${flowName}" --flow-id "${flowId}" --session "${sessionId}"`;
 }
-function cronCreateInstruction(flowName) {
+function isWatcherTask(command, flowId) {
+  const c = command ?? "";
+  if (!c.includes(WATCHER_MARKER)) return false;
+  return flowId ? c.includes(`--flow-id "${flowId}"`) : true;
+}
+function armInstruction(repoRoot, flowName, flowId, sessionId) {
   return [
-    `${WATCHDOG_SENTINEL} \u73B0\u5728\u8C03\u7528 CronCreate \u5EFA\u4E00\u6761\u505C\u6EDE\u81EA\u68C0\uFF0C\u53C2\u6570\u7167\u6284\uFF1A`,
-    `    cron:   "${WATCHDOG_CRON}"`,
-    `    prompt: "${cronPromptFor(flowName)}"`,
-    `\u5B83\u662F\u672C session \u5185\u7684\u5B9A\u65F6\u4EFB\u52A1\uFF08/clear \u540E\u81EA\u52A8\u6D88\u5931\uFF0C7 \u5929\u8FC7\u671F\uFF09\u3002\u6BCF\u6B21\u89E6\u53D1\u90FD\u5148\u7ECF\u5F15\u64CE\u5224\u5B9A\uFF1A`,
-    `\u6CA1\u505C\u6EDE\u5C31\u5728\u5230\u8FBE\u4F60\u4E4B\u524D\u88AB\u62E6\u6389\uFF0C\u4E0D\u6D88\u8017 token\uFF1B\u53EA\u6709\u786E\u5B9E\u505C\u6EDE\u624D\u4F1A\u53EB\u4F60\u3002`,
-    `\u5EFA\u5B8C\u4E0D\u7528\u5411\u5F00\u53D1\u8005\u6C47\u62A5\uFF0C\u63A5\u7740\u505A\u4F60\u624B\u4E0A\u7684\u4E8B\u3002`
+    `${WATCHDOG_LABEL} \u73B0\u5728\u7528 Bash \u8D77\u4E00\u4E2A\u540E\u53F0\u505C\u6EDE\u81EA\u68C0\uFF08\`run_in_background: true\`\uFF09\uFF0C\u547D\u4EE4\u7167\u6284\uFF1A`,
+    ``,
+    `    ${watcherCommand(repoRoot, flowName, flowId, sessionId)}`,
+    ``,
+    `description \u5199\u300Cai-flow \u505C\u6EDE\u81EA\u68C0\u300D\u3002\u5B83\u662F\u4E00\u4E2A\u5FAA\u73AF\u8FDB\u7A0B\uFF1A\u76EF\u7740 flow \u72B6\u6001\uFF0C**\u786E\u8BA4\u505C\u6EDE\u624D\u9000\u51FA**\uFF0C`,
+    `\u6CA1\u505C\u6EDE\u5C31\u4E00\u76F4\u7761\u7740\u2014\u2014\u4E0D\u5524\u9192\u4F60\u3001\u4E0D\u6253\u6270\u5F00\u53D1\u8005\u3001\u4E0D\u6D88\u8017 token\u3002\u5B83\u9000\u51FA\u65F6\u5BBF\u4E3B\u4F1A\u7528\u5B83\u7684\u8F93\u51FA\u628A\u4F60\u53EB\u9192\u3002`,
+    `\u26D4 \u4E0D\u8981\u524D\u53F0\u8DD1\uFF0C\u4E0D\u8981\u7B49\u5B83\uFF0C\u4E0D\u8981\u5411\u5F00\u53D1\u8005\u6C47\u62A5\u8FD9\u4EF6\u4E8B\u3002\u8D77\u5B8C\u63A5\u7740\u505A\u4F60\u624B\u4E0A\u7684\u6D3B\u3002`
   ].join("\n");
 }
 
@@ -4498,19 +4509,20 @@ async function handleStop(input2) {
   try {
     const config = await loadFlowConfig(repoRoot, flowName).catch(() => null);
     const wd = resolveWatchdogConfig(config?.watchdog);
-    const crons = input2.session_crons ?? [];
-    const cronSeen = crons.some((c) => (c.prompt ?? "").includes(WATCHDOG_SENTINEL));
-    const background = (input2.background_tasks ?? []).length > 0 || crons.some((c) => !(c.prompt ?? "").includes(WATCHDOG_SENTINEL));
+    const tasks = input2.background_tasks ?? [];
+    const watcherSeen = tasks.some((t) => isWatcherTask(t.command, state.flow_id));
+    const background = tasks.some((t) => !isWatcherTask(t.command)) || (input2.session_crons ?? []).length > 0;
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     let willAsk = false;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
-      const next = { ...w, last_stop_at: nowIso, background, cron_seen: cronSeen };
+      const next = { ...w, last_stop_at: nowIso, background, watcher_seen: watcherSeen };
+      if (watcherSeen) next.arm_asks = 0;
       willAsk = wd.enabled && // The host sets this on a turn that only happened because a Stop hook asked
       // for it. Bailing here is what makes a chain impossible: at most one extra
-      // turn per ask, never a second one stacked on top.
-      !input2.stop_hook_active && !cronSeen && w.cron_asks < MAX_CRON_ASKS;
-      if (willAsk) next.cron_asks = w.cron_asks + 1;
+      // turn per ask, never a second stacked on top.
+      !input2.stop_hook_active && !watcherSeen && w.arm_asks < MAX_ARM_ASKS;
+      if (willAsk) next.arm_asks = w.arm_asks + 1;
       return { watchdog: next };
     });
     if (!written || !willAsk) return null;
@@ -4518,9 +4530,9 @@ async function handleStop(input2) {
       repoRoot,
       flowName,
       session_id,
-      `WATCHDOG_CRON_ASK attempt=${readWatchdog(written).cron_asks}/${MAX_CRON_ASKS} stage=${state.current_stage}`
+      `WATCHDOG_ARM_ASK attempt=${readWatchdog(written).arm_asks}/${MAX_ARM_ASKS} stage=${state.current_stage}`
     );
-    return { additionalContext: cronCreateInstruction(flowName) };
+    return { additionalContext: armInstruction(repoRoot, flowName, state.flow_id, session_id) };
   } catch (e) {
     try {
       await appendLog(repoRoot, flowName, session_id, `ERROR stop: ${truncateError(e)}`);

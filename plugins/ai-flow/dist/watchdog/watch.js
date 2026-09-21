@@ -5,113 +5,31 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// src/hooks/session.ts
-import { readFileSync as readFileSync7 } from "fs";
-
-// src/lib/session-handler.ts
-import { readFileSync as readFileSync6, existsSync as existsSync7 } from "fs";
-import { dirname as dirname3 } from "path";
+// src/watchdog/watch.ts
+import { setTimeout as sleep } from "timers/promises";
 
 // src/lib/state.ts
 import {
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync2,
-  writeFileSync as writeFileSync2,
-  readFileSync as readFileSync2,
-  readdirSync as readdirSync2,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
   appendFileSync,
-  renameSync as renameSync2,
+  renameSync,
   openSync,
   closeSync,
-  unlinkSync as unlinkSync2,
+  unlinkSync,
   statSync,
   realpathSync
 } from "fs";
-import { randomBytes as randomBytes2 } from "crypto";
-import { execFileSync } from "child_process";
-import { join as join2, dirname, resolve, relative } from "path";
-
-// src/lib/session-registry.ts
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
 import { randomBytes } from "crypto";
-import { join } from "path";
-import { homedir } from "os";
-function claudeDir() {
-  return process.env["CLAUDE_CONFIG_DIR"] || join(homedir(), ".claude");
+import { join, dirname, resolve, relative } from "path";
+function statePath(repoRoot2, flowName2, file) {
+  return join(repoRoot2, ".ai-flow", flowName2, "state", file);
 }
-function registryDir() {
-  return join(claudeDir(), "ai-flow", "sessions");
-}
-function bindingPath(sessionId) {
-  const safe = sessionId.replace(/[^A-Za-z0-9_.-]/g, "_");
-  return join(registryDir(), `${safe}.json`);
-}
-function bindSession(sessionId, projectRoot, flowName) {
-  try {
-    const dir = registryDir();
-    mkdirSync(dir, { recursive: true });
-    const payload = {
-      sessionId,
-      projectRoot,
-      flowName,
-      boundAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    const tmp = join(dir, `${randomBytes(4).toString("hex")}.tmp`);
-    writeFileSync(tmp, JSON.stringify(payload, null, 2));
-    renameSync(tmp, bindingPath(sessionId));
-  } catch {
-  }
-}
-function lookupSession(sessionId) {
-  try {
-    const p = bindingPath(sessionId);
-    if (!existsSync(p)) return null;
-    const parsed = JSON.parse(readFileSync(p, "utf-8"));
-    if (!parsed || typeof parsed.projectRoot !== "string" || typeof parsed.flowName !== "string") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-function unbindSession(sessionId) {
-  try {
-    const p = bindingPath(sessionId);
-    if (existsSync(p)) unlinkSync(p);
-  } catch {
-  }
-}
-function listBindings() {
-  try {
-    const dir = registryDir();
-    if (!existsSync(dir)) return [];
-    const out = [];
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith(".json")) continue;
-      try {
-        const parsed = JSON.parse(readFileSync(join(dir, f), "utf-8"));
-        if (parsed && typeof parsed.sessionId === "string" && typeof parsed.projectRoot === "string" && typeof parsed.flowName === "string") {
-          out.push(parsed);
-        }
-      } catch {
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-function removeBinding(sessionId) {
-  unbindSession(sessionId);
-}
-
-// src/lib/state.ts
-function statePath(repoRoot, flowName, file) {
-  return join2(repoRoot, ".ai-flow", flowName, "state", file);
-}
-function stateDir(repoRoot, flowName) {
-  return join2(repoRoot, ".ai-flow", flowName, "state");
+function stateDir(repoRoot2, flowName2) {
+  return join(repoRoot2, ".ai-flow", flowName2, "state");
 }
 function normalizeActiveState(parsed) {
   const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
@@ -120,41 +38,41 @@ function normalizeActiveState(parsed) {
   const atPct = latched ? legacy?.warned_at_pct ?? null : null;
   return { ...rest, context_wrap_up: { at_pct: atPct } };
 }
-async function readActiveState(repoRoot, flowName) {
-  const path = statePath(repoRoot, flowName, "active.json");
-  if (!existsSync2(path)) return null;
+async function readActiveState(repoRoot2, flowName2) {
+  const path = statePath(repoRoot2, flowName2, "active.json");
+  if (!existsSync(path)) return null;
   try {
-    return normalizeActiveState(JSON.parse(readFileSync2(path, "utf-8")));
+    return normalizeActiveState(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     return null;
   }
 }
-async function writeActiveState(repoRoot, flowName, state) {
-  const dir = stateDir(repoRoot, flowName);
-  mkdirSync2(dir, { recursive: true });
-  const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes2(4).toString("hex")}.tmp`);
-  writeFileSync2(tmp, JSON.stringify(state, null, 2));
-  renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
+async function writeActiveState(repoRoot2, flowName2, state) {
+  const dir = stateDir(repoRoot2, flowName2);
+  mkdirSync(dir, { recursive: true });
+  const tmp = statePath(repoRoot2, flowName2, `active.json.${randomBytes(4).toString("hex")}.tmp`);
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, statePath(repoRoot2, flowName2, "active.json"));
 }
 var LOCK_STALE_MS = 1e4;
 var LOCK_POLL_MS = 8;
 var LOCK_MAX_WAIT_MS = 1e3;
-async function acquireStateLock(repoRoot, flowName) {
-  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
-  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+async function acquireStateLock(repoRoot2, flowName2) {
+  const lockPath = statePath(repoRoot2, flowName2, "active.json.lock");
+  mkdirSync(stateDir(repoRoot2, flowName2), { recursive: true });
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
   for (; ; ) {
     try {
       closeSync(openSync(lockPath, "wx"));
       return () => {
         try {
-          unlinkSync2(lockPath);
+          unlinkSync(lockPath);
         } catch {
         }
       };
     } catch {
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
       } catch {
       }
     }
@@ -163,145 +81,23 @@ async function acquireStateLock(repoRoot, flowName) {
     await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
   }
 }
-async function patchActiveState(repoRoot, flowName, patch) {
-  const release = await acquireStateLock(repoRoot, flowName);
+async function patchActiveState(repoRoot2, flowName2, patch) {
+  const release = await acquireStateLock(repoRoot2, flowName2);
   try {
-    const current = await readActiveState(repoRoot, flowName);
+    const current = await readActiveState(repoRoot2, flowName2);
     if (!current) return null;
     const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
-    await writeActiveState(repoRoot, flowName, merged);
+    await writeActiveState(repoRoot2, flowName2, merged);
     return merged;
   } finally {
     release();
   }
 }
-function isInsideLinkedWorktree(dir) {
+function readSignal(repoRoot2, flowName2) {
+  const path = statePath(repoRoot2, flowName2, "signal");
+  if (!existsSync(path)) return null;
   try {
-    const out = execFileSync(
-      "git",
-      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    const [gitDir, commonDir] = out.trim().split("\n");
-    if (!gitDir || !commonDir) return false;
-    return resolve(gitDir) !== resolve(commonDir);
-  } catch {
-    return false;
-  }
-}
-function realPath(p) {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
-}
-async function anchorFlow(dir) {
-  const aiFlowDir = join2(dir, ".ai-flow");
-  if (!existsSync2(aiFlowDir)) return null;
-  for (const entry of readdirSync2(aiFlowDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const state = await readActiveState(dir, entry.name);
-    if (state) return { flowName: entry.name, state, repoRoot: dir };
-  }
-  return null;
-}
-function siblingCheckoutAnchors(dir) {
-  try {
-    const out = execFileSync(
-      "git",
-      ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    const [commonDir, wtRoot] = out.trim().split("\n");
-    if (!commonDir || !wtRoot) return [];
-    const self = realPath(dir);
-    const rel = relative(resolve(wtRoot), self);
-    if (rel.startsWith("..")) return [];
-    const roots = execFileSync("git", ["-C", dir, "worktree", "list", "--porcelain"], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length).trim()).filter(Boolean);
-    const mainRoot = dirname(resolve(commonDir));
-    const sharedPrefix = (a, b) => {
-      const x = a.split("/"), y = b.split("/");
-      let n = 0;
-      while (n < x.length && n < y.length && x[n] === y[n]) n++;
-      return n;
-    };
-    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
-    const seen = /* @__PURE__ */ new Set();
-    const out2 = [];
-    for (const root of ordered) {
-      const cand = rel ? join2(root, rel) : root;
-      const key = resolve(cand);
-      if (key === self || seen.has(key)) continue;
-      seen.add(key);
-      out2.push(cand);
-    }
-    return out2;
-  } catch {
-    return [];
-  }
-}
-function isForeignCheckout(active, cwd) {
-  if (!active.viaSibling) return false;
-  const self = realPath(cwd) + "/";
-  if (self.includes("/.ai-flow-worktrees/")) return false;
-  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
-  return true;
-}
-async function hasActiveFlow(cwd) {
-  let dir = cwd;
-  while (true) {
-    if (existsSync2(join2(dir, ".ai-flow"))) {
-      const here = await anchorFlow(dir);
-      if (here) return here;
-      if (!isInsideLinkedWorktree(dir)) return null;
-      const candidates = siblingCheckoutAnchors(dir);
-      if (candidates.length > 0) {
-        for (const cand of candidates) {
-          if (!existsSync2(join2(cand, ".ai-flow"))) continue;
-          const over = await anchorFlow(cand);
-          if (over) return { ...over, viaSibling: true };
-        }
-        return null;
-      }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-async function resolveActiveFlow(cwd, sessionId) {
-  if (sessionId) {
-    const binding = lookupSession(sessionId);
-    if (binding) {
-      const state = await readActiveState(binding.projectRoot, binding.flowName);
-      if (state) {
-        return { flowName: binding.flowName, state, repoRoot: binding.projectRoot };
-      }
-    }
-  }
-  return hasActiveFlow(cwd);
-}
-async function gcRegistry() {
-  for (const b of listBindings()) {
-    let dead = false;
-    try {
-      const state = await readActiveState(b.projectRoot, b.flowName);
-      if (!state || state.last_session_id !== null && state.last_session_id !== b.sessionId) dead = true;
-    } catch {
-      dead = true;
-    }
-    if (dead) removeBinding(b.sessionId);
-  }
-}
-function readSignal(repoRoot, flowName) {
-  const path = statePath(repoRoot, flowName, "signal");
-  if (!existsSync2(path)) return null;
-  try {
-    return readFileSync2(path, "utf-8").trim();
+    return readFileSync(path, "utf-8").trim();
   } catch {
     return null;
   }
@@ -318,11 +114,11 @@ function isGatePending(signal, config, currentStageId) {
   }
   return signal === "flow-complete";
 }
-async function appendLog(repoRoot, flowName, sessionId, message) {
-  const logPath = statePath(repoRoot, flowName, "flow.log");
-  mkdirSync2(dirname(logPath), { recursive: true });
+async function appendLog(repoRoot2, flowName2, sessionId2, message) {
+  const logPath = statePath(repoRoot2, flowName2, "flow.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
+  appendFileSync(logPath, `${timestamp} [${flowName2}] [session=${sessionId2}] ${message}
 `);
 }
 function nextStage(config, currentStageId) {
@@ -330,92 +126,10 @@ function nextStage(config, currentStageId) {
   if (idx === -1 || idx === config.stages.length - 1) return null;
   return config.stages[idx + 1].id;
 }
-function signalPath(repoRoot, flowName) {
-  return statePath(repoRoot, flowName, "signal");
-}
-function activeJsonPath(repoRoot, flowName) {
-  return statePath(repoRoot, flowName, "active.json");
-}
-function renderedPromptPath(repoRoot, flowName) {
-  return statePath(repoRoot, flowName, "current-prompt.md");
-}
-function materializeRenderedPrompt(repoRoot, flowName, stageId, rendered) {
-  try {
-    const dest = renderedPromptPath(repoRoot, flowName);
-    const header = `<!-- ai-flow: stage=${stageId} flow=${flowName} -->
-> \u26A0\uFE0F \u8FD9\u662F stage **${stageId}** \u63D0\u793A\u8BCD\u7684\u6E32\u67D3\u526F\u672C\uFF08\u5F15\u64CE\u843D\u76D8\uFF0C\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\uFF09\u3002
-> **\u5B83\u548C\u4F60\u5F53\u524D\u6240\u5904\u7684 stage \u4E0D\u4E00\u81F4\u65F6\uFF0C\u5C31\u662F\u65E7\u4EF6\u2014\u2014\u522B\u7167\u5B83\u6267\u884C**\uFF0C\u53BB\u8BFB\u5F15\u64CE\u672C\u6B21\u6CE8\u5165\u7ED9\u4F60\u7684\u5185\u5BB9\u3002
-
-`;
-    mkdirSync2(dirname(dest), { recursive: true });
-    const tmp = statePath(repoRoot, flowName, `current-prompt.${randomBytes2(4).toString("hex")}.tmp`);
-    writeFileSync2(tmp, header + rendered, "utf-8");
-    renameSync2(tmp, dest);
-    return dest;
-  } catch {
-    return null;
-  }
-}
-function clearRenderedPrompt(repoRoot, flowName) {
-  try {
-    const p = renderedPromptPath(repoRoot, flowName);
-    if (existsSync2(p)) unlinkSync2(p);
-  } catch {
-  }
-}
-
-// src/lib/flow-paths.ts
-import { existsSync as existsSync3 } from "fs";
-import { join as join3, dirname as dirname2, resolve as resolve2 } from "path";
-import { fileURLToPath } from "url";
-var __dirname = dirname2(fileURLToPath(import.meta.url));
-var PLUGIN_ROOT = resolve2(__dirname, "..", "..");
-var PLUGIN_FLOWS_DIR = join3(PLUGIN_ROOT, ".ai-flow");
-function isBuiltinFlow(flowName) {
-  return existsSync3(join3(PLUGIN_FLOWS_DIR, flowName, "config.json"));
-}
-function flowDefDir(repoRoot, flowName) {
-  return isBuiltinFlow(flowName) ? join3(PLUGIN_FLOWS_DIR, flowName) : join3(repoRoot, ".ai-flow", flowName);
-}
-function flowAnchorDir(repoRoot, flowName) {
-  return join3(repoRoot, ".ai-flow", flowName);
-}
-function stagePromptPath(repoRoot, flowName, promptRel) {
-  return join3(flowDefDir(repoRoot, flowName), promptRel);
-}
-
-// src/lib/watchdog.ts
-var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
-var ACTIVITY_STALE_MS = 15 * 6e4;
-function emptyWatchdog() {
-  return {
-    last_stop_at: null,
-    last_activity_at: null,
-    background: false,
-    watcher_seen: false,
-    arm_asks: 0,
-    nudges_this_stage: 0,
-    last_nudge_at: null
-  };
-}
-function readWatchdog(state) {
-  return { ...emptyWatchdog(), ...state?.watchdog ?? {} };
-}
-
-// src/lib/format.ts
-function truncateError(e, max = 120) {
-  const s = String(e).replace(/\n/g, " ");
-  return s.length > max ? s.slice(0, max - 3) + "..." : s;
-}
-function flowStatusLine(opts) {
-  const prefix = opts.recovered ? "\u6062\u590D \xB7 " : "";
-  const gate = opts.gatePending ? " \xB7 gate \u5F85\u786E\u8BA4" : "";
-  return `[${opts.flowName}] ${prefix}${opts.stageId}${gate} \xB7 flow ${opts.flowId}`;
-}
 
 // src/lib/flow-config-loader.ts
-import { existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync3 } from "fs";
-import { join as join4 } from "path";
+import { existsSync as existsSync3, readdirSync as readdirSync2, readFileSync as readFileSync2 } from "fs";
+import { join as join3 } from "path";
 
 // node_modules/zod/v3/external.js
 var external_exports = {};
@@ -1076,41 +790,41 @@ var ZodType = class {
   get description() {
     return this._def.description;
   }
-  _getType(input2) {
-    return getParsedType(input2.data);
+  _getType(input) {
+    return getParsedType(input.data);
   }
-  _getOrReturnCtx(input2, ctx) {
+  _getOrReturnCtx(input, ctx) {
     return ctx || {
-      common: input2.parent.common,
-      data: input2.data,
-      parsedType: getParsedType(input2.data),
+      common: input.parent.common,
+      data: input.data,
+      parsedType: getParsedType(input.data),
       schemaErrorMap: this._def.errorMap,
-      path: input2.path,
-      parent: input2.parent
+      path: input.path,
+      parent: input.parent
     };
   }
-  _processInputParams(input2) {
+  _processInputParams(input) {
     return {
       status: new ParseStatus(),
       ctx: {
-        common: input2.parent.common,
-        data: input2.data,
-        parsedType: getParsedType(input2.data),
+        common: input.parent.common,
+        data: input.data,
+        parsedType: getParsedType(input.data),
         schemaErrorMap: this._def.errorMap,
-        path: input2.path,
-        parent: input2.parent
+        path: input.path,
+        parent: input.parent
       }
     };
   }
-  _parseSync(input2) {
-    const result = this._parse(input2);
+  _parseSync(input) {
+    const result = this._parse(input);
     if (isAsync(result)) {
       throw new Error("Synchronous parse encountered promise.");
     }
     return result;
   }
-  _parseAsync(input2) {
-    const result = this._parse(input2);
+  _parseAsync(input) {
+    const result = this._parse(input);
     return Promise.resolve(result);
   }
   parse(data, params) {
@@ -1436,13 +1150,13 @@ function isValidCidr(ip, version) {
   return false;
 }
 var ZodString = class _ZodString extends ZodType {
-  _parse(input2) {
+  _parse(input) {
     if (this._def.coerce) {
-      input2.data = String(input2.data);
+      input.data = String(input.data);
     }
-    const parsedType = this._getType(input2);
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.string) {
-      const ctx2 = this._getOrReturnCtx(input2);
+      const ctx2 = this._getOrReturnCtx(input);
       addIssueToContext(ctx2, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.string,
@@ -1454,8 +1168,8 @@ var ZodString = class _ZodString extends ZodType {
     let ctx = void 0;
     for (const check of this._def.checks) {
       if (check.kind === "min") {
-        if (input2.data.length < check.value) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (input.data.length < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
             minimum: check.value,
@@ -1467,8 +1181,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "max") {
-        if (input2.data.length > check.value) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (input.data.length > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
             maximum: check.value,
@@ -1480,10 +1194,10 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "length") {
-        const tooBig = input2.data.length > check.value;
-        const tooSmall = input2.data.length < check.value;
+        const tooBig = input.data.length > check.value;
+        const tooSmall = input.data.length < check.value;
         if (tooBig || tooSmall) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           if (tooBig) {
             addIssueToContext(ctx, {
               code: ZodIssueCode.too_big,
@@ -1506,8 +1220,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "email") {
-        if (!emailRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!emailRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "email",
             code: ZodIssueCode.invalid_string,
@@ -1519,8 +1233,8 @@ var ZodString = class _ZodString extends ZodType {
         if (!emojiRegex) {
           emojiRegex = new RegExp(_emojiRegex, "u");
         }
-        if (!emojiRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!emojiRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "emoji",
             code: ZodIssueCode.invalid_string,
@@ -1529,8 +1243,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "uuid") {
-        if (!uuidRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!uuidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "uuid",
             code: ZodIssueCode.invalid_string,
@@ -1539,8 +1253,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "nanoid") {
-        if (!nanoidRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!nanoidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "nanoid",
             code: ZodIssueCode.invalid_string,
@@ -1549,8 +1263,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "cuid") {
-        if (!cuidRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!cuidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cuid",
             code: ZodIssueCode.invalid_string,
@@ -1559,8 +1273,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "cuid2") {
-        if (!cuid2Regex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!cuid2Regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cuid2",
             code: ZodIssueCode.invalid_string,
@@ -1569,8 +1283,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "ulid") {
-        if (!ulidRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!ulidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "ulid",
             code: ZodIssueCode.invalid_string,
@@ -1580,9 +1294,9 @@ var ZodString = class _ZodString extends ZodType {
         }
       } else if (check.kind === "url") {
         try {
-          new URL(input2.data);
+          new URL(input.data);
         } catch {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "url",
             code: ZodIssueCode.invalid_string,
@@ -1592,9 +1306,9 @@ var ZodString = class _ZodString extends ZodType {
         }
       } else if (check.kind === "regex") {
         check.regex.lastIndex = 0;
-        const testResult = check.regex.test(input2.data);
+        const testResult = check.regex.test(input.data);
         if (!testResult) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "regex",
             code: ZodIssueCode.invalid_string,
@@ -1603,10 +1317,10 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "trim") {
-        input2.data = input2.data.trim();
+        input.data = input.data.trim();
       } else if (check.kind === "includes") {
-        if (!input2.data.includes(check.value, check.position)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!input.data.includes(check.value, check.position)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: { includes: check.value, position: check.position },
@@ -1615,12 +1329,12 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "toLowerCase") {
-        input2.data = input2.data.toLowerCase();
+        input.data = input.data.toLowerCase();
       } else if (check.kind === "toUpperCase") {
-        input2.data = input2.data.toUpperCase();
+        input.data = input.data.toUpperCase();
       } else if (check.kind === "startsWith") {
-        if (!input2.data.startsWith(check.value)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!input.data.startsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: { startsWith: check.value },
@@ -1629,8 +1343,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "endsWith") {
-        if (!input2.data.endsWith(check.value)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!input.data.endsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: { endsWith: check.value },
@@ -1640,8 +1354,8 @@ var ZodString = class _ZodString extends ZodType {
         }
       } else if (check.kind === "datetime") {
         const regex = datetimeRegex(check);
-        if (!regex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "datetime",
@@ -1651,8 +1365,8 @@ var ZodString = class _ZodString extends ZodType {
         }
       } else if (check.kind === "date") {
         const regex = dateRegex;
-        if (!regex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "date",
@@ -1662,8 +1376,8 @@ var ZodString = class _ZodString extends ZodType {
         }
       } else if (check.kind === "time") {
         const regex = timeRegex(check);
-        if (!regex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_string,
             validation: "time",
@@ -1672,8 +1386,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "duration") {
-        if (!durationRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!durationRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "duration",
             code: ZodIssueCode.invalid_string,
@@ -1682,8 +1396,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "ip") {
-        if (!isValidIP(input2.data, check.version)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!isValidIP(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "ip",
             code: ZodIssueCode.invalid_string,
@@ -1692,8 +1406,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "jwt") {
-        if (!isValidJWT(input2.data, check.alg)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!isValidJWT(input.data, check.alg)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "jwt",
             code: ZodIssueCode.invalid_string,
@@ -1702,8 +1416,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "cidr") {
-        if (!isValidCidr(input2.data, check.version)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!isValidCidr(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "cidr",
             code: ZodIssueCode.invalid_string,
@@ -1712,8 +1426,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "base64") {
-        if (!base64Regex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!base64Regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "base64",
             code: ZodIssueCode.invalid_string,
@@ -1722,8 +1436,8 @@ var ZodString = class _ZodString extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "base64url") {
-        if (!base64urlRegex.test(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!base64urlRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             validation: "base64url",
             code: ZodIssueCode.invalid_string,
@@ -1735,7 +1449,7 @@ var ZodString = class _ZodString extends ZodType {
         util.assertNever(check);
       }
     }
-    return { status: status.value, value: input2.data };
+    return { status: status.value, value: input.data };
   }
   _regex(regex, validation, message) {
     return this.refinement((data) => regex.test(data), {
@@ -1996,13 +1710,13 @@ var ZodNumber = class _ZodNumber extends ZodType {
     this.max = this.lte;
     this.step = this.multipleOf;
   }
-  _parse(input2) {
+  _parse(input) {
     if (this._def.coerce) {
-      input2.data = Number(input2.data);
+      input.data = Number(input.data);
     }
-    const parsedType = this._getType(input2);
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.number) {
-      const ctx2 = this._getOrReturnCtx(input2);
+      const ctx2 = this._getOrReturnCtx(input);
       addIssueToContext(ctx2, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.number,
@@ -2014,8 +1728,8 @@ var ZodNumber = class _ZodNumber extends ZodType {
     const status = new ParseStatus();
     for (const check of this._def.checks) {
       if (check.kind === "int") {
-        if (!util.isInteger(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!util.isInteger(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.invalid_type,
             expected: "integer",
@@ -2025,9 +1739,9 @@ var ZodNumber = class _ZodNumber extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input2.data < check.value : input2.data <= check.value;
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
         if (tooSmall) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
             minimum: check.value,
@@ -2039,9 +1753,9 @@ var ZodNumber = class _ZodNumber extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input2.data > check.value : input2.data >= check.value;
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
         if (tooBig) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
             maximum: check.value,
@@ -2053,8 +1767,8 @@ var ZodNumber = class _ZodNumber extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "multipleOf") {
-        if (floatSafeRemainder(input2.data, check.value) !== 0) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (floatSafeRemainder(input.data, check.value) !== 0) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_multiple_of,
             multipleOf: check.value,
@@ -2063,8 +1777,8 @@ var ZodNumber = class _ZodNumber extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "finite") {
-        if (!Number.isFinite(input2.data)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (!Number.isFinite(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_finite,
             message: check.message
@@ -2075,7 +1789,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
         util.assertNever(check);
       }
     }
-    return { status: status.value, value: input2.data };
+    return { status: status.value, value: input.data };
   }
   gte(value, message) {
     return this.setLimit("min", value, true, errorUtil.toString(message));
@@ -2227,25 +1941,25 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
     this.min = this.gte;
     this.max = this.lte;
   }
-  _parse(input2) {
+  _parse(input) {
     if (this._def.coerce) {
       try {
-        input2.data = BigInt(input2.data);
+        input.data = BigInt(input.data);
       } catch {
-        return this._getInvalidInput(input2);
+        return this._getInvalidInput(input);
       }
     }
-    const parsedType = this._getType(input2);
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.bigint) {
-      return this._getInvalidInput(input2);
+      return this._getInvalidInput(input);
     }
     let ctx = void 0;
     const status = new ParseStatus();
     for (const check of this._def.checks) {
       if (check.kind === "min") {
-        const tooSmall = check.inclusive ? input2.data < check.value : input2.data <= check.value;
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
         if (tooSmall) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
             type: "bigint",
@@ -2256,9 +1970,9 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "max") {
-        const tooBig = check.inclusive ? input2.data > check.value : input2.data >= check.value;
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
         if (tooBig) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
             type: "bigint",
@@ -2269,8 +1983,8 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "multipleOf") {
-        if (input2.data % check.value !== BigInt(0)) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (input.data % check.value !== BigInt(0)) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.not_multiple_of,
             multipleOf: check.value,
@@ -2282,10 +1996,10 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
         util.assertNever(check);
       }
     }
-    return { status: status.value, value: input2.data };
+    return { status: status.value, value: input.data };
   }
-  _getInvalidInput(input2) {
-    const ctx = this._getOrReturnCtx(input2);
+  _getInvalidInput(input) {
+    const ctx = this._getOrReturnCtx(input);
     addIssueToContext(ctx, {
       code: ZodIssueCode.invalid_type,
       expected: ZodParsedType.bigint,
@@ -2394,13 +2108,13 @@ ZodBigInt.create = (params) => {
   });
 };
 var ZodBoolean = class extends ZodType {
-  _parse(input2) {
+  _parse(input) {
     if (this._def.coerce) {
-      input2.data = Boolean(input2.data);
+      input.data = Boolean(input.data);
     }
-    const parsedType = this._getType(input2);
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.boolean) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.boolean,
@@ -2408,7 +2122,7 @@ var ZodBoolean = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
 };
 ZodBoolean.create = (params) => {
@@ -2419,13 +2133,13 @@ ZodBoolean.create = (params) => {
   });
 };
 var ZodDate = class _ZodDate extends ZodType {
-  _parse(input2) {
+  _parse(input) {
     if (this._def.coerce) {
-      input2.data = new Date(input2.data);
+      input.data = new Date(input.data);
     }
-    const parsedType = this._getType(input2);
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.date) {
-      const ctx2 = this._getOrReturnCtx(input2);
+      const ctx2 = this._getOrReturnCtx(input);
       addIssueToContext(ctx2, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.date,
@@ -2433,8 +2147,8 @@ var ZodDate = class _ZodDate extends ZodType {
       });
       return INVALID;
     }
-    if (Number.isNaN(input2.data.getTime())) {
-      const ctx2 = this._getOrReturnCtx(input2);
+    if (Number.isNaN(input.data.getTime())) {
+      const ctx2 = this._getOrReturnCtx(input);
       addIssueToContext(ctx2, {
         code: ZodIssueCode.invalid_date
       });
@@ -2444,8 +2158,8 @@ var ZodDate = class _ZodDate extends ZodType {
     let ctx = void 0;
     for (const check of this._def.checks) {
       if (check.kind === "min") {
-        if (input2.data.getTime() < check.value) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (input.data.getTime() < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_small,
             message: check.message,
@@ -2457,8 +2171,8 @@ var ZodDate = class _ZodDate extends ZodType {
           status.dirty();
         }
       } else if (check.kind === "max") {
-        if (input2.data.getTime() > check.value) {
-          ctx = this._getOrReturnCtx(input2, ctx);
+        if (input.data.getTime() > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
           addIssueToContext(ctx, {
             code: ZodIssueCode.too_big,
             message: check.message,
@@ -2475,7 +2189,7 @@ var ZodDate = class _ZodDate extends ZodType {
     }
     return {
       status: status.value,
-      value: new Date(input2.data.getTime())
+      value: new Date(input.data.getTime())
     };
   }
   _addCheck(check) {
@@ -2528,10 +2242,10 @@ ZodDate.create = (params) => {
   });
 };
 var ZodSymbol = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.symbol) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.symbol,
@@ -2539,7 +2253,7 @@ var ZodSymbol = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
 };
 ZodSymbol.create = (params) => {
@@ -2549,10 +2263,10 @@ ZodSymbol.create = (params) => {
   });
 };
 var ZodUndefined = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.undefined) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.undefined,
@@ -2560,7 +2274,7 @@ var ZodUndefined = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
 };
 ZodUndefined.create = (params) => {
@@ -2570,10 +2284,10 @@ ZodUndefined.create = (params) => {
   });
 };
 var ZodNull = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.null) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.null,
@@ -2581,7 +2295,7 @@ var ZodNull = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
 };
 ZodNull.create = (params) => {
@@ -2595,8 +2309,8 @@ var ZodAny = class extends ZodType {
     super(...arguments);
     this._any = true;
   }
-  _parse(input2) {
-    return OK(input2.data);
+  _parse(input) {
+    return OK(input.data);
   }
 };
 ZodAny.create = (params) => {
@@ -2610,8 +2324,8 @@ var ZodUnknown = class extends ZodType {
     super(...arguments);
     this._unknown = true;
   }
-  _parse(input2) {
-    return OK(input2.data);
+  _parse(input) {
+    return OK(input.data);
   }
 };
 ZodUnknown.create = (params) => {
@@ -2621,8 +2335,8 @@ ZodUnknown.create = (params) => {
   });
 };
 var ZodNever = class extends ZodType {
-  _parse(input2) {
-    const ctx = this._getOrReturnCtx(input2);
+  _parse(input) {
+    const ctx = this._getOrReturnCtx(input);
     addIssueToContext(ctx, {
       code: ZodIssueCode.invalid_type,
       expected: ZodParsedType.never,
@@ -2638,10 +2352,10 @@ ZodNever.create = (params) => {
   });
 };
 var ZodVoid = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.undefined) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.void,
@@ -2649,7 +2363,7 @@ var ZodVoid = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
 };
 ZodVoid.create = (params) => {
@@ -2659,8 +2373,8 @@ ZodVoid.create = (params) => {
   });
 };
 var ZodArray = class _ZodArray extends ZodType {
-  _parse(input2) {
-    const { ctx, status } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx, status } = this._processInputParams(input);
     const def = this._def;
     if (ctx.parsedType !== ZodParsedType.array) {
       addIssueToContext(ctx, {
@@ -2800,10 +2514,10 @@ var ZodObject = class _ZodObject extends ZodType {
     this._cached = { shape, keys };
     return this._cached;
   }
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.object) {
-      const ctx2 = this._getOrReturnCtx(input2);
+      const ctx2 = this._getOrReturnCtx(input);
       addIssueToContext(ctx2, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.object,
@@ -2811,7 +2525,7 @@ var ZodObject = class _ZodObject extends ZodType {
       });
       return INVALID;
     }
-    const { status, ctx } = this._processInputParams(input2);
+    const { status, ctx } = this._processInputParams(input);
     const { shape, keys: shapeKeys } = this._getCached();
     const extraKeys = [];
     if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
@@ -3124,8 +2838,8 @@ ZodObject.lazycreate = (shape, params) => {
   });
 };
 var ZodUnion = class extends ZodType {
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     const options = this._def.options;
     function handleResults(results) {
       for (const result of results) {
@@ -3246,8 +2960,8 @@ var getDiscriminator = (type) => {
   }
 };
 var ZodDiscriminatedUnion = class _ZodDiscriminatedUnion extends ZodType {
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.object) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3360,8 +3074,8 @@ function mergeValues(a, b) {
   }
 }
 var ZodIntersection = class extends ZodType {
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     const handleParsed = (parsedLeft, parsedRight) => {
       if (isAborted(parsedLeft) || isAborted(parsedRight)) {
         return INVALID;
@@ -3413,8 +3127,8 @@ ZodIntersection.create = (left, right, params) => {
   });
 };
 var ZodTuple = class _ZodTuple extends ZodType {
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.array) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3486,8 +3200,8 @@ var ZodRecord = class _ZodRecord extends ZodType {
   get valueSchema() {
     return this._def.valueType;
   }
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.object) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3539,8 +3253,8 @@ var ZodMap = class extends ZodType {
   get valueSchema() {
     return this._def.valueType;
   }
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.map) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3599,8 +3313,8 @@ ZodMap.create = (keyType, valueType, params) => {
   });
 };
 var ZodSet = class _ZodSet extends ZodType {
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.set) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3688,8 +3402,8 @@ var ZodFunction = class _ZodFunction extends ZodType {
     super(...arguments);
     this.validate = this.implement;
   }
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.function) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3792,8 +3506,8 @@ var ZodLazy = class extends ZodType {
   get schema() {
     return this._def.getter();
   }
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     const lazySchema = this._def.getter();
     return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
   }
@@ -3806,9 +3520,9 @@ ZodLazy.create = (getter, params) => {
   });
 };
 var ZodLiteral = class extends ZodType {
-  _parse(input2) {
-    if (input2.data !== this._def.value) {
-      const ctx = this._getOrReturnCtx(input2);
+  _parse(input) {
+    if (input.data !== this._def.value) {
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         received: ctx.data,
         code: ZodIssueCode.invalid_literal,
@@ -3816,7 +3530,7 @@ var ZodLiteral = class extends ZodType {
       });
       return INVALID;
     }
-    return { status: "valid", value: input2.data };
+    return { status: "valid", value: input.data };
   }
   get value() {
     return this._def.value;
@@ -3837,9 +3551,9 @@ function createZodEnum(values, params) {
   });
 }
 var ZodEnum = class _ZodEnum extends ZodType {
-  _parse(input2) {
-    if (typeof input2.data !== "string") {
-      const ctx = this._getOrReturnCtx(input2);
+  _parse(input) {
+    if (typeof input.data !== "string") {
+      const ctx = this._getOrReturnCtx(input);
       const expectedValues = this._def.values;
       addIssueToContext(ctx, {
         expected: util.joinValues(expectedValues),
@@ -3851,8 +3565,8 @@ var ZodEnum = class _ZodEnum extends ZodType {
     if (!this._cache) {
       this._cache = new Set(this._def.values);
     }
-    if (!this._cache.has(input2.data)) {
-      const ctx = this._getOrReturnCtx(input2);
+    if (!this._cache.has(input.data)) {
+      const ctx = this._getOrReturnCtx(input);
       const expectedValues = this._def.values;
       addIssueToContext(ctx, {
         received: ctx.data,
@@ -3861,7 +3575,7 @@ var ZodEnum = class _ZodEnum extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
   get options() {
     return this._def.values;
@@ -3902,9 +3616,9 @@ var ZodEnum = class _ZodEnum extends ZodType {
 };
 ZodEnum.create = createZodEnum;
 var ZodNativeEnum = class extends ZodType {
-  _parse(input2) {
+  _parse(input) {
     const nativeEnumValues = util.getValidEnumValues(this._def.values);
-    const ctx = this._getOrReturnCtx(input2);
+    const ctx = this._getOrReturnCtx(input);
     if (ctx.parsedType !== ZodParsedType.string && ctx.parsedType !== ZodParsedType.number) {
       const expectedValues = util.objectValues(nativeEnumValues);
       addIssueToContext(ctx, {
@@ -3917,7 +3631,7 @@ var ZodNativeEnum = class extends ZodType {
     if (!this._cache) {
       this._cache = new Set(util.getValidEnumValues(this._def.values));
     }
-    if (!this._cache.has(input2.data)) {
+    if (!this._cache.has(input.data)) {
       const expectedValues = util.objectValues(nativeEnumValues);
       addIssueToContext(ctx, {
         received: ctx.data,
@@ -3926,7 +3640,7 @@ var ZodNativeEnum = class extends ZodType {
       });
       return INVALID;
     }
-    return OK(input2.data);
+    return OK(input.data);
   }
   get enum() {
     return this._def.values;
@@ -3943,8 +3657,8 @@ var ZodPromise = class extends ZodType {
   unwrap() {
     return this._def.type;
   }
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -3976,13 +3690,13 @@ var ZodEffects = class extends ZodType {
   sourceType() {
     return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
   }
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     const effect = this._def.effect || null;
     const checkCtx = {
-      addIssue: (arg) => {
-        addIssueToContext(ctx, arg);
-        if (arg.fatal) {
+      addIssue: (arg2) => {
+        addIssueToContext(ctx, arg2);
+        if (arg2.fatal) {
           status.abort();
         } else {
           status.dirty();
@@ -4109,12 +3823,12 @@ ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
   });
 };
 var ZodOptional = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType === ZodParsedType.undefined) {
       return OK(void 0);
     }
-    return this._def.innerType._parse(input2);
+    return this._def.innerType._parse(input);
   }
   unwrap() {
     return this._def.innerType;
@@ -4128,12 +3842,12 @@ ZodOptional.create = (type, params) => {
   });
 };
 var ZodNullable = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType === ZodParsedType.null) {
       return OK(null);
     }
-    return this._def.innerType._parse(input2);
+    return this._def.innerType._parse(input);
   }
   unwrap() {
     return this._def.innerType;
@@ -4147,8 +3861,8 @@ ZodNullable.create = (type, params) => {
   });
 };
 var ZodDefault = class extends ZodType {
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     let data = ctx.data;
     if (ctx.parsedType === ZodParsedType.undefined) {
       data = this._def.defaultValue();
@@ -4172,8 +3886,8 @@ ZodDefault.create = (type, params) => {
   });
 };
 var ZodCatch = class extends ZodType {
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     const newCtx = {
       ...ctx,
       common: {
@@ -4225,10 +3939,10 @@ ZodCatch.create = (type, params) => {
   });
 };
 var ZodNaN = class extends ZodType {
-  _parse(input2) {
-    const parsedType = this._getType(input2);
+  _parse(input) {
+    const parsedType = this._getType(input);
     if (parsedType !== ZodParsedType.nan) {
-      const ctx = this._getOrReturnCtx(input2);
+      const ctx = this._getOrReturnCtx(input);
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
         expected: ZodParsedType.nan,
@@ -4236,7 +3950,7 @@ var ZodNaN = class extends ZodType {
       });
       return INVALID;
     }
-    return { status: "valid", value: input2.data };
+    return { status: "valid", value: input.data };
   }
 };
 ZodNaN.create = (params) => {
@@ -4247,8 +3961,8 @@ ZodNaN.create = (params) => {
 };
 var BRAND = Symbol("zod_brand");
 var ZodBranded = class extends ZodType {
-  _parse(input2) {
-    const { ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
     const data = ctx.data;
     return this._def.type._parse({
       data,
@@ -4261,8 +3975,8 @@ var ZodBranded = class extends ZodType {
   }
 };
 var ZodPipeline = class _ZodPipeline extends ZodType {
-  _parse(input2) {
-    const { status, ctx } = this._processInputParams(input2);
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.common.async) {
       const handleAsync = async () => {
         const inResult = await this._def.in._parseAsync({
@@ -4316,8 +4030,8 @@ var ZodPipeline = class _ZodPipeline extends ZodType {
   }
 };
 var ZodReadonly = class extends ZodType {
-  _parse(input2) {
-    const result = this._def.innerType._parse(input2);
+  _parse(input) {
+    const result = this._def.innerType._parse(input);
     const freeze = (data) => {
       if (isValid(data)) {
         data.value = Object.freeze(data.value);
@@ -4447,14 +4161,14 @@ var ostring = () => stringType().optional();
 var onumber = () => numberType().optional();
 var oboolean = () => booleanType().optional();
 var coerce = {
-  string: ((arg) => ZodString.create({ ...arg, coerce: true })),
-  number: ((arg) => ZodNumber.create({ ...arg, coerce: true })),
-  boolean: ((arg) => ZodBoolean.create({
-    ...arg,
+  string: ((arg2) => ZodString.create({ ...arg2, coerce: true })),
+  number: ((arg2) => ZodNumber.create({ ...arg2, coerce: true })),
+  boolean: ((arg2) => ZodBoolean.create({
+    ...arg2,
     coerce: true
   })),
-  bigint: ((arg) => ZodBigInt.create({ ...arg, coerce: true })),
-  date: ((arg) => ZodDate.create({ ...arg, coerce: true }))
+  bigint: ((arg2) => ZodBigInt.create({ ...arg2, coerce: true })),
+  date: ((arg2) => ZodDate.create({ ...arg2, coerce: true }))
 };
 var NEVER = INVALID;
 
@@ -4540,10 +4254,24 @@ var LIVE_OVERRIDE_KEYS = /* @__PURE__ */ new Map([
   ["watchdog", new Set(Object.keys(WatchdogConfigSchema.shape))]
 ]);
 
+// src/lib/flow-paths.ts
+import { existsSync as existsSync2 } from "fs";
+import { join as join2, dirname as dirname2, resolve as resolve2 } from "path";
+import { fileURLToPath } from "url";
+var __dirname = dirname2(fileURLToPath(import.meta.url));
+var PLUGIN_ROOT = resolve2(__dirname, "..", "..");
+var PLUGIN_FLOWS_DIR = join2(PLUGIN_ROOT, ".ai-flow");
+function isBuiltinFlow(flowName2) {
+  return existsSync2(join2(PLUGIN_FLOWS_DIR, flowName2, "config.json"));
+}
+function flowDefDir(repoRoot2, flowName2) {
+  return isBuiltinFlow(flowName2) ? join2(PLUGIN_FLOWS_DIR, flowName2) : join2(repoRoot2, ".ai-flow", flowName2);
+}
+
 // src/lib/flow-config-loader.ts
 var FlowNotFoundError = class extends Error {
-  constructor(flowName) {
-    super(`Flow '${flowName}' not found. use /ai-flow to add it to this project.`);
+  constructor(flowName2) {
+    super(`Flow '${flowName2}' not found. use /ai-flow to add it to this project.`);
     this.name = "FlowNotFoundError";
   }
 };
@@ -4554,15 +4282,15 @@ var FlowConfigParseError = class extends Error {
   }
 };
 var FlowConfigValidationError = class extends Error {
-  constructor(flowName, details) {
-    super(`Invalid config for flow '${flowName}':
+  constructor(flowName2, details) {
+    super(`Invalid config for flow '${flowName2}':
 ${details}`);
     this.name = "FlowConfigValidationError";
   }
 };
 function readJson(path) {
   try {
-    const v = JSON.parse(readFileSync3(path, "utf-8"));
+    const v = JSON.parse(readFileSync2(path, "utf-8"));
     if (v === null || typeof v !== "object" || Array.isArray(v)) {
       throw new Error("config.json must contain a JSON object");
     }
@@ -4582,444 +4310,183 @@ function mergeConfig(defaults, overrides) {
   }
   return merged;
 }
-async function loadFlowConfig(repoRoot, flowName) {
-  const configPath = join4(repoRoot, ".ai-flow", flowName, "config.json");
-  if (!existsSync4(configPath)) throw new FlowNotFoundError(flowName);
-  const defPath = join4(flowDefDir(repoRoot, flowName), "config.json");
+async function loadFlowConfig(repoRoot2, flowName2) {
+  const configPath = join3(repoRoot2, ".ai-flow", flowName2, "config.json");
+  if (!existsSync3(configPath)) throw new FlowNotFoundError(flowName2);
+  const defPath = join3(flowDefDir(repoRoot2, flowName2), "config.json");
   const overrides = readJson(configPath);
-  const raw2 = defPath === configPath ? overrides : mergeConfig(readJson(defPath), overrides);
-  const result = FlowConfigSchema.safeParse(raw2);
+  const raw = defPath === configPath ? overrides : mergeConfig(readJson(defPath), overrides);
+  const result = FlowConfigSchema.safeParse(raw);
   if (!result.success) {
     const details = result.error.issues.map((i) => `  [${i.path.join(".")}] ${i.message}`).join("\n");
-    throw new FlowConfigValidationError(flowName, details);
+    throw new FlowConfigValidationError(flowName2, details);
   }
   return result.data;
 }
-function getStageConfig(config, stageId) {
-  const stage = config.stages.find((s) => s.id === stageId);
-  if (!stage) throw new Error(`Stage '${stageId}' not found in flow '${config.name}'`);
-  return stage;
-}
 
-// src/lib/context.ts
-var TAIL_WINDOW_BYTES = 256 * 1024;
-var DEFAULT_CONTEXT_WINDOW = 1e6;
-function contextWindowForModel(model) {
-  if (!model) return DEFAULT_CONTEXT_WINDOW;
-  const m = /\[(\d+(?:\.\d+)?)(k|m)\]/i.exec(model);
-  if (m) {
-    const n = parseFloat(m[1]);
-    const unit = m[2].toLowerCase();
-    return unit === "m" ? Math.round(n * 1e6) : Math.round(n * 1e3);
+// src/lib/watchdog.ts
+import { join as join4 } from "path";
+var WATCHDOG_LABEL = "[ai-flow:watchdog]";
+var WATCHER_MARKER = "ai-flow-watchdog-watch";
+var DEFAULT_IDLE_MINUTES = 5;
+var WATCHER_POLL_MS = 2e4;
+var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
+var DEFAULT_NUDGE_CAP = 3;
+var NUDGE_DEDUPE_MS = 6e4;
+function withinDedupeWindow(lastNudgeAt, now) {
+  if (!lastNudgeAt) return false;
+  const t = Date.parse(lastNudgeAt);
+  return !Number.isNaN(t) && now - t < NUDGE_DEDUPE_MS;
+}
+var ACTIVITY_STALE_MS = 15 * 6e4;
+function emptyWatchdog() {
+  return {
+    last_stop_at: null,
+    last_activity_at: null,
+    background: false,
+    watcher_seen: false,
+    arm_asks: 0,
+    nudges_this_stage: 0,
+    last_nudge_at: null
+  };
+}
+function readWatchdog(state) {
+  return { ...emptyWatchdog(), ...state?.watchdog ?? {} };
+}
+function resolveWatchdogConfig(cfg, env = process.env) {
+  const envOff = env["AI_FLOW_WATCHDOG"] === "0";
+  return {
+    enabled: !envOff && (cfg?.enabled ?? true),
+    idleMs: (cfg?.idle_minutes ?? DEFAULT_IDLE_MINUTES) * 6e4,
+    cap: DEFAULT_NUDGE_CAP
+  };
+}
+function decideStall(f) {
+  if (!f.config.enabled) return { stalled: false, note: "watchdog \u5DF2\u5173\u95ED" };
+  if (f.lastStopAt === null) return { stalled: false, note: "\u672C session \u8FD8\u6CA1\u7ED3\u675F\u8FC7\u56DE\u5408" };
+  if (f.lastActivityAt !== null && f.lastActivityAt > f.lastStopAt && f.now - f.lastActivityAt < ACTIVITY_STALE_MS) {
+    return { stalled: false, note: "\u6B63\u5728\u5E72\u6D3B\uFF08\u6700\u540E\u4E00\u4E2A\u4E8B\u4EF6\u4E0D\u662F\u300C\u505C\u4E0B\u300D\uFF09" };
   }
-  return DEFAULT_CONTEXT_WINDOW;
+  if (f.gatePending) return { stalled: false, note: "\u5728\u7B49\u5F00\u53D1\u8005 approve\uFF0C\u505C\u4E0B\u6765\u662F\u5BF9\u7684" };
+  if (f.background) return { stalled: false, note: "\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u7B49\u5B83\u628A\u4F60\u53EB\u9192" };
+  const idleMs = f.now - f.lastStopAt;
+  if (idleMs < f.config.idleMs) {
+    return { stalled: false, note: `\u521A\u505C\u4E0B ${Math.round(idleMs / 1e3)} \u79D2` };
+  }
+  if (f.nudgesThisStage >= f.config.cap) {
+    return { stalled: false, note: `\u672C stage \u5DF2\u50AC\u6EE1 ${f.nudgesThisStage}/${f.config.cap} \u6B21` };
+  }
+  return { stalled: true, idleMs, remaining: f.config.cap - f.nudgesThisStage - 1 };
 }
-
-// src/lib/advance-stage.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
-
-// src/lib/prompt-render.ts
-var INLINE_INJECTION_BUDGET = 1e4;
-function injectableStagePrompt(rendered, promptPath, overhead, materialize) {
-  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
-  const readyPath = materialize?.(rendered) ?? null;
-  const target = readyPath ?? promptPath;
-  return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
-
-**\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
-${target}
-
-` + (readyPath ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002Gate \u534F\u8BAE\u4E0D\u5728\u526F\u672C\u91CC\uFF0C\u5B83\u968F\u672C\u6B21\u6CE8\u5165\u53E6\u7ED9\u3002\uFF09
-
-` : `\u26A0\uFE0F \u843D\u76D8\u6E32\u67D3\u526F\u672C\u5931\u8D25\uFF0C\u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u672C\u6B21\u6CE8\u5165\u9876\u90E8 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002
-
-`) + `\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09` + // The materialized copy already carries this note (it is part of `rendered`). Only the
-  // degraded template-pointer path needs it appended, or an oversize stage loses the
-  // length discipline entirely.
-  (readyPath ? "" : "\n" + writtenDocLengthNote());
+function watcherCommand(repoRoot2, flowName2, flowId2, sessionId2) {
+  const script = join4(PLUGIN_ROOT, "dist", "watchdog", "watch.js");
+  return `node "${script}" --marker ${WATCHER_MARKER} --repo "${repoRoot2}" --flow "${flowName2}" --flow-id "${flowId2}" --session "${sessionId2}"`;
 }
-function assembledOverhead(assemble) {
-  return assemble("").length;
-}
-function renderPrompt(content, repoRoot, flowName) {
-  const substituted = content.replace(/\{\{\s*project_root\s*\}\}/g, repoRoot).replace(/\{\{\s*flow_def\s*\}\}/g, flowDefDir(repoRoot, flowName)).replace(/\{\{\s*flow_root\s*\}\}/g, flowAnchorDir(repoRoot, flowName));
-  return substituted + "\n" + writtenDocLengthNote();
-}
-function buildAiFlowPreamble(repoRoot, flowName, baseSha) {
+function nudgeText(opts) {
+  const mins = Math.round(opts.idleMs / 6e4);
   const lines = [
-    `[ai-flow:paths]`,
-    `project_root: ${repoRoot}`,
-    `flow_root: ${flowAnchorDir(repoRoot, flowName)}`,
-    `flow_def: ${flowDefDir(repoRoot, flowName)}`
+    `${WATCHDOG_LABEL} \u5F15\u64CE\u7684\u505C\u6EDE\u81EA\u68C0\u628A\u4F60\u53EB\u9192\u4E86\uFF08\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD\uFF09\u3002`,
+    ``,
+    `\u673A\u68B0\u4E8B\u5B9E\uFF1A\u6D41\u7A0B '${opts.flowName}' \u505C\u5728 stage '${opts.stageId}'\uFF0C\u5DF2\u9759\u7F6E\u7EA6 ${mins} \u5206\u949F\uFF1B`,
+    `\u6CA1\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u4E5F\u6CA1\u6709\u5F85\u6279\u7684 gate \u2014\u2014 \u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u4F1A\u5728\u5C06\u6765\u628A\u4F60\u53EB\u9192\u3002`,
+    ``,
+    `\u5148\u5224\u65AD\u8FD9\u6B21\u505C\u4E0B\u6765\u662F\u5426\u5408\u7406\uFF0C\u4E8C\u9009\u4E00\uFF1A`,
+    `\xB7 **\u5728\u7B49\u5F00\u53D1\u8005**\uFF08\u95EE\u9898\u5DF2\u7ECF\u6446\u7ED9\u4ED6\u4E86\u3001\u5361\u5728\u5FC5\u987B\u4ED6\u62CD\u677F\u6216\u4ED6\u53BB\u771F\u673A\u9A8C\u8BC1\u7684\u70B9\u4E0A\u3001\u6216\u8005\u4ED6\u521A\u660E\u786E\u53EB\u505C\uFF09`,
+    `  \u2192 \u56DE\u4E00\u884C\u8BF4\u6E05\u5728\u7B49\u4EC0\u4E48\uFF0C\u7136\u540E\u7ED3\u675F\u56DE\u5408\u3002\u4E0D\u8981\u91CD\u590D\u89E3\u91CA\uFF0C\u4E0D\u8981\u91CD\u65B0\u5F00\u5DE5\u3002`,
+    `\xB7 **\u5176\u5B83\u60C5\u51B5**\uFF08\u63D2\u66F2\u5DF2\u7ECF\u8BA8\u8BBA\u5B8C/\u6539\u5B8C\uFF0C\u53EA\u662F\u6CA1\u56DE\u5230 flow\uFF09`,
+    `  \u2192 \u4E0D\u8981\u5411\u5F00\u53D1\u8005\u590D\u8FF0\u8BA1\u5212\uFF0C\u76F4\u63A5\u63A5\u7740 stage '${opts.stageId}' \u5F80\u4E0B\u505A\u3002`,
+    ``,
+    `\u672C stage \u8FD8\u5269 ${opts.remaining} \u6B21\u81EA\u68C0\uFF08\u5F00\u53D1\u8005\u4E00\u8BF4\u8BDD\u5C31\u6E05\u96F6\uFF09\u3002`,
+    ``,
+    `\u26A0\uFE0F \u8FD9\u4E2A\u81EA\u68C0\u8FDB\u7A0B\u521A\u624D\u9000\u51FA\u4E86\uFF08\u5B83\u5C31\u662F\u9760\u9000\u51FA\u628A\u4F60\u53EB\u9192\u7684\uFF09\u3002**\u5728\u672C\u56DE\u5408\u5185**\u7528 Bash \u91CD\u65B0\u8D77\u4E00\u4E2A`,
+    `\uFF08\`run_in_background: true\`\uFF0C\u4E0D\u8981\u524D\u53F0\u8DD1\u3001\u4E0D\u8981\u7B49\u5B83\u3001\u4E0D\u8981\u5411\u5F00\u53D1\u8005\u6C47\u62A5\uFF09\uFF1A`,
+    ``,
+    `    ${opts.rearmCommand}`
   ];
-  if (baseSha) lines.push(`base_sha_code: ${baseSha}`);
-  return lines.join("\n") + "\n\n";
-}
-function writtenDocLengthNote() {
-  return [
-    ``,
-    `\u2500\u2500\u2500 \u5199\u76D8\u6587\u6863\u957F\u5EA6\uFF08\u5F15\u64CE\u6CE8\u5165 \xB7 \u53EA\u7EA6\u675F\u5199\u5165\u78C1\u76D8\u7684 Markdown \u6587\u6863\uFF0C\u4E0D\u7EA6\u675F\u4EE3\u7801\uFF09\u2500\u2500\u2500`,
-    `\u5199\u76D8\u6587\u6863\u4EE5\u6700\u77ED\u53EF\u7528\u4E3A\u51C6\uFF1A\u538B\u6389\u94FA\u9648\u3001\u5220\u6837\u677F\u4E0E\u91CD\u590D\uFF0C\u80FD\u7528\u6761\u76EE\u5C31\u4E0D\u5199\u957F\u6BB5\u843D\u3002`,
-    `\u8C41\u514D\uFF1A\u8981\u6C42\u7A77\u4E3E\u7684\u6E05\u5355\uFF08\u6279\u91CF\u6210\u5458\u3001\u51B3\u7B56\u53F0\u8D26\u7B49\uFF09\u9010\u6761\u5217\u5168\uFF1B\u673A\u5668\u95E8\u8981\u6C42\u7684\u6BB5\u843D\u5373\u4F7F\u65E0\u5185\u5BB9\u4E5F\u7167\u5199\uFF1B\u8981\u5F00\u53D1\u8005\u7B7E\u5B57\u7684\u6587\u6863\u91CC\uFF0C\u6BCF\u4E2A\u8BBE\u8BA1\u70B9\u65C1\u7684\u300C\u4E3A\u4EC0\u4E48\u300D\u4E0E\u6BCF\u8282\u7684\u6982\u89C8\u6BB5\u843D\u7167\u5199\u4E0D\u538B\u3002`,
-    `\u7B80\u6D01\u53EA\u9488\u5BF9\u6837\u677F\u3001\u91CD\u590D\u4E0E\u94FA\u9648\uFF0C\u8C41\u514D\u9879\u4E0D\u7B97\u5197\u4F59\u3002`
-  ].join("\n");
-}
-function gateProtocolNote() {
-  return [
-    ``,
-    `\u2500\u2500\u2500 Gate \u534F\u8BAE\uFF08\u672C\u9636\u6BB5\u542B Gate \xB7 \u5F15\u64CE\u5F3A\u5236\uFF0C\u4F18\u5148\u7EA7\u9AD8\u4E8E\u672C\u9636\u6BB5\u63D0\u793A\u8BCD\u7684\u4EFB\u4F55\u63AA\u8F9E\uFF09\u2500\u2500\u2500`,
-    `\u5230\u8FBE Gate \u7684\u552F\u4E00\u65B9\u5F0F\uFF1A\u7528 Write \u5411 signal \u6587\u4EF6\u5199\u5165 'done'\u3002**\u5FC5\u987B\u5148\u5199 signal**\u2014\u2014`,
-    `\u5199\u5165\u540E\u5F15\u64CE\u4F1A\u56DE\u6CE8\u4E00\u6761\u300CStage \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u4EBA\u5DE5\u786E\u8BA4\u300D\u7684\u6D88\u606F\uFF0C\u5E76\u6307\u793A\u4F60\u5448\u73B0\u5BA1\u67E5\u6458\u8981 + approve \u63D0\u793A\u3002`,
-    `approve \u7684\u63D0\u793A\u8BED\u4EE5\u5F15\u64CE\u90A3\u6761\u4E3A\u51C6\uFF0C\u4E0D\u8981\u51ED\u8BB0\u5FC6\u81EA\u884C\u590D\u8FF0\u3002`,
-    `**\u672A\u5199 signal\u3001\u672A\u6536\u5230\u5F15\u64CE\u786E\u8BA4\uFF0C\u7EDD\u4E0D\u5411\u7528\u6237\u63D0\u793A\u6267\u884C approve**\u2014\u2014\u6B64\u65F6 signal \u4E0D\u5B58\u5728\uFF0Capprove \u4F1A\u88AB\u5F15\u64CE\u62D2\u7EDD\uFF0C`,
-    `\u7528\u6237 /clear \u91CD\u5165\u540E\u8FD8\u5F97\u91CD\u505A\u672C\u9636\u6BB5\u3002\u51C6\u5907\u8BF4\u300Capprove\u300D\u524D\u5148\u81EA\u67E5\uFF1Asignal \u5199\u4E86\u5417\uFF1F\u5F15\u64CE\u786E\u8BA4\u6536\u5230\u4E86\u5417\uFF1F\u6CA1\u6709 \u2192 \u7ACB\u5373\u8865\u5199 signal\u3002`
-  ].join("\n");
+  if (opts.wrapUpPct !== null) {
+    lines.push(
+      ``,
+      `\u26A0\uFE0F context \u5DF2\u5728 ${opts.wrapUpPct}% \u8FDB\u5165\u6536\u5C3E\uFF1A\u5982\u679C\u4EA4\u63A5\u6587\u6863\u8FD8\u6CA1\u843D\u76D8\uFF0C\u5148\u628A\u5B83\u5199\u5B8C\u518D\u505C\u3002`
+    );
+  }
+  return lines.join("\n");
 }
 
-// src/lib/advance-stage.ts
-async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
-  const state = await readActiveState(repoRoot, flowName);
-  if (!state) {
-    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
-  }
-  const config = await loadFlowConfig(repoRoot, flowName);
-  const current = state.current_stage;
-  const next = nextStage(config, current);
-  if (!next) {
-    const activeJson = activeJsonPath(repoRoot, flowName);
-    if (existsSync5(activeJson)) unlinkSync3(activeJson);
-    const sig = signalPath(repoRoot, flowName);
-    if (existsSync5(sig)) unlinkSync3(sig);
-    clearRenderedPrompt(repoRoot, flowName);
-    await appendLog(repoRoot, flowName, sessionId, `COMPLETED flow_id=${state.flow_id}`);
-    return {
-      additionalContext: `[ai-flow] \u6D41\u7A0B '${flowName}' \u5168\u90E8\u5B8C\u6210\u3002
-
-\u5E2E\u52A9\u7528\u6237\u6536\u5C3E\uFF1A\u603B\u7ED3\u6838\u5FC3\u4EA7\u51FA\u5728\u54EA\u91CC\uFF0C\u5EFA\u8BAE\u4E0B\u4E00\u6B65\uFF08\u5BA1\u67E5\u3001\u63D0\u4EA4\u7B49\uFF09\u3002\u4FDD\u6301\u7B80\u6D01\uFF0C\u7A81\u51FA\u53EF\u64CD\u4F5C\u6027\u3002`,
-      terminal: true
-    };
-  }
-  clearRenderedPrompt(repoRoot, flowName);
-  const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
-    current_stage: next,
-    first_prompt_handled: false,
-    // The nudge budget is per stage: entering one is fresh evidence the session is
-    // moving, and the stage that spent its budget is over.
-    watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 }
-  }));
-  if (!advanced) {
-    return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
-  }
-  const sigFile = signalPath(repoRoot, flowName);
-  if (existsSync5(sigFile)) unlinkSync3(sigFile);
-  await appendLog(repoRoot, flowName, sessionId, `ADVANCED ${current} \u2192 ${next}`);
-  const nextStageCfg = getStageConfig(config, next);
-  const assemble = (body) => `[ai-flow] Stage '${current}' \u5DF2\u5B8C\u6210\uFF0C\u8FDB\u5165 '${next}'\u3002
-
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-${body}
-\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
-
-\u7528 1-2 \u53E5\u81EA\u7136\u8BED\u8A00\u544A\u77E5\u7528\u6237\u5DF2\u8FDB\u5165\u65B0\u9636\u6BB5\uFF0C\u7136\u540E\u76F4\u63A5\u5F00\u59CB\u5DE5\u4F5C\uFF0C\u4E0D\u8981\u7B49\u5F85\u7528\u6237\u56DE\u590D\u3002`;
-  const promptPath = stagePromptPath(repoRoot, flowName, nextStageCfg.prompt);
-  const gateNote = nextStageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
-  let promptContent = "";
-  if (existsSync5(promptPath)) {
-    try {
-      promptContent = injectableStagePrompt(
-        renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
-        promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead,
-        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
-      );
-    } catch {
-    }
-  }
-  promptContent += gateNote;
-  return { additionalContext: assemble(promptContent) };
+// src/watchdog/watch.ts
+function arg(name) {
+  const i = process.argv.indexOf(`--${name}`);
+  return i >= 0 ? process.argv[i + 1] ?? "" : "";
 }
-
-// src/lib/legacy-cleanup.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync3, rmSync } from "fs";
-import { join as join5 } from "path";
-var LEGACY_ENTRIES = [
-  "stages",
-  "references",
-  "scripts",
-  "helper.md",
-  "preflight.cjs",
-  "preflight.mjs",
-  "preflight.sh"
-];
-function readJsonObject(path) {
-  try {
-    const v = JSON.parse(readFileSync5(path, "utf-8"));
-    if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
-    return v;
-  } catch {
-    return null;
-  }
+var repoRoot = arg("repo");
+var flowName = arg("flow");
+var flowId = arg("flow-id");
+var sessionId = arg("session");
+if (!repoRoot || !flowName) {
+  process.stderr.write("usage: watch.js --repo <path> --flow <name> --flow-id <id> --session <id>\n");
+  process.exit(2);
 }
-function pruneLegacyInstall(repoRoot, flowName) {
-  if (!isBuiltinFlow(flowName)) return null;
-  const anchorDir = join5(repoRoot, ".ai-flow", flowName);
-  const configPath = join5(anchorDir, "config.json");
-  if (!existsSync6(configPath)) return null;
-  const removed = [];
-  for (const entry of LEGACY_ENTRIES) {
-    const p = join5(anchorDir, entry);
-    if (!existsSync6(p)) continue;
-    rmSync(p, { recursive: true, force: true });
-    removed.push(entry);
-  }
-  const configKeysDropped = [];
-  const project = readJsonObject(configPath);
-  const defaults = readJsonObject(join5(flowDefDir(repoRoot, flowName), "config.json"));
-  if (project && defaults) {
-    const kept = {};
-    for (const [key, value] of Object.entries(project)) {
-      const liveSubKeys = LIVE_OVERRIDE_KEYS.get(key);
-      if (!liveSubKeys) {
-        configKeysDropped.push(key);
-        continue;
-      }
-      if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        configKeysDropped.push(key);
-        continue;
-      }
-      const defaultBlock = defaults[key] ?? {};
-      const keptBlock = {};
-      for (const [ck, cv] of Object.entries(value)) {
-        const isDead = !liveSubKeys.has(ck);
-        const isInheritedDefault = JSON.stringify(cv) === JSON.stringify(defaultBlock[ck]);
-        if (isDead || isInheritedDefault) configKeysDropped.push(`${key}.${ck}`);
-        else keptBlock[ck] = cv;
-      }
-      if (Object.keys(keptBlock).length > 0) kept[key] = keptBlock;
-    }
-    if (configKeysDropped.length > 0) {
-      writeFileSync3(configPath, JSON.stringify(kept, null, 2) + "\n");
-    }
-  }
-  if (removed.length === 0 && configKeysDropped.length === 0) return null;
-  return { removed, configKeysDropped };
-}
+var startedAt = Date.now();
+for (; ; ) {
+  await sleep(WATCHER_POLL_MS);
+  const state = await readActiveState(repoRoot, flowName).catch(() => null);
+  if (!state) continue;
+  if (flowId && state.flow_id !== flowId) continue;
+  if (sessionId && state.last_session_id !== null && state.last_session_id !== sessionId) continue;
+  if (Date.now() - startedAt > WATCHER_MAX_LIFETIME_MS) {
+    process.stdout.write(
+      `${WATCHDOG_LABEL} \u505C\u6EDE\u81EA\u68C0\u5DF2\u8FD0\u884C\u6EE1 12 \u5C0F\u65F6\uFF0C\u81EA\u884C\u9000\u51FA\u3002'${flowName}' \u4ECD\u5728\u8FDB\u884C\uFF0C\u7528 Bash \u91CD\u65B0\u8D77\u4E00\u4E2A\uFF08\`run_in_background: true\`\uFF09\uFF1A
 
-// src/lib/session-handler.ts
-async function handleSessionStart(input2) {
-  const { cwd, session_id, model } = input2;
-  await gcRegistry().catch(() => {
+    ` + watcherCommand(repoRoot, flowName, state.flow_id, sessionId) + "\n"
+    );
+    break;
+  }
+  const config = await loadFlowConfig(repoRoot, flowName).catch(() => null);
+  if (!config) continue;
+  const w = readWatchdog(state);
+  const lastStopAt = w.last_stop_at ? Date.parse(w.last_stop_at) : NaN;
+  const lastActivityAt = w.last_activity_at ? Date.parse(w.last_activity_at) : NaN;
+  const verdict = decideStall({
+    now: Date.now(),
+    lastStopAt: Number.isNaN(lastStopAt) ? null : lastStopAt,
+    lastActivityAt: Number.isNaN(lastActivityAt) ? null : lastActivityAt,
+    background: w.background,
+    gatePending: isGatePending(readSignal(repoRoot, flowName), config, state.current_stage),
+    nudgesThisStage: w.nudges_this_stage,
+    config: resolveWatchdogConfig(config.watchdog)
   });
-  const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
-  if (!active) return null;
-  const { flowName, state, repoRoot } = active;
-  const foreign = isForeignCheckout(active, cwd);
-  try {
-    await appendLog(repoRoot, flowName, session_id, `SESSION source=${input2.source} stage=${state.current_stage}`);
-    if (foreign) {
-      await appendLog(repoRoot, flowName, session_id, `SESSION_FOREIGN_CHECKOUT anchor=${repoRoot}`);
-      const stateDirOfOwner = dirname3(activeJsonPath(repoRoot, flowName));
-      return {
-        systemMessage: `[ai-flow:${flowName}] \u8BE5 flow \u7684\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA\uFF0C\u672C session \u4E0D\u53D7\u5B83\u7EA6\u675F\uFF08\u53EF\u6B63\u5E38\u6539\u672C\u68C0\u51FA\uFF09`,
-        additionalContext: [
-          `[ai-flow] \u672C\u4ED3\u5E93\u7684**\u53E6\u4E00\u4E2A\u68C0\u51FA**\u6B63\u5728\u8FDB\u884C\u6D41\u7A0B '${flowName}'\uFF1A`,
-          `    \u672C session \u7684 cwd\uFF1A${cwd}`,
-          `    \u8BE5 flow \u7684\u951A\u70B9\uFF1A  ${repoRoot}`,
-          `\u4E24\u8005\u662F\u540C\u4E00\u4E2A git \u4ED3\u5E93\u7684\u4E0D\u540C\u68C0\u51FA\uFF08git worktree\uFF09\uFF0C\u662F\u4E24\u4EFD\u72EC\u7ACB\u7684\u5DE5\u4F5C\u526F\u672C\u3002`,
-          ``,
-          `\u21D2 **\u672C session \u4E0D\u53D7\u90A3\u6761 flow \u7EA6\u675F**\uFF1A\u672C\u68C0\u51FA\u7684\u6587\u4EF6\u53EF\u4EE5\u6B63\u5E38\u4FEE\u6539\uFF0C\u4E0D\u5FC5\u4E3A\u5B83\u505A\u4EFB\u4F55\u4E8B\u3002`,
-          `   \u4ECD\u7136\u88AB\u62E6\u7684\u53EA\u6709\u4E24\u7C7B\uFF1A\u6539\u4EFB\u610F\u68C0\u51FA\u4E0B '.ai-flow/${flowName}/' \u91CC\u7684\u63A7\u5236\u9762\u6587\u4EF6\uFF08stage \u63D0\u793A\u8BCD /`,
-          `   config / \u811A\u672C / signal\uFF09\uFF0C\u4EE5\u53CA\u5728\u672C\u68C0\u51FA\u6267\u884C\u4F1A\u4F5C\u7528\u5230\u5BF9\u65B9\u951A\u70B9\u7684\u6D41\u7A0B\u547D\u4EE4\u3002`,
-          ``,
-          `\u26D4 \u4E0D\u8981\u5728\u672C\u68C0\u51FA\u6267\u884C '${flowName} abort'/'approve'/'resume'\uFF1A\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728 ${repoRoot} \u4E0A\u3002`,
-          `   \u8981\u64CD\u4F5C\u90A3\u6761 flow\uFF0C\u53BB\u5B83\u81EA\u5DF1\u7684\u68C0\u51FA\u91CC\u64CD\u4F5C\u3002`,
-          ``,
-          `\u5982\u679C\u5F00\u53D1\u8005\u60F3\u5728**\u672C\u68C0\u51FA**\u8DD1\u4E00\u6761\u81EA\u5DF1\u7684 flow\uFF1A'${flowName} start' \u5728\u8FD9\u91CC\u4ECD\u4F1A\u88AB\u62D2\uFF08\u89E3\u6790\u4F1A\u843D\u5230\u5BF9\u65B9`,
-          `\u951A\u70B9\uFF09\u3002\u505A\u6CD5\u662F\u5148\u628A\u5BF9\u65B9\u7684\u6D41\u7A0B\u72B6\u6001\u632A\u8D70\uFF0C\u518D\u5728\u672C\u68C0\u51FA start\uFF0C\u7136\u540E\u632A\u56DE\u6765\uFF1A`,
-          `     mv ${stateDirOfOwner} ${stateDirOfOwner}.parked`,
-          `   \u26A0\uFE0F \u632A\u56DE\u4E4B\u540E\u5B83\u7684 "last_session_id" \u4ECD\u6307\u5411\u90A3\u4E2A\u5DF2\u7ECF\u4E0D\u5728\u7684 session\uFF0C\u8981\u63A5\u7BA1\u5F97\u5148\u628A\u8BE5\u5B57\u6BB5\u6539\u6210 null\u3002`
-        ].join("\n")
-      };
-    }
-    if (state.last_session_id && state.last_session_id !== session_id) {
-      await appendLog(repoRoot, flowName, session_id, `SESSION_READONLY owner=${state.last_session_id}`);
-      const activeFile = activeJsonPath(repoRoot, flowName);
-      const statusLine2 = `[ai-flow:${flowName}] \u5DE5\u7A0B\u8FDB\u884C\u4E2D\uFF0C\u672C session \u53EA\u8BFB\uFF08\u7981\u6B62\u4FEE\u6539\u9879\u76EE\u4E0E\u6D41\u7A0B\u547D\u4EE4\uFF09`;
-      const lines = [
-        `[ai-flow] \u5F53\u524D\u5DE5\u7A0B\u5DF2\u5728\u8FDB\u884C\u6D41\u7A0B '${flowName}'\uFF08\u7531\u53E6\u4E00 session \u63A7\u5236\uFF09\u3002`,
-        ``,
-        `\u4E3A\u907F\u514D\u591A session \u5E76\u53D1\u6539\u52A8\u51B2\u7A81\uFF0C\u672C session \u4EC5\u53EF\u8BFB\u53D6\u3001\u68C0\u7D22\u3001\u56DE\u7B54\u5173\u4E8E\u672C\u9879\u76EE\u7684\u95EE\u9898\uFF0C`,
-        `\u7981\u6B62\u4FEE\u6539\u672C\u9879\u76EE\u6587\u4EF6\uFF08Edit/Write/NotebookEdit \u5C06\u88AB\u62D2\u7EDD\uFF09\uFF0C\u4E5F\u4E0D\u8981\u6267\u884C\u4EFB\u4F55 ai-flow \u6D41\u7A0B\u547D\u4EE4\u3002`,
-        ``
-      ];
-      lines.push(
-        `\u5F53\u7528\u6237\u8981\u6C42\u4FEE\u6539\u672C\u9879\u76EE\u65F6\uFF0C\u8BF7\u5982\u5B9E\u544A\u77E5\uFF1A\u6539\u52A8\u9700\u5728\u63A7\u5236\u8BE5\u6D41\u7A0B\u7684 session \u4E2D\u8FDB\u884C\uFF1B`,
-        `\u82E5\u90A3\u4E2A session \u5DF2\u7ED3\u675F\u3001\u9700\u7531\u672C session \u63A5\u7BA1\u6D41\u7A0B\uFF0C\u6267\u884C /clear \u5373\u53EF\u63A5\u7BA1`,
-        `\uFF08\u5982\u786E\u8BA4\u539F session \u5DF2\u4E0D\u5B58\u5728\u5374\u4ECD\u88AB\u9501\u5B9A\uFF0C\u5148\u6253\u5F00 ${activeFile}\uFF0C`,
-        `\u628A "last_session_id" \u6539\u4E3A null \u4FDD\u5B58\uFF0C\u518D /clear\uFF09\u3002`
-      );
-      return { additionalContext: lines.join("\n"), systemMessage: statusLine2 };
-    }
-    try {
-      const pruned = pruneLegacyInstall(repoRoot, flowName);
-      if (pruned) {
-        await appendLog(
-          repoRoot,
-          flowName,
-          session_id,
-          `LEGACY_PRUNED entries=${pruned.removed.join(",") || "none"} config_dropped=${pruned.configKeysDropped.join(",") || "none"}`
-        );
-      }
-    } catch {
-    }
-    const isNewSession = state.last_session_id !== session_id;
-    const isClear = input2.source === "compact" || input2.source === "clear";
-    await patchActiveState(repoRoot, flowName, (cur) => {
-      const historyIds = [...cur.history_session_ids ?? []];
-      if (isNewSession && !historyIds.includes(session_id)) historyIds.push(session_id);
-      const patch = {
-        last_session_id: session_id,
-        history_session_ids: historyIds,
-        ...input2.source === "startup" && { context_size: contextWindowForModel(model) }
-      };
-      if (isNewSession || isClear) {
-        patch.context_wrap_up = { at_pct: null };
-        if (isNewSession || input2.source === "clear") patch.watchdog = emptyWatchdog();
-        patch.first_prompt_handled = false;
-      }
-      return patch;
-    });
-    bindSession(session_id, repoRoot, flowName);
-    const config = await loadFlowConfig(repoRoot, flowName);
-    const stageCfg = getStageConfig(config, state.current_stage);
-    const signal = readSignal(repoRoot, flowName);
-    const expectedNext = nextStage(config, state.current_stage);
-    const expectedSignalContent = expectedNext !== null ? expectedNext : "flow-complete";
-    const isSignalValid = signal === "done";
-    const isFlowComplete = signal === "flow-complete" && expectedNext === null;
-    const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
-    if (isGatePending(signal, config, state.current_stage)) {
-      await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
-      const statusLine2 = flowStatusLine({
-        flowName,
-        stageId: state.current_stage,
-        flowId: state.flow_id,
-        gatePending: true,
-        recovered: true
-      });
-      const isTerminal = expectedNext === null;
-      const templatePath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
-      let renderedForRead = null;
-      let templateReadable = true;
-      try {
-        renderedForRead = renderPrompt(readFileSync6(templatePath, "utf-8"), repoRoot, flowName);
-      } catch {
-        templateReadable = false;
-      }
-      const materialized = renderedForRead ? materializeRenderedPrompt(repoRoot, flowName, state.current_stage, renderedForRead) : null;
-      const stagePromptPath2 = materialized ?? templatePath;
-      const lines = [
-        `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0CStage '${state.current_stage}' \u5DF2\u63D0\u4EA4\uFF0C\u7B49\u5F85\u7528\u6237\u786E\u8BA4\u3002`,
-        ``,
-        `Signal \u5DF2\u5199\u5165\u4F46\u7528\u6237\u5C1A\u672A\u6267\u884C approve\u3002`,
-        isTerminal ? `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve\uFF08\u7EC8\u7AEF\u9636\u6BB5\uFF0Capprove \u540E\u6D41\u7A0B\u7ED3\u675F\uFF09` : `\u63D0\u9192\u7528\u6237\u68C0\u67E5 '${state.current_stage}' \u7684\u4EA7\u7269\u540E\u6267\u884C\uFF1A${flowName} approve`,
-        ``,
-        `\u26A0\uFE0F \u672C\u6B21\u6CE8\u5165**\u4E0D\u542B**\u672C stage \u7684\u63D0\u793A\u8BCD\u6B63\u6587\u3002\u5F00\u53D1\u8005\u5728 gate \u4E0A\u63D0\u51FA\u4EFB\u4F55\u4FEE\u6539\u3001\u6216\u4F60\u8981\u505A approve \u4E4B\u540E\u7684\u6536\u5C3E\u52A8\u4F5C\u4E4B\u524D\uFF0C**\u5148 Read \u8FD9\u4E2A\u6587\u4EF6**\u5E76\u7167\u5B83\u6267\u884C\uFF1A`,
-        stagePromptPath2,
-        materialized ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002\uFF09` : templateReadable ? `\u26A0\uFE0F \u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF08\u6E32\u67D3\u526F\u672C\u843D\u76D8\u5931\u8D25\uFF09\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u4E0A\u9762 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002` : `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u6587\u4EF6\u8BFB\u4E0D\u51FA\u6765\uFF08\u53EF\u80FD\u88AB\u6539\u540D\u6216\u5220\u4E86\uFF09\u3002\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84 Read \u4F1A\u5931\u8D25\u2014\u2014\u8FD9\u4E0D\u662F\u78C1\u76D8\u95EE\u9898\uFF0C\u662F flow \u5B9A\u4E49\u4E0E active.json \u91CC\u7684 stage id \u5BF9\u4E0D\u4E0A\u3002\u5148\u628A\u5B83\u4FEE\u597D\uFF0C\u522B\u51ED\u8BB0\u5FC6\u5F80\u4E0B\u505A\u3002`,
-        isTerminal ? `\u26D4 \u7EC8\u7AEF stage \u7684 approve \u540E\u52A8\u4F5C\u53EA\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u91CC\uFF0C\u5F15\u64CE\u7684\u6D41\u7A0B\u5B8C\u6210\u6D88\u606F\u4E0D\u4F1A\u91CD\u590D\u5B83\uFF08\u5B83\u53EA\u8BF4\u300C\u603B\u7ED3\u4EA7\u51FA\u3001\u5EFA\u8BAE\u4E0B\u4E00\u6B65\u300D\uFF09\u2014\u2014\u4E0D\u8BFB\u5C31\u52A8\u624B\u4F1A\u9759\u9ED8\u6F0F\u6389\u3002` : `\u26A0\uFE0F \u5728 gate \u4E0A\u6539\u4E86\u4E0A\u6E38\u4EA7\u7269\u65F6\uFF0C\u4ECE\u5B83\u6D3E\u751F\u7684\u4E0B\u6E38\u4EA7\u7269 / \u89C6\u56FE\u5FC5\u987B\u8DDF\u7740\u540C\u6B65\uFF0C\u89C4\u5219\u5199\u5728\u4E0A\u9762\u90A3\u4EFD\u63D0\u793A\u8BCD\u4E0E\u5B83\u8DEF\u7531\u5230\u7684 references \u91CC\uFF0C\u6F0F\u4E86\u4E0D\u4F1A\u6709\u4EFB\u4F55\u4E1C\u897F\u62A5\u9519\u3002`,
-        ``,
-        `\u5982\u9700\u4FEE\u6539\uFF0C\u7EE7\u7EED\u8BA8\u8BBA\uFF0C\u5B8C\u6210\u540E\u91CD\u65B0\u5199\u5165 signal\u3002`,
-        isTerminal ? `\u4E0D\u8981\u64C5\u81EA\u7ED3\u675F\u6D41\u7A0B\uFF0C\u7B49\u5F85\u5F00\u53D1\u8005 approve\u3002` : `\u4E0D\u8981\u5F00\u59CB\u4E0B\u4E00\u9636\u6BB5\u5DE5\u4F5C\u3002`
-      ];
-      return {
-        // The materialized copy already carries writtenDocLengthNote (renderPrompt adds it).
-        // Only the degraded template-pointer path needs it appended here.
-        additionalContext: pathsPreamble + lines.join("\n") + (materialized ? "" : "\n" + writtenDocLengthNote()),
-        systemMessage: statusLine2
-      };
-    }
-    if (isFlowComplete && !stageCfg.completion.gate) {
-      await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_COMPLETE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
-      return { additionalContext: pathsPreamble + result.additionalContext };
-    }
-    if (isSignalValid && !isGatePending(signal, config, state.current_stage)) {
-      await appendLog(repoRoot, flowName, session_id, `SESSION_SELF_HEAL_ADVANCE stage=${state.current_stage}`);
-      const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
-      const base = { additionalContext: pathsPreamble + result.additionalContext };
-      if (!result.terminal && expectedNext) {
-        return { ...base, systemMessage: flowStatusLine({ flowName, stageId: expectedNext, flowId: state.flow_id, gatePending: false, recovered: false }) };
-      }
-      return base;
-    }
-    await appendLog(repoRoot, flowName, session_id, `SESSION_NORMAL stage=${state.current_stage}`);
-    const promptPath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
-    const assemble = (body) => pathsPreamble + [
-      `[ai-flow] \u6D41\u7A0B '${flowName}' \u6062\u590D\u4E2D\uFF0C\u5F53\u524D\u5904\u4E8E '${state.current_stage}'\u3002`,
-      ``,
-      `\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`,
-      body,
-      `\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`,
-      ``,
-      `\u9636\u6BB5\u5B8C\u6210\u540E\uFF0C\u5C06 'done' \u5199\u5165 signal \u6587\u4EF6\u89E6\u53D1\u63A8\u8FDB\uFF08\u5F15\u64CE\u81EA\u52A8\u8BA1\u7B97\u4E0B\u4E00\u6B65\uFF09\u3002`
-    ].join("\n");
-    const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
-    let promptContent = "";
-    if (existsSync7(promptPath)) {
-      try {
-        promptContent = injectableStagePrompt(
-          renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
-          promptPath,
-          assembledOverhead(assemble) + gateNote.length,
-          (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
-        );
-      } catch {
-      }
-    }
-    promptContent += gateNote;
-    const statusLine = flowStatusLine({
+  if (!verdict.stalled) continue;
+  let spent = 0;
+  let lostRace = false;
+  const written = await patchActiveState(repoRoot, flowName, (cur) => {
+    const cw = readWatchdog(cur);
+    lostRace = withinDedupeWindow(cw.last_nudge_at, Date.now());
+    if (lostRace) return {};
+    spent = cw.nudges_this_stage + 1;
+    const next = {
+      ...cw,
+      nudges_this_stage: spent,
+      last_nudge_at: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    return { watchdog: next };
+  }).catch(() => null);
+  if (!written) continue;
+  if (lostRace) continue;
+  await appendLog(
+    repoRoot,
+    flowName,
+    sessionId || "watchdog",
+    `WATCHDOG_NUDGE stage=${state.current_stage} idle_min=${Math.round(verdict.idleMs / 6e4)} count=${spent}/${resolveWatchdogConfig(config.watchdog).cap}`
+  ).catch(() => {
+  });
+  process.stdout.write(
+    nudgeText({
       flowName,
       stageId: state.current_stage,
-      flowId: state.flow_id,
-      gatePending: false,
-      recovered: true
-    });
-    return { additionalContext: assemble(promptContent), systemMessage: statusLine };
-  } catch (e) {
-    try {
-      await appendLog(repoRoot, flowName, session_id, `ERROR session: ${truncateError(e)}`);
-    } catch {
-    }
-    return null;
-  }
-}
-
-// src/hooks/session.ts
-var raw = (() => {
-  try {
-    return readFileSync7(0, "utf-8");
-  } catch {
-    return "{}";
-  }
-})();
-var input = (() => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-})();
-try {
-  const result = await handleSessionStart(input);
-  if (result) {
-    const out = {
-      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: result.additionalContext }
-    };
-    if (result.systemMessage) out["systemMessage"] = result.systemMessage;
-    process.stdout.write(JSON.stringify(out));
-  }
-} catch (e) {
-  process.stderr.write(`[ai-flow session error] ${String(e)}
-`);
+      idleMs: verdict.idleMs,
+      remaining: verdict.remaining,
+      wrapUpPct: state.context_wrap_up.at_pct,
+      rearmCommand: watcherCommand(repoRoot, flowName, state.flow_id, sessionId)
+    }) + "\n"
+  );
+  break;
 }

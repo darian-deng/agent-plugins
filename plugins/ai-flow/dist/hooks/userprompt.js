@@ -4229,10 +4229,6 @@ function resolveDocsPaths(paths, flowId) {
 }
 
 // src/lib/format.ts
-function truncateError(e, max = 120) {
-  const s = String(e).replace(/\n/g, " ");
-  return s.length > max ? s.slice(0, max - 3) + "..." : s;
-}
 function flowStatusLine(opts) {
   const prefix = opts.recovered ? "\u6062\u590D \xB7 " : "";
   const gate = opts.gatePending ? " \xB7 gate \u5F85\u786E\u8BA4" : "";
@@ -4955,16 +4951,18 @@ current_stage: ${firstStage.id}
 import { existsSync as existsSync9, readFileSync as readFileSync6, unlinkSync as unlinkSync3 } from "fs";
 
 // src/lib/watchdog.ts
-var WATCHDOG_SENTINEL = "[ai-flow:watchdog]";
 var DEFAULT_IDLE_MINUTES = 5;
+var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
 var DEFAULT_NUDGE_CAP = 3;
-var MAX_CRON_ASKS = 3;
+var MAX_ARM_ASKS = 3;
+var ACTIVITY_STALE_MS = 15 * 6e4;
 function emptyWatchdog() {
   return {
     last_stop_at: null,
+    last_activity_at: null,
     background: false,
-    cron_seen: false,
-    cron_asks: 0,
+    watcher_seen: false,
+    arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
   };
@@ -4979,58 +4977,6 @@ function resolveWatchdogConfig(cfg, env = process.env) {
     idleMs: (cfg?.idle_minutes ?? DEFAULT_IDLE_MINUTES) * 6e4,
     cap: DEFAULT_NUDGE_CAP
   };
-}
-function decideTick(f) {
-  if (!f.config.enabled) {
-    return { nudge: false, note: "watchdog \u5DF2\u5173\u95ED\uFF0C\u8FD9\u6761\u5B9A\u65F6\u81EA\u68C0\u53EF\u4EE5\u5220\u6389\uFF08CronList \u2192 CronDelete\uFF09" };
-  }
-  if (f.lastStopAt === null) {
-    return { nudge: false, note: "\u672C session \u8FD8\u6CA1\u7ED3\u675F\u8FC7\u56DE\u5408\uFF0C\u65E0\u4ECE\u5224\u65AD\u505C\u6EDE" };
-  }
-  if (f.gatePending) {
-    return { nudge: false, note: "\u5728\u7B49\u5F00\u53D1\u8005 approve\uFF0C\u505C\u4E0B\u6765\u662F\u5BF9\u7684" };
-  }
-  if (f.background) {
-    return { nudge: false, note: "\u4E0A\u4E00\u8F6E\u7ED3\u675F\u65F6\u8FD8\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u7B49\u5B83\u628A\u4F60\u53EB\u9192" };
-  }
-  const idleMs = f.now - f.lastStopAt;
-  if (idleMs < f.config.idleMs) {
-    return {
-      nudge: false,
-      note: `\u521A\u505C\u4E0B ${Math.round(idleMs / 1e3)} \u79D2\uFF0C\u672A\u5230 ${Math.round(f.config.idleMs / 6e4)} \u5206\u949F\u9608\u503C`
-    };
-  }
-  if (f.nudgesThisStage >= f.config.cap) {
-    return {
-      nudge: false,
-      note: `\u672C stage \u5DF2\u50AC ${f.nudgesThisStage}/${f.config.cap} \u6B21\uFF0C\u4E0D\u518D\u50AC\uFF08\u5F00\u53D1\u8005\u4E00\u8BF4\u8BDD\u5C31\u6E05\u96F6\uFF09`
-    };
-  }
-  return { nudge: true, idleMs, remaining: f.config.cap - f.nudgesThisStage - 1 };
-}
-function nudgeText(opts) {
-  const mins = Math.round(opts.idleMs / 6e4);
-  const lines = [
-    `${WATCHDOG_SENTINEL} \u8FD9\u662F\u5F15\u64CE\u6392\u7684\u5B9A\u65F6\u81EA\u68C0\uFF08\u672C session \u81EA\u5DF1\u7684 cron\uFF09\uFF0C**\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD**\u3002`,
-    ``,
-    `\u673A\u68B0\u4E8B\u5B9E\uFF1A\u6D41\u7A0B '${opts.flowName}' \u505C\u5728 stage '${opts.stageId}'\uFF0C\u5DF2\u9759\u7F6E\u7EA6 ${mins} \u5206\u949F\uFF1B`,
-    `\u6CA1\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u4E5F\u6CA1\u6709\u5F85\u6279\u7684 gate \u2014\u2014 \u4E5F\u5C31\u662F\u8BF4\u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u4F1A\u5728\u5C06\u6765\u628A\u4F60\u53EB\u9192\u3002`,
-    ``,
-    `\u5148\u5224\u65AD\u8FD9\u6B21\u505C\u4E0B\u6765\u662F\u5426\u5408\u7406\uFF0C\u4E8C\u9009\u4E00\uFF1A`,
-    `\xB7 **\u5728\u7B49\u5F00\u53D1\u8005**\uFF08\u95EE\u9898\u5DF2\u7ECF\u6446\u7ED9\u4ED6\u4E86\u3001\u5361\u5728\u5FC5\u987B\u4ED6\u62CD\u677F\u6216\u4ED6\u53BB\u771F\u673A\u9A8C\u8BC1\u7684\u70B9\u4E0A\u3001\u6216\u8005\u4ED6\u521A\u660E\u786E\u53EB\u505C\uFF09`,
-    `  \u2192 \u56DE\u4E00\u884C\u8BF4\u6E05\u5728\u7B49\u4EC0\u4E48\uFF0C\u7136\u540E\u7ED3\u675F\u56DE\u5408\u3002\u4E0D\u8981\u91CD\u590D\u89E3\u91CA\uFF0C\u4E0D\u8981\u91CD\u65B0\u5F00\u5DE5\u3002`,
-    `\xB7 **\u5176\u5B83\u60C5\u51B5**\uFF08\u63D2\u66F2\u5DF2\u7ECF\u8BA8\u8BBA\u5B8C/\u6539\u5B8C\uFF0C\u53EA\u662F\u6CA1\u56DE\u5230 flow\uFF09`,
-    `  \u2192 \u4E0D\u8981\u5411\u5F00\u53D1\u8005\u590D\u8FF0\u8BA1\u5212\uFF0C\u76F4\u63A5\u63A5\u7740 stage '${opts.stageId}' \u5F80\u4E0B\u505A\u3002`,
-    ``,
-    `\u672C stage \u8FD8\u5269 ${opts.remaining} \u6B21\u81EA\u68C0\uFF08\u5F00\u53D1\u8005\u4E00\u8BF4\u8BDD\u5C31\u6E05\u96F6\uFF09\u3002`
-  ];
-  if (opts.wrapUpPct !== null) {
-    lines.push(
-      ``,
-      `\u26A0\uFE0F context \u5DF2\u5728 ${opts.wrapUpPct}% \u8FDB\u5165\u6536\u5C3E\uFF1A\u5982\u679C\u4EA4\u63A5\u6587\u6863\u8FD8\u6CA1\u843D\u76D8\uFF0C\u5148\u628A\u5B83\u5199\u5B8C\u518D\u505C\uFF0C\u522B\u8BA9\u8FD9\u4E00\u8F6E\u7684\u5224\u65AD\u548C\u5728\u98DE\u5B50\u4EE3\u7406\u7684\u72B6\u6001\u968F /clear \u4E00\u8D77\u4E22\u6389\u3002`
-    );
-  }
-  return lines.join("\n");
 }
 
 // src/lib/advance-stage.ts
@@ -5424,12 +5370,12 @@ async function handleStatus(repoRoot, flowName) {
   const wdCfg = resolveWatchdogConfig(watchdogCfg);
   if (!wdCfg.enabled) {
     lines.push("", "watchdog: \u5DF2\u5173\u95ED\uFF08config.watchdog.enabled=false \u6216 AI_FLOW_WATCHDOG=0\uFF09");
-  } else if (w.cron_seen) {
-    lines.push("", `watchdog: \u5DF2\u6B66\u88C5\uFF0C\u9759\u7F6E\u9608\u503C ${Math.round(wdCfg.idleMs / 6e4)} \u5206\u949F\uFF0C\u672C stage \u5DF2\u50AC ${w.nudges_this_stage}/${wdCfg.cap} \u6B21` + (w.last_nudge_at ? `\uFF08\u6700\u8FD1\u4E00\u6B21 ${w.last_nudge_at}\uFF09` : ""));
-  } else if (w.cron_asks >= MAX_CRON_ASKS) {
-    lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u5DF2\u8BA9\u672C session \u5EFA\u5B9A\u65F6\u81EA\u68C0 ${w.cron_asks} \u6B21\u90FD\u6CA1\u5EFA\u6210\uFF0C\u4E0D\u518D\u91CD\u8BD5\u3002\u53EF\u80FD\u662F\u5BBF\u4E3B\u505C\u7528\u4E86\u5B9A\u65F6\u4EFB\u52A1\uFF08CLAUDE_CODE_DISABLE_CRON=1\uFF09\u3002\u505C\u6EDE\u4E0D\u4F1A\u88AB\u53D1\u73B0\u3002`);
+  } else if (w.watcher_seen) {
+    lines.push("", `watchdog: \u5DF2\u6B66\u88C5\uFF08\u540E\u53F0\u81EA\u68C0\u8FDB\u7A0B\u5728\u8DD1\uFF09\uFF0C\u9759\u7F6E\u9608\u503C ${Math.round(wdCfg.idleMs / 6e4)} \u5206\u949F\uFF0C\u672C stage \u5DF2\u50AC ${w.nudges_this_stage}/${wdCfg.cap} \u6B21` + (w.last_nudge_at ? `\uFF08\u6700\u8FD1\u4E00\u6B21 ${w.last_nudge_at}\uFF09` : ""));
+  } else if (w.arm_asks >= MAX_ARM_ASKS) {
+    lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u5DF2\u8BA9\u672C session \u8D77\u540E\u53F0\u81EA\u68C0 ${w.arm_asks} \u6B21\u90FD\u6CA1\u8D77\u6210\uFF0C\u4E0D\u518D\u91CD\u8BD5\u3002\u505C\u6EDE\u4E0D\u4F1A\u88AB\u53D1\u73B0\u3002`);
   } else {
-    lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u5B9A\u65F6\u81EA\u68C0\u8FD8\u6CA1\u5EFA\u8D77\u6765\uFF08\u5DF2\u63D0\u9192 ${w.cron_asks}/${MAX_CRON_ASKS} \u6B21\uFF0C\u4E0B\u6B21\u56DE\u5408\u7ED3\u675F\u518D\u63D0\u9192\uFF09`);
+    lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u540E\u53F0\u81EA\u68C0\u8FD8\u6CA1\u8D77\u6765\uFF08\u5DF2\u63D0\u9192 ${w.arm_asks}/${MAX_ARM_ASKS} \u6B21\uFF0C\u4E0B\u6B21\u56DE\u5408\u7ED3\u675F\u518D\u63D0\u9192\uFF09`);
   }
   return { action: "allow", additionalContext: lines.join("\n") };
 }
@@ -5491,88 +5437,6 @@ Run \`${flowName} status\` to check current progress.`
   return { action: "allow", additionalContext: lines.join("\n") };
 }
 
-// src/lib/watchdog-tick.ts
-function isWatchdogTick(prompt, source) {
-  if (source === "user") return false;
-  return prompt.trimStart().startsWith(WATCHDOG_SENTINEL);
-}
-function block(note) {
-  return {
-    decision: "block",
-    // Goes to the developer, never into the model's context. One line, because it
-    // prints on every suppressed tick — which is most of them — and that line is
-    // also the only way to tell "the watchdog is alive and saw nothing wrong" from
-    // "the watchdog is dead". A silent version of this feature is indistinguishable
-    // from a broken one.
-    reason: `[ai-flow:watchdog] ${note}`,
-    suppressOriginalPrompt: true
-  };
-}
-async function handleWatchdogTick(input2, active, cwd) {
-  const { session_id } = input2;
-  if (!active) {
-    return block("\u6D41\u7A0B\u5DF2\u7ED3\u675F\u6216\u5DF2\u4E2D\u6B62\uFF0C\u8FD9\u6761\u5B9A\u65F6\u81EA\u68C0\u53EF\u4EE5\u5220\u6389\uFF08CronList \u2192 CronDelete\uFF09");
-  }
-  const { flowName, state, repoRoot } = active;
-  if (state.last_session_id !== null && state.last_session_id !== session_id || isForeignCheckout(active, cwd)) {
-    return block(`\u672C session \u4E0D\u662F\u6D41\u7A0B '${flowName}' \u7684\u6267\u884C\u8005\uFF0C\u81EA\u68C0\u8DF3\u8FC7`);
-  }
-  try {
-    const config = await loadFlowConfig(repoRoot, flowName);
-    const cfg = resolveWatchdogConfig(config.watchdog);
-    const gatePending = isGatePending(readSignal(repoRoot, flowName), config, state.current_stage);
-    const w = readWatchdog(state);
-    const lastStopAt = w.last_stop_at ? Date.parse(w.last_stop_at) : NaN;
-    const decision = decideTick({
-      now: Date.now(),
-      lastStopAt: Number.isNaN(lastStopAt) ? null : lastStopAt,
-      background: w.background,
-      gatePending,
-      nudgesThisStage: w.nudges_this_stage,
-      config: cfg
-    });
-    if (!decision.nudge) {
-      return block(`${flowName}/${state.current_stage}\uFF1A${decision.note}`);
-    }
-    let spent = 0;
-    const written = await patchActiveState(repoRoot, flowName, (cur) => {
-      const cw = readWatchdog(cur);
-      spent = cw.nudges_this_stage + 1;
-      return {
-        watchdog: { ...cw, nudges_this_stage: spent, last_nudge_at: (/* @__PURE__ */ new Date()).toISOString() }
-      };
-    });
-    if (!written) {
-      return block("\u6D41\u7A0B\u5DF2\u7ED3\u675F\u6216\u5DF2\u4E2D\u6B62\uFF0C\u81EA\u68C0\u8DF3\u8FC7");
-    }
-    await appendLog(
-      repoRoot,
-      flowName,
-      session_id,
-      `WATCHDOG_NUDGE stage=${state.current_stage} idle_min=${Math.round(decision.idleMs / 6e4)} count=${spent}/${cfg.cap}`
-    );
-    return {
-      systemMessage: `[ai-flow:${flowName}] \u5DF2\u9759\u7F6E ${Math.round(decision.idleMs / 6e4)} \u5206\u949F\uFF0C\u89E6\u53D1\u505C\u6EDE\u81EA\u68C0\uFF08${spent}/${cfg.cap}\uFF09`,
-      hookSpecificOutput: {
-        hookEventName: "UserPromptSubmit",
-        additionalContext: nudgeText({
-          flowName,
-          stageId: state.current_stage,
-          idleMs: decision.idleMs,
-          remaining: decision.remaining,
-          wrapUpPct: state.context_wrap_up.at_pct
-        })
-      }
-    };
-  } catch (e) {
-    try {
-      await appendLog(repoRoot, flowName, session_id, `ERROR watchdog-tick: ${truncateError(e)}`);
-    } catch {
-    }
-    return block("\u81EA\u68C0\u5224\u5B9A\u5931\u8D25\uFF08flow \u914D\u7F6E\u8BFB\u4E0D\u51FA\u6765\uFF09\uFF0C\u672C\u6B21\u8DF3\u8FC7");
-  }
-}
-
 // src/lib/userprompt-handler.ts
 function makeOutput(additionalContext, permissionDecision, reason) {
   const o = {
@@ -5609,12 +5473,16 @@ async function handleUserPrompt(input2) {
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
   const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
   const foreign = !!active && isForeignCheckout(active, cwd);
-  if (isWatchdogTick(prompt, input2.source)) {
-    return handleWatchdogTick(input2, active, cwd);
-  }
-  if (active && !isNonOwner && !foreign && readWatchdog(active.state).nudges_this_stage > 0) {
+  if (active && !isNonOwner && !foreign) {
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
-      watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 }
+      watchdog: {
+        ...readWatchdog(cur),
+        last_activity_at: (/* @__PURE__ */ new Date()).toISOString(),
+        // Unconditionally, not "if the entry-time read saw any spent": a watcher can
+        // claim a nudge between this hook reading the state and taking the lock, and
+        // that one would survive the developer's arrival.
+        nudges_this_stage: 0
+      }
     }));
   }
   const knownFlows = await discoverFlows(repoRoot);

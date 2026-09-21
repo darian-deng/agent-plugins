@@ -4579,12 +4579,16 @@ function resolveDocsPaths(paths, flowId) {
 import { existsSync as existsSync6, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
 
 // src/lib/watchdog.ts
+var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
+var ACTIVITY_STAMP_THROTTLE_MS = 15e3;
+var ACTIVITY_STALE_MS = 15 * 6e4;
 function emptyWatchdog() {
   return {
     last_stop_at: null,
+    last_activity_at: null,
     background: false,
-    cron_seen: false,
-    cron_asks: 0,
+    watcher_seen: false,
+    arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
   };
@@ -4723,6 +4727,15 @@ async function handlePostTool(input2) {
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
   try {
+    if (!(state.last_session_id !== null && state.last_session_id !== session_id) && !isForeignCheckout(active, cwd)) {
+      const stampedAt = readWatchdog(state).last_activity_at;
+      const age = stampedAt ? Date.now() - Date.parse(stampedAt) : Infinity;
+      if (!(age >= 0 && age < ACTIVITY_STAMP_THROTTLE_MS)) {
+        await patchActiveState(repoRoot, flowName, (cur) => ({
+          watchdog: { ...readWatchdog(cur), last_activity_at: (/* @__PURE__ */ new Date()).toISOString() }
+        }));
+      }
+    }
     const rawFp = WRITE_TOOLS.has(tool_name) ? String(input2.tool_input?.["file_path"] ?? "") : "";
     const fp = rawFp === "" ? "" : rawFp.startsWith("/") ? rawFp : join6(repoRoot, rawFp);
     const markBase = markBasePath(repoRoot, flowName);
