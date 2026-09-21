@@ -155,14 +155,32 @@ const STRICT_TICKET_LINE = /^- \[([ xX])\] (T\d+)/;
 const done = [];
 let undone = 0;
 let inRealMachine = false;   // 光标是否落在 `## 待真机验证` 段内
+// `## 旁路修复` 段记的是**不属于本期**的顺手修（references/side-fix.md）：它们编号 `S<n>`、
+// commit 在自己的分支上、不参与本 stage 的任何配对。
+// 拦的是**票号**（`T<n>`）复选框出现在这个段里——`LOOSE_TICKET_LINE` 只认 `T\d`，所以
+// `- [x] S1` 这种写法门本来就看不见（不合规范，但无害）。而一个 `T<n>` 写进来会被当成真票，
+// 门去 base..HEAD 找属于它的 commit，报「已勾 ticket 没有自己的 commit」——那个方向对不上，
+// 排查要绕远路。与 `## 待真机验证` 同一个形态、同一个理由，所以同样显式拦下。
+let inSideFix = false;
 const seen = new Map();      // ticket 号 -> 首次出现行号，用于查重
 for (let i = 0; i < lines.length; i++) {
-  if (/^#{1,6}\s/.test(lines[i])) inRealMachine = /^##\s/.test(lines[i]) && /待真机验证/.test(lines[i]);
+  if (/^#{1,6}\s/.test(lines[i])) {
+    inRealMachine = /^##\s/.test(lines[i]) && /待真机验证/.test(lines[i]);
+    inSideFix = /^##\s/.test(lines[i]) && /旁路修复/.test(lines[i]);
+  }
   if (!LOOSE_TICKET_LINE.test(lines[i])) continue;
   if (inRealMachine) {
     err('`## 待真机验证` 段里出现了复选框写法（第 ' + (i + 1) + ' 行）: ' + lines[i].trim()
       + '\n    该段条目必须写成 `- T<n> — <一句话验什么>`（非复选框）——它登记的是"哪些票要真机验"，'
       + '不是 ticket 级完成项。写成复选框会与 ticket 判定混淆。');
+    process.exit(FAIL);
+  }
+  if (inSideFix) {
+    err('`## 旁路修复` 段里出现了复选框写法（第 ' + (i + 1) + ' 行）: ' + lines[i].trim()
+      + '\n    这个段登记的是**不属于本期**的顺手修（编号 S<n>，commit 在自己的分支上、不在 base..HEAD 里），'
+      + '条目必须写成 `- S<n> <一句话> — 写集: … — 去向: …`（非复选框）。'
+      + '\n    一个**票号**（T<n>）出现在这里会被当成一张真票，本门就会去 base..HEAD 找属于它的 commit，'
+      + '报出「已勾 ticket 没有自己的 commit」——那个方向是错的。它若真是本期的票，挪回票列表区。');
     process.exit(FAIL);
   }
   const m = STRICT_TICKET_LINE.exec(lines[i]);
@@ -444,12 +462,25 @@ const staleWt = wtRaw.split('\n')
   .map((l) => l.slice('worktree '.length).trim())
   .filter((p) => wtPrefixes.some((pre) => p.startsWith(pre)));
 if (staleWt.length > 0) {
+  // 旁路树（`<flow_id>-S<n>`，references/side-fix.md）混在里面时，处置方式是**相反**的：
+  // 它不属于本期、永远不回合，照下面那句 ff 做就是把它混进本期 squash——那正是它存在要
+  // 避免的事。所以分开说，别让一条笼统的「逐个 ff 回合」把它一起卷进去。
+  const sideWt = staleWt.filter((p) => /-S\d+$/.test(p));
+  const laneWt = staleWt.filter((p) => !/-S\d+$/.test(p));
   err('还有 ' + staleWt.length + ' 个未收口的 worktree（并行票没合回来 / 没拆掉）:\n'
     + staleWt.map((p) => '      ' + p).join('\n')
-    + '\n    怎么改：逐个确认该票已 `git merge --ff-only` 回合，然后 `git worktree remove <path>`。'
-    + '拆之前先在该 worktree 里跑 `git status --porcelain` 确认为空——里面若有未追踪文件'
-    + '（fixture / migration / 运行时读的 JSON），它们不在任何 commit 里，'
-    + '`--force` 拆掉就永久丢失，而本门与 stage-4 的 `git add -A` 都看不到另一棵工作树。');
+    + (laneWt.length > 0
+      ? '\n    票 / 车道树怎么改：逐个确认该票已 `git merge --ff-only` 回合，然后 `git worktree remove <path>`。'
+        + '拆之前先在该 worktree 里跑 `git status --porcelain` 确认为空——里面若有未追踪文件'
+        + '（fixture / migration / 运行时读的 JSON），它们不在任何 commit 里，'
+        + '`--force` 拆掉就永久丢失，而本门与 stage-4 的 `git add -A` 都看不到另一棵工作树。'
+      : '')
+    + (sideWt.length > 0
+      ? '\n    ⛔ 其中的 `-S<n>` 是**旁路修复**树（references/side-fix.md），处置方式相反：'
+        + '**不要 ff 回合**，那等于把本期之外的改动混进本期 squash。'
+        + '\n      用 `node <FD>/scripts/worktree.cjs --flow-dir <FR> park <flow_id> S<n>` 收树——它拆树但保留分支，'
+        + '分支的去向由开发者定（单独发 PR，或本期收口后自行合并）。'
+      : ''));
   process.exit(FAIL);
 }
 

@@ -72,6 +72,41 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     return { code: r.status ?? -1, stderr: r.stderr };
   }
 
+  it('`## 旁路修复` 段里出现票号复选框 → 拦下并说清真实原因', () => {
+    // 门只把 `- [x] T<n>` 认成 ticket 级行，所以 `- [x] S1` 它根本看不见（无害）。真正
+    // 危险的是把一个**票号**写进这个段：它会被当成一张真票，门去 base..HEAD 找属于它的
+    // commit，报「已勾 ticket 没有自己的 commit」——方向完全对不上。与 `## 待真机验证`
+    // 同形同因。
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    writeFileSync(
+      join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '# tickets\n\n- [x] T1 — impl one\n  - qc:done\n- [x] T2 — impl two\n  - qc:done\n'
+      + '\n## 旁路修复\n\n- [x] T9 顺手修的东西\n'
+    );
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).not.toBe(0);
+    // 报的是段内格式错、点名到行，而不是那条对不上方向的「已勾 ticket 没有自己的 commit」。
+    // （新文案里出现这半句是在解释「不拦会看到什么」，所以只能按开头这句断言。）
+    expect(r.stderr).toContain('`## 旁路修复` 段里出现了复选框写法');
+    expect(r.stderr).toContain('- [x] T9');
+  });
+
+  it('`## 旁路修复` 段用规定的非复选框写法 → 放行', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    writeFileSync(
+      join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '# tickets\n\n- [x] T1 — impl one\n  - qc:done\n- [x] T2 — impl two\n  - qc:done\n'
+      + '\n## 旁路修复\n\n- S1 顺手修的东西 — 写集: src/x.ts — 去向: sidefix/f1-S1 @abc1234\n'
+    );
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
   it('串行两笔 commit（每票 subject 含自己票号）→ 放行', () => {
     const { repo, flowDir, base } = makeRepo();
     commit(repo, 'one.txt', 'feat(T1): impl one');

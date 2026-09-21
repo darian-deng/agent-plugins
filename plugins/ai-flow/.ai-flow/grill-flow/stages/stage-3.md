@@ -18,6 +18,7 @@
 | `/clear` 后**背景**（目标/决策/边界）从哪读 · 走前写什么 | `handoff.md` |
 | 测试红 / `close` 报错 / 机器门报违规 | `recovery.md` |
 | 执行中还要加一张票 | `mid-flight-ticket.md` |
+| 发现与本期无关的问题、想现在就修 | `side-fix.md` |
 | 派实施代理（第一段） | `per-ticket-review.md` |
 | 实施回报了，派质量链代理（第二段） | `quality-chain.md` |
 | 想停下来问开发者（⛔ 不许直接问，三步在第 4 步） | `ask-before-asking.md` |

@@ -174,6 +174,92 @@ describe('grill-flow worktree.cjs', () => {
     });
   });
 
+  // 旁路修复（references/side-fix.md）是第三种名字形态，而它与票/车道的**处置方式相反**：
+  // 从 base 开叉、永不回合。这一组钉的是「加一种形态时容易漏掉的那些地方」——CR 实测过
+  // 四处漏网，每一处的失败都是 exit 0 的静默污染。
+  describe('旁路修复 S<n>', () => {
+    function openSide(anchor: string, repo: string, name = 'S1') {
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      return { base, r: run(anchor, 'open', 'f1', name, '--base', base, '--install', 'true') };
+    }
+
+    it('分支前缀是 sidefix/，不是 wt/', () => {
+      // stage-4 的完成条件里有一条 `git branch --list "wt/<flow_id>-*"` 要为空，照着清会把
+      // 旁路分支一起删掉——而它承载的修复还没合进任何地方。
+      const { anchor, repo } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(openSide(anchor, repo).r.code).toBe(0);
+      expect(git(repo, 'branch', '--list', 'sidefix/f1-S1')).toContain('sidefix/f1-S1');
+      expect(git(repo, 'branch', '--list', 'wt/f1-S1').trim()).toBe('');
+    });
+
+    it('--base 必填：漏了就会静默驮上本期全部改动', () => {
+      const { anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      const r = run(anchor, 'open', 'f1', 'S1', '--install', 'true');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('必须给 --base');
+    });
+
+    it('从 --base 开叉，不带本期的 commit', () => {
+      const { anchor, repo } = makeRepo({ anchorRel: '', anchorLock: true });
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      writeFileSync(join(repo, 'src', 'feat.txt'), 'feature\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'feat(T1)');
+      expect(run(anchor, 'open', 'f1', 'S1', '--base', base, '--install', 'true').code).toBe(0);
+      expect(git(repo, 'log', '--oneline', `${base}..sidefix/f1-S1`).trim()).toBe('');
+    });
+
+    it('拒绝 sync：它会把需求分支 rebase 进旁路树，而 park 查不出这种污染', () => {
+      const { anchor, repo } = makeRepo({ anchorRel: '', anchorLock: true });
+      openSide(anchor, repo);
+      const r = run(anchor, 'sync', 'f1', 'S1');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('不能 sync');
+    });
+
+    it('拒绝 close：ff 进需求分支就等于混进本期 squash', () => {
+      const { anchor, repo } = makeRepo({ anchorRel: '', anchorLock: true });
+      openSide(anchor, repo);
+      const r = run(anchor, 'close', 'f1', 'S1');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('不能 close');
+    });
+
+    it('park 拆树、留分支，需求分支一个 commit 都没多', () => {
+      const { anchor, repo, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      openSide(anchor, repo);
+      const wt = join(lanes, 'f1-S1');
+      writeFileSync(join(wt, 'src', 'a.txt'), 'fixed\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'fix(S1)');
+      const headBefore = git(repo, 'rev-parse', 'HEAD').trim();
+
+      const r = run(anchor, 'park', 'f1', 'S1');
+      expect(r.code).toBe(0);
+      expect(existsSync(wt)).toBe(false);
+      expect(git(repo, 'branch', '--list', 'sidefix/f1-S1')).toContain('sidefix/f1-S1');
+      expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(headBefore);
+    });
+
+    it('park 拒绝票与车道的名字（反方向的守卫）', () => {
+      const { anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      const r = run(anchor, 'park', 'f1', 'T1');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('park 只用于旁路修复');
+    });
+
+    it('status 不把旁路树当车道：分支名对、不劝人 sync', () => {
+      // 漏掉这处的表现是 status 打出一个**不存在**的分支名（硬拼 `wt/`）并判「NO(先 sync)」，
+      // 而图例说 NO 就去 sync——照做就是把本期灌进旁路分支。
+      const { anchor, repo } = makeRepo({ anchorRel: '', anchorLock: true });
+      openSide(anchor, repo);
+      const out = run(anchor, 'status', 'f1').stdout;
+      expect(out).toContain('sidefix/f1-S1');
+      expect(out).not.toContain('wt/f1-S1');
+      expect(out).toContain('旁路，不回合');
+    });
+  });
+
   // schedule.cjs 把「执行单位」从主观判据变成算出来的两个数字。它不碰 git，只读 tickets.md。
   describe('schedule.cjs（执行单位判定）', () => {
     function makeFlow(tickets: string, lanes = false): string {

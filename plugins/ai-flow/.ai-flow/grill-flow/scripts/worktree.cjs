@@ -5,9 +5,11 @@
 // 收口前的干净断言），它们是动作不是判断。写进提示词就是让编排器每批次记 5 条纪律；
 // 放这里，提示词只需要「开票用 `open`、收票用 `close`」。
 //
-//   node scripts/worktree.cjs open   <flow_id> <T<n>|R<n>> [--install "<cmd>"]   ← open 不认 --no-install
+//   node scripts/worktree.cjs open   <flow_id> <T<n>|R<n>|S<n>> [--base <sha>] [--install "<cmd>"]  ← open 不认 --no-install
+//                                                                  ↑ S<n>（旁路修复）必填
 //   node scripts/worktree.cjs sync   <flow_id> <T<n>|R<n>> [--no-install]
 //   node scripts/worktree.cjs close  <flow_id> <T<n>|R<n>> [--keep] [--no-install]
+//   node scripts/worktree.cjs park   <flow_id> <S<n>>            ← 旁路修复收树：不回合、留分支
 //   node scripts/worktree.cjs status <flow_id>
 //
 // status：一屏看全四条车道（ahead / dirty / 是否 HEAD 后继 / 待补依赖）。存在理由是这张表
@@ -336,16 +338,19 @@ const noInstall = process.argv.includes('--no-install');
 // flowDir 解析的第 4 级死掉——可恢复，但「留了例外的规则迟早被照着例外写」。
 const SELF = __filename;
 const USAGE = '用法（--flow-dir 紧跟脚本路径、在子命令之前）：\n'
-  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' open   <flow_id> <T<n>|R<n>> [--install "<cmd>"]\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' open   <flow_id> <T<n>|R<n>|S<n>> [--base <sha>] [--install "<cmd>"]\n'
+  + '        （S<n> = 旁路修复，--base 必填；见 references/side-fix.md）\n'
   + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' sync   <flow_id> <T<n>|R<n>> [--no-install]\n'
   + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' close  <flow_id> <T<n>|R<n>> [--keep] [--no-install]\n'
+  + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' park   <flow_id> <S<n>>\n'
   + '      node ' + SELF + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' status <flow_id>';
 if (!cmd || !flowId) die(USAGE);
 if (cmd !== 'status' && !ticket) die(USAGE);
-// `R<n>` = 一组一条长驻车道。⛔ 不要放宽成任意字符串：这个名字进 worktree 路径与分支名，
+// `R<n>` = 一组一条长驻车道；`S<n>` = 旁路修复（本期之外、写集与本期不相交的顺手修，
+// 见 references/side-fix.md）。⛔ 不要放宽成任意字符串：这个名字进 worktree 路径与分支名，
 // 而机器门⑤ 是按 `.worktrees/<flow_id>-` 前缀查残留的，形态失控会让残留查不出来。
-if (cmd !== 'status' && !/^[TR]\d+$/.test(ticket)) {
-  die('名字应形如 T3（一票一树）或 R1（一组一车道），收到: ' + ticket);
+if (cmd !== 'status' && !/^[TRS]\d+$/.test(ticket)) {
+  die('名字应形如 T3（一票一树）、R1（一组一车道）或 S1（旁路修复），收到: ' + ticket);
 }
 // flowId 同样进路径拼接与分支名。含 `/` 或 `..` 会让落点跑出 lanesRoot，并让机器门⑤ 与
 // abort 的「按 `<lanesRoot>/<flow_id>-` 前缀查残留」失效——那两处失效是静默的。
@@ -354,7 +359,24 @@ if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(flowId)) {
 }
 
 const name = `${flowId}-${ticket}`;
-const branch = `wt/${name}`;
+/** 旁路修复（references/side-fix.md）：不属于本期，永远不回合。 */
+const isSide = (t) => /^S\d+$/.test(t);
+/**
+ * 落点名 → 分支名。**唯一来源**，凡是要从树名反推分支的地方都得走它。
+ *
+ * 分支前缀由名字形态决定，没有额外的开关——忘记传开关的后果是静默且不可逆的：
+ * stage-4 的完成条件里有一条 `git branch --list "wt/<flow_id>-*"` 必须为空（票分支在
+ * stage-3 被刻意留着供重入判相位，squash 之后照着这条清），旁路分支若也叫 `wt/…` 就会在
+ * 那一步被一起删掉，而它承载的是**还没合进任何地方**的修复。`sidefix/` 让它躲开那条清理。
+ * 机器门⑤ 查的是 worktree 落点（`<flow_id>-` 前缀），与分支名无关，所以照旧生效。
+ *
+ * ⚠️ 这个函数是补出来的：`S<n>` 形态刚加进来时，`status` 与 `close` 的兄弟车道清单里
+ * 还各自硬拼着 `wt/${nm}`，于是旁路树被算出一个**不存在的分支名**——`status` 把它列成
+ * 「NO(先 sync)」、`close` 把它列进「必须先 sync」的清单，而照着做就是把本期灌进旁路分支。
+ * 两处都是 exit 0 的静默错误。凡新增一种名字形态，先找全反推分支的地方。
+ */
+const branchOf = (nm) => `${isSide(nm.slice(flowId.length + 1) || nm) ? 'sidefix' : 'wt'}/${nm}`;
+const branch = branchOf(name);
 
 // 落点在仓库**同级**目录（理由见文件头）。gitRoot 问 git 而不是从锚点推：monorepo
 // 子项目锚点下两者不同，按锚点算会把落点放回仓库内、把上面那个缺陷带回来。
@@ -394,17 +416,20 @@ if (cmd === 'status') {
   say(`需求分支 ${target.out}`);
   for (const p of paths.sort()) {
     const nm = basename(p);
-    const br = `wt/${nm}`;
+    const br = branchOf(nm);
+    const side = isSide(nm.slice(flowId.length + 1) || nm);
     const ahead = gitQuiet(['rev-list', '--count', `HEAD..${br}`]);
     const st = gitQuiet(['status', '--porcelain', '-uall'], { cwd: p });
-    const desc = gitQuiet(['merge-base', '--is-ancestor', 'HEAD', br]).ok;
+    // 旁路树按定义就**不是** HEAD 的后继（它从 base 开叉、永不回合），所以这一列对它恒为
+    // NO，而 NO 的图例是「先 sync」——照做就是把本期全部改动灌进旁路分支。不判，直接标形态。
+    const desc = side ? true : gitQuiet(['merge-base', '--is-ancestor', 'HEAD', br]).ok;
     // 「待补依赖」= 该树还没 rebase 进来的那些 commit 里动过的依赖清单。已经是 HEAD 后继
     // 的树没有待补部分；不是后继的树，sync 之后就会把这些带进来、`node_modules` 随即陈旧。
     const missing = desc ? [] : (depsChanged(br, 'HEAD') || []);
     say(`  ${nm.slice(flowId.length + 1) || nm}  ${br}`
       + `  ahead:${ahead.ok ? ahead.out : '?'}`
       + `  dirty:${st.ok ? (st.out ? 'YES' : 'no') : '?'}`
-      + `  是否HEAD后继:${desc ? 'yes' : 'NO(先 sync)'}`
+      + `  是否HEAD后继:${side ? '—(旁路，不回合)' : desc ? 'yes' : 'NO(先 sync)'}`
       + `  待补依赖:${missing.length > 0 ? [...new Set(missing.map((f) => basename(f)))].join(',') : 'no'}`
       + `  静默:${(() => { const i = idleMinutes(p); return i === null ? '?' : i + '分钟'; })()}`);
   }
@@ -460,7 +485,25 @@ if (cmd === 'open') {
       + `    若确定要丢弃：\`git branch -D ${branch}\` 后重跑。`);
   }
 
-  const add = gitQuiet(['worktree', 'add', wtPath, '-b', branch]);
+  // `--base <sha>`：从指定起点开树，而不是当前 HEAD（git 的默认）。旁路修复必须用它——
+  // 从需求分支开叉的树会驮着本期全部改动，那笔修复的分支、以及它将来那个 PR，就不再只含
+  // 这一笔修复。起点通常是 active.json 的 `base_sha`（`<flow> start` 记的干净基线）。
+  const baseIdx = rest.indexOf('--base');
+  const baseRef = baseIdx >= 0 ? rest[baseIdx + 1] : '';
+  if (baseIdx >= 0 && !baseRef) die('--base 后面要跟一个 commit（通常是 active.json 的 base_sha）。');
+  // 旁路树必须给起点，不能默认 HEAD。漏传是**静默**的：树照样建出来，只是那条分支从一开始
+  // 就驮着本期全部改动，而 park 的三条断言一条都查不出来——于是那笔修复的 PR 里混着本期。
+  // 与分支前缀同一个道理（见 branchOf）：能靠形态推出来的必填项，就不要留给人记。
+  if (isSide(ticket) && !baseRef) {
+    die(`旁路修复（${ticket}）必须给 --base：\n`
+      + `    不给就从当前 HEAD（需求分支）开叉，那条分支会驮着本期全部改动，它将来的 PR 里也是。\n`
+      + `    起点用 <项目>/.ai-flow/${FLOW_NAME}/state/active.json 里的 base_sha（<flow> start 记的干净基线）：\n`
+      + `      node ${SELF} --flow-dir <项目>/.ai-flow/${FLOW_NAME} open ${flowId} ${ticket} --base <base_sha>`);
+  }
+  if (baseRef && !gitQuiet(['rev-parse', '--verify', '--quiet', baseRef + '^{commit}']).ok) {
+    die(`--base 给的 ${baseRef} 不是一个有效 commit。`);
+  }
+  const add = gitQuiet(['worktree', 'add', wtPath, '-b', branch, ...(baseRef ? [baseRef] : [])]);
   if (!add.ok) die('git worktree add 失败:\n' + add.out);
   say(`worktree: ${wtPath}\nbranch:   ${branch}`);
 
@@ -553,6 +596,21 @@ if (cmd === 'open') {
   process.exit(0);
 }
 
+// `sync` / `close` 对旁路树是**破坏性**的，所以两边都要有守卫，形状和 `park` 那条对称：
+//   - `sync` = 把需求分支 rebase 进这棵树。对旁路树就是把本期全部改动灌进那笔修复的分支，
+//     而它此后仍能 park 成功（三条断言查的是「干净 / 有 commit / diff 非空」，全过），
+//     污染没有任何东西会发现——这正是 `--base` 和整份 side-fix.md 想避免的事。
+//   - `close` = ff 进需求分支。对旁路树就是把它混进本期 squash，旁路的全部意义就是别这么做。
+// 两条都实测过：`sync` 之后旁路分支从 1 笔变成 3 笔；`sync` + `close` 两步就能把它合进需求分支。
+if ((cmd === 'sync' || cmd === 'close') && isSide(ticket)) {
+  die(`${ticket} 是旁路修复（references/side-fix.md），不能 ${cmd}。\n`
+    + (cmd === 'sync'
+      ? `    sync 会把需求分支 rebase 进这棵树——本期全部改动就进了这笔修复的分支，而它之后照样能 park 成功，没有任何东西会发现。\n`
+        + `    旁路树按定义停在 base 上不动，不需要适配本期。`
+      : `    close 会把它 ff 进需求分支，等于混进本期那笔 squash——旁路修复存在的全部理由就是别这么做。`)
+    + `\n    做完用：node ${SELF} --flow-dir <项目>/.ai-flow/${FLOW_NAME} park ${flowId} ${ticket}`);
+}
+
 if (cmd === 'sync') {
   if (!existsSync(wtPath)) die(`${wtPath} 不存在（先 open）。`);
   const target = gitQuiet(['branch', '--show-current']);
@@ -597,6 +655,62 @@ if (cmd === 'sync') {
   // 「上一次装失败、这次重跑 sync」不成立（那时 rebase 什么也没带进来，树却仍然是错的）。
   ensureDeps(wtPath, '这棵车道树', noInstall);
   process.exit(installFailed ? 1 : 0);
+}
+
+// park：旁路修复收树。和 `close` 的区别只有一条，但那一条是全部意义——**不回合**。
+//
+// 旁路修复的定义就是「不进本期」（references/side-fix.md）：它从 `base_sha` 开叉、独立
+// 走质量链、独立 commit，然后分支留在那里等开发者自己发 PR。把它 ff 进需求分支就等于把它
+// 混进本期那笔 squash，而那正是开发者说「非常不好」的那件事。
+//
+// `close` 的断言里有两条对 park **必须**去掉，不是为了省事：
+//   - 主工作树无 stray：stage-4 的环节 C 把整轮改动 reset 成未暂存全量，主树此刻有几十上百
+//     个文件。那条断言会让 stage-4 的旁路收树恒失败。
+//   - 真机验证三态 / 票↔commit：旁路修复不是票，tickets.md 里没有它的票行。
+// 其余三条照跑，理由和 close 那边一字不差：worktree 里的未追踪文件不在任何 commit 里、
+// `--force` 拆掉就是永久丢失；零 commit 的分支拆掉等于这笔修复凭空消失；空 commit 同理。
+if (cmd === 'park') {
+  if (!/^S\d+$/.test(ticket)) {
+    die(`park 只用于旁路修复（名字形如 S1），收到: ${ticket}。票与车道用 close 回合。`);
+  }
+  if (!existsSync(wtPath)) die(`${wtPath} 不存在（已收过？或 flow_id/名字写错）。`);
+
+  const st = gitQuiet(['status', '--porcelain', '-uall'], { cwd: wtPath });
+  if (!st.ok) die('无法读取 worktree 状态:\n' + st.out);
+  if (st.out.length > 0) {
+    die(`worktree 里还有未提交/未追踪的东西，先处置再收：\n`
+      + st.out.split('\n').map((l) => '      ' + l).join('\n')
+      + `\n    未追踪文件（fixture / migration / 运行时读的 JSON）尤其要当心：它们不在任何 commit 里，`
+      + `拆树就是永久丢失。属于这笔修复 → 在 worktree 里 \`git add\` 并 amend 进它那笔 commit；确定是垃圾 → 删掉。`);
+  }
+
+  // 有没有交付物。比的是分支与它自己的分叉点，不是与 HEAD：旁路分支从 base 开叉，而 HEAD
+  // 上还压着本期全部改动，拿 HEAD 比会把「本期做了什么」误当成这笔修复的内容。
+  const mb = gitQuiet(['merge-base', 'HEAD', branch]);
+  if (!mb.ok || !mb.out) die('无法算出旁路分支的分叉点，拒绝收树:\n' + mb.out);
+  const ahead = gitQuiet(['rev-list', '--count', `${mb.out}..${branch}`]);
+  if (!ahead.ok) die('无法确认旁路分支上有没有 commit，拒绝收树:\n' + ahead.out);
+  if (ahead.out === '0') {
+    die(`${branch} 相对分叉点没有任何 commit——这笔旁路修复没有交付物。\n`
+      + `    确实还没做 → 去 worktree 里做完再收；确定要放弃 → \`git worktree remove ${wtPath} && git branch -D ${branch}\`。`);
+  }
+  if (gitQuiet(['diff', '--quiet', mb.out, branch]).ok) {
+    die(`${branch} 有 commit，但它与分叉点的内容完全相同——这笔修复的 diff 是空的。\n`
+      + `    改动落在别处了（主树？另一棵树？）→ 归位后 amend 进它那笔 commit。`);
+  }
+
+  const head = gitQuiet(['rev-parse', '--short', branch]);
+  const rm = gitQuiet(['worktree', 'remove', wtPath]);
+  if (!rm.ok) die('`git worktree remove` 失败（分支与 commit 都还在，工作没丢）:\n' + rm.out);
+
+  say(`已收树，分支留着没有合进任何地方：\n`
+    + `      分支: ${branch}\n`
+    + `      提交: ${head.ok ? head.out : '(读不到)'}\n`
+    + `    ⛔ 不要把它 ff/merge 进需求分支——那等于把它混进本期 squash，旁路修复的全部意义就是别这么做。\n`
+    + `    去向由开发者定：\`git push -u origin ${branch}\` 单独发 PR，或本期收口后自行合并。\n`
+    + `    别忘了在 tickets.md 的 \`## 旁路修复\` 段记一行（分支 + 提交 + 一句话 + 写集），`
+    + `/clear 之后那是它唯一的存在证据。`);
+  process.exit(0);
 }
 
 if (cmd === 'close') {
@@ -843,7 +957,9 @@ if (cmd === 'close') {
       .map((l) => l.slice('worktree '.length).trim())
       .filter((p) => sibPrefixes.some((pre) => p.startsWith(pre)) && p !== wtPath)
       .map((p) => basename(p))
-      .filter((nm) => !gitQuiet(['merge-base', '--is-ancestor', 'HEAD', `wt/${nm}`]).ok);
+      // 旁路树不是车道：它不回合、也永远不该 sync（sync 会把本期 rebase 进它）。
+      .filter((nm) => !isSide(nm.slice(flowId.length + 1) || nm))
+      .filter((nm) => !gitQuiet(['merge-base', '--is-ancestor', 'HEAD', branchOf(nm)]).ok);
     if (stale.length > 0) {
       say(`\n以下车道已不再是 HEAD 的直接后继，**下一票开工前必须先 sync**：`
         + stale.map((nm) => nm.slice(flowId.length + 1) || nm).join(' ')
