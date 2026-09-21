@@ -19,6 +19,7 @@ import {
   ACTIVITY_STALE_MS,
   NUDGE_DEDUPE_MS,
   withinDedupeWindow,
+  isLegacyCronTick,
   nudgeText,
 } from '../src/lib/watchdog.js';
 import { createFlowTestRepo, writeActiveState, readActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
@@ -412,6 +413,28 @@ describe('nudge budget lifecycle', () => {
   });
 });
 
+describe('a leftover 0.76.0 scheduled task', () => {
+  it('is stopped before it reaches the model, with the command to remove it', async () => {
+    // A cron scheduled under 0.76.0 outlives the upgrade and `--resume` restores it.
+    // 0.77.0 removed the interception with the design, so it arrived as an ordinary
+    // prompt and the model answered it in full — observed once, on a resume.
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog() });
+    const out = await handleUserPrompt({
+      hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repo.repoRoot,
+      prompt: '[ai-flow:watchdog] test-flow 停滞自检',
+    });
+    expect(out.decision).toBe('block');
+    expect(out.reason).toContain('CronDelete');
+  });
+
+  it('the same words typed by a developer are not stopped', () => {
+    expect(isLegacyCronTick('[ai-flow:watchdog] test-flow 停滞自检', 'user')).toBe(false);
+    expect(isLegacyCronTick('[ai-flow:watchdog] test-flow 停滞自检', 'schedule_wakeup')).toBe(true);
+    expect(isLegacyCronTick('讲讲 watchdog 怎么做的', undefined)).toBe(false);
+  });
+});
+
 describe('session boundaries', () => {
   it('a new session starts with a blank watchdog block', async () => {
     // Background tasks do not survive into a fresh conversation, so carrying
@@ -429,6 +452,20 @@ describe('session boundaries', () => {
       last_stop_at: null, last_activity_at: null, background: false,
       watcher_seen: false, arm_asks: 0, nudges_this_stage: 0, last_nudge_at: null,
     });
+  });
+
+  it('a resume starts blank too — its timestamps describe a session that was put down', async () => {
+    // Background tasks are not restored on resume, so a `last_stop_at` from hours ago
+    // would have the first watcher started afterwards nudging within one poll.
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow', {
+      watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 6 * 3600_000).toISOString() }),
+    });
+    const input: SessionStartInput = { hook_event_name: 'SessionStart', session_id: OWNER, cwd: repo.repoRoot, source: 'resume' };
+    await handleSessionStart(input);
+    const w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+    expect(w.last_stop_at).toBeNull();
+    expect(w.watcher_seen).toBe(false);
   });
 
   it('a compact in the SAME session keeps the watchdog block', async () => {

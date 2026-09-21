@@ -53,6 +53,23 @@ import { PLUGIN_ROOT } from './flow-paths.js';
 export const WATCHDOG_LABEL = '[ai-flow:watchdog]';
 
 /**
+ * 0.76.0 drove this feature from a `CronCreate` task whose prompt began with the
+ * label above, and the engine intercepted that prompt. 0.77.0 removed the
+ * interception along with the whole cron design — but a cron already scheduled in a
+ * live session outlives the upgrade, and `claude --resume` restores it. With nothing
+ * left to recognise it, the tick arrives as an ordinary prompt and the model answers
+ * it in full, as if a developer had asked (observed once, on a resume).
+ *
+ * Nothing but the developer can remove that task, so the engine stops the prompt and
+ * says which one to delete. Remove this when no live session can still be holding a
+ * 0.76.0 cron.
+ */
+export function isLegacyCronTick(prompt: string, source?: string): boolean {
+  if (source === 'user') return false;
+  return prompt.trimStart().startsWith(`${WATCHDOG_LABEL} `) && prompt.includes('停滞自检');
+}
+
+/**
  * Literal token in the watcher's command line. The `Stop` hook matches it against
  * `background_tasks[].command` to answer two questions it has no other source for:
  * is the watcher running, and is a given background task the watcher (which must not

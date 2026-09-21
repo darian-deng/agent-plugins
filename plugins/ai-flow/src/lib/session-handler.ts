@@ -172,18 +172,33 @@ export async function handleSessionStart(
     };
     if (isNewSession || isClear) {
       patch.context_wrap_up = { at_pct: null };
-      // Deliberately NOT keyed on `isClear`, which also covers `compact`. A compact
-      // keeps the session and its background tasks alive, so wiping `watcher_seen`
-      // there makes `<flow> status` answer "未武装" about a watcher that is in fact
-      // running — and that line is the whole reason a developer can tell an armed
-      // watchdog from a dead one. It self-heals at the next turn end, i.e. just after
-      // the window where someone would check. A fresh conversation really does leave
-      // the watcher behind, so there the blank slate is correct: carrying
-      // `watcher_seen` across would leave the engine believing one is watching, and it
-      // would never ask for a replacement.
-      if (isNewSession || input.source === 'clear') patch.watchdog = emptyWatchdog();
       // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
       patch.first_prompt_handled = false;
+    }
+    // Deliberately NOT inside the branch above, whose condition (`isNewSession ||
+    // isClear`) misses a `resume` that kept its session id — the shape that first
+    // showed the problem. The rule is: blank the watchdog unless this entry kept BOTH
+    // the conversation and the process, which only `compact` does — its watcher is
+    // still running and its timestamps still describe this session, and wiping there
+    // would make `<flow> status` answer "未武装" about a watcher that is in fact
+    // running, the one line that tells an armed watchdog from a dead one.
+    //
+    // Two shapes fall outside that rule, both self-healing and neither a reason to
+    // complicate the condition: a compact that ROTATES the session id (whether it does
+    // is unmeasured, see above) blanks anyway, and a client that sends no `source` at
+    // all cannot have its resume told from its compact, so it keeps today's behavior.
+    // Both cost at most one turn of `<flow> status` reading 未武装 and one extra arming
+    // ask — `stop-handler` re-derives `watcher_seen` from the live task list at every
+    // turn end.
+    //
+    // A resumed session carries a `last_stop_at` from whenever it was last put down,
+    // possibly hours, while background tasks are NOT restored on resume — so the first
+    // watcher started afterwards reads hours of idleness and nudges within one poll.
+    // Today's ordering happens to hide it (the developer's first prompt stamps activity
+    // before any watcher exists), which is exactly the kind of thing that stops being
+    // true the moment something else changes.
+    if (isNewSession || (input.source !== undefined && input.source !== 'compact')) {
+      patch.watchdog = emptyWatchdog();
     }
     return patch;
   });

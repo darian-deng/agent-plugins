@@ -224,6 +224,15 @@ re-arms. Left accumulating, three successful arms would exhaust `MAX_ARM_ASKS` a
 `<flow> status` would report "asked three times, never started" about a watcher that
 started every time.
 
+**Session boundaries**
+`SessionStart` blanks the whole watchdog block on every source except `compact`.
+Compact is the one entry that keeps the same conversation AND the same process, so its
+watcher is still running and its timestamps still describe this session. `resume` needs
+the blanking as much as `clear` does and originally missed it, because it was nested
+inside the `isNewSession || isClear` branch and a resume keeps its session id: the
+restored session carried a `last_stop_at` from hours earlier while background tasks are
+never restored, so the first watcher armed afterwards would nudge within one poll.
+
 **Nudge budget**
 `watchdog.nudges_this_stage`, cap 3, reset by any developer prompt and by every stage
 advance. Not configurable, deliberately: it is the only bound on an unattended loop. A
@@ -245,6 +254,15 @@ it needs the lock-and-re-read `patchActiveState` already provides — a second f
 written whole would silently roll back a concurrent update. And active.json is already
 fenced as control plane by `PreToolUse`, whereas a new file under `state/` matches none
 of those path rules, which would let the model edit its own watchdog counters.
+
+**`isLegacyCronTick`** (transitional)
+0.76.0 drove this from a `CronCreate` task whose prompt carried `WATCHDOG_LABEL`, and
+the engine intercepted that prompt. 0.77.0 deleted the interception with the design —
+but a cron scheduled in a live session outlives the upgrade, and `claude --resume`
+restores it, so the tick arrived as an ordinary prompt and the model answered it in
+full (observed once). Only the developer can delete a scheduled task, so the engine
+blocks the prompt and names the command. Remove this once no live session can still be
+holding a 0.76.0 cron.
 
 **`LIVE_OVERRIDE_KEYS`**
 The top-level keys a project's sparse `config.json` may set (`context`, `watchdog`),

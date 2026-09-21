@@ -11,7 +11,7 @@ import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
 import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
-import { readWatchdog } from './watchdog.js';
+import { readWatchdog, isLegacyCronTick } from './watchdog.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
   const o: UserPromptOutput = {
@@ -67,6 +67,17 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // flow's constraints, and marking `first_prompt_handled` would mutate the other
   // checkout's active.json to say a prompt it never saw has been handled.
   const foreign = !!active && isForeignCheckout(active, cwd);
+
+  // A leftover 0.76.0 scheduled task. It is nobody's prompt — see `isLegacyCronTick`.
+  if (isLegacyCronTick(prompt, input.source)) {
+    return {
+      decision: 'block',
+      reason:
+        `[ai-flow:watchdog] 这是 0.76.0 留下的定时自检任务，新版本已不用它（改成了后台进程）。` +
+        `它会一直按点触发：执行 CronList 找到这条、CronDelete 删掉即可，删完这行就不再出现。`,
+      suppressOriginalPrompt: true,
+    };
+  }
 
   // ── Stall watchdog ────────────────────────────────────────────────────────────
   // A prompt means a turn is starting AND that the developer is in the room. Both
