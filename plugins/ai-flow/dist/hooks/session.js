@@ -4884,8 +4884,10 @@ async function handleSessionStart(input2) {
       };
       if (isNewSession || isClear) {
         patch.context_wrap_up = { at_pct: null };
-        if (isNewSession || input2.source === "clear") patch.watchdog = emptyWatchdog();
         patch.first_prompt_handled = false;
+      }
+      if (isNewSession || input2.source !== void 0 && input2.source !== "compact") {
+        patch.watchdog = emptyWatchdog();
       }
       return patch;
     });

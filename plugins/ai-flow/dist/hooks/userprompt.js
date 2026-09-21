@@ -4951,6 +4951,11 @@ current_stage: ${firstStage.id}
 import { existsSync as existsSync9, readFileSync as readFileSync6, unlinkSync as unlinkSync3 } from "fs";
 
 // src/lib/watchdog.ts
+var WATCHDOG_LABEL = "[ai-flow:watchdog]";
+function isLegacyCronTick(prompt, source) {
+  if (source === "user") return false;
+  return prompt.trimStart().startsWith(`${WATCHDOG_LABEL} `) && prompt.includes("\u505C\u6EDE\u81EA\u68C0");
+}
 var DEFAULT_IDLE_MINUTES = 5;
 var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
 var DEFAULT_NUDGE_CAP = 3;
@@ -5473,6 +5478,13 @@ async function handleUserPrompt(input2) {
   const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
   const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
   const foreign = !!active && isForeignCheckout(active, cwd);
+  if (isLegacyCronTick(prompt, input2.source)) {
+    return {
+      decision: "block",
+      reason: `[ai-flow:watchdog] \u8FD9\u662F 0.76.0 \u7559\u4E0B\u7684\u5B9A\u65F6\u81EA\u68C0\u4EFB\u52A1\uFF0C\u65B0\u7248\u672C\u5DF2\u4E0D\u7528\u5B83\uFF08\u6539\u6210\u4E86\u540E\u53F0\u8FDB\u7A0B\uFF09\u3002\u5B83\u4F1A\u4E00\u76F4\u6309\u70B9\u89E6\u53D1\uFF1A\u6267\u884C CronList \u627E\u5230\u8FD9\u6761\u3001CronDelete \u5220\u6389\u5373\u53EF\uFF0C\u5220\u5B8C\u8FD9\u884C\u5C31\u4E0D\u518D\u51FA\u73B0\u3002`,
+      suppressOriginalPrompt: true
+    };
+  }
   if (active && !isNonOwner && !foreign) {
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
       watchdog: {
