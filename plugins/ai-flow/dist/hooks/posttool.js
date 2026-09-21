@@ -4474,13 +4474,22 @@ var ContextConfigSchema = external_exports.object({
   wrap_up_at_pct: external_exports.number().int().min(1).max(99).optional()
 });
 var LIVE_CONTEXT_KEYS = new Set(Object.keys(ContextConfigSchema.shape));
+var WatchdogConfigSchema = external_exports.object({
+  enabled: external_exports.boolean().optional(),
+  idle_minutes: external_exports.number().int().min(1).max(120).optional()
+});
 var FlowConfigSchema = external_exports.object({
   schema_version: external_exports.literal("1.0"),
   name: external_exports.string().min(1),
   description: external_exports.string().optional(),
   context: ContextConfigSchema.optional(),
+  watchdog: WatchdogConfigSchema.optional(),
   stages: external_exports.array(StageConfigSchema).min(1, "at least one stage is required")
 });
+var LIVE_OVERRIDE_KEYS = /* @__PURE__ */ new Map([
+  ["context", LIVE_CONTEXT_KEYS],
+  ["watchdog", new Set(Object.keys(WatchdogConfigSchema.shape))]
+]);
 
 // src/lib/flow-paths.ts
 import { existsSync as existsSync4 } from "fs";
@@ -4535,10 +4544,12 @@ function readJson(path) {
 }
 function mergeConfig(defaults, overrides) {
   const merged = { ...defaults, ...overrides };
-  const dCtx = defaults["context"];
-  const oCtx = overrides["context"];
-  if (dCtx && typeof dCtx === "object" && !Array.isArray(dCtx) && oCtx && typeof oCtx === "object" && !Array.isArray(oCtx)) {
-    merged["context"] = { ...dCtx, ...oCtx };
+  for (const key of LIVE_OVERRIDE_KEYS.keys()) {
+    const d = defaults[key];
+    const o = overrides[key];
+    if (d && typeof d === "object" && !Array.isArray(d) && o && typeof o === "object" && !Array.isArray(o)) {
+      merged[key] = { ...d, ...o };
+    }
   }
   return merged;
 }
@@ -4566,6 +4577,21 @@ function resolveDocsPaths(paths, flowId) {
 
 // src/lib/advance-stage.ts
 import { existsSync as existsSync6, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
+
+// src/lib/watchdog.ts
+function emptyWatchdog() {
+  return {
+    last_stop_at: null,
+    background: false,
+    cron_seen: false,
+    cron_asks: 0,
+    nudges_this_stage: 0,
+    last_nudge_at: null
+  };
+}
+function readWatchdog(state) {
+  return { ...emptyWatchdog(), ...state?.watchdog ?? {} };
+}
 
 // src/lib/prompt-render.ts
 var INLINE_INJECTION_BUDGET = 1e4;
@@ -4649,7 +4675,13 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     };
   }
   clearRenderedPrompt(repoRoot, flowName);
-  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
+    current_stage: next,
+    first_prompt_handled: false,
+    // The nudge budget is per stage: entering one is fresh evidence the session is
+    // moving, and the stage that spent its budget is over.
+    watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 }
+  }));
   if (!advanced) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
   }

@@ -4311,13 +4311,22 @@ var ContextConfigSchema = external_exports.object({
   wrap_up_at_pct: external_exports.number().int().min(1).max(99).optional()
 });
 var LIVE_CONTEXT_KEYS = new Set(Object.keys(ContextConfigSchema.shape));
+var WatchdogConfigSchema = external_exports.object({
+  enabled: external_exports.boolean().optional(),
+  idle_minutes: external_exports.number().int().min(1).max(120).optional()
+});
 var FlowConfigSchema = external_exports.object({
   schema_version: external_exports.literal("1.0"),
   name: external_exports.string().min(1),
   description: external_exports.string().optional(),
   context: ContextConfigSchema.optional(),
+  watchdog: WatchdogConfigSchema.optional(),
   stages: external_exports.array(StageConfigSchema).min(1, "at least one stage is required")
 });
+var LIVE_OVERRIDE_KEYS = /* @__PURE__ */ new Map([
+  ["context", LIVE_CONTEXT_KEYS],
+  ["watchdog", new Set(Object.keys(WatchdogConfigSchema.shape))]
+]);
 
 // src/lib/flow-paths.ts
 import { existsSync as existsSync3 } from "fs";
@@ -4369,10 +4378,12 @@ function readJson(path) {
 }
 function mergeConfig(defaults, overrides) {
   const merged = { ...defaults, ...overrides };
-  const dCtx = defaults["context"];
-  const oCtx = overrides["context"];
-  if (dCtx && typeof dCtx === "object" && !Array.isArray(dCtx) && oCtx && typeof oCtx === "object" && !Array.isArray(oCtx)) {
-    merged["context"] = { ...dCtx, ...oCtx };
+  for (const key of LIVE_OVERRIDE_KEYS.keys()) {
+    const d = defaults[key];
+    const o = overrides[key];
+    if (d && typeof d === "object" && !Array.isArray(d) && o && typeof o === "object" && !Array.isArray(o)) {
+      merged[key] = { ...d, ...o };
+    }
   }
   return merged;
 }
