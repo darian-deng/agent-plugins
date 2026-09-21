@@ -104,6 +104,32 @@ catch (e) { die('无法读取 state/active.json: ' + e.message); }
 if (!state.flow_id) die('active.json 缺 flow_id');
 
 const ticketsPath = join(projectRoot, 'docs', 'grill-flows', state.flow_id, 'tickets.md');
+// ── `rm` 子命令的两种「算得出结论」的异常，⛔ 不许 die ──────────────────────────────
+// `worktree.cjs close` 把「子进程非零」一律当成**工具坏了**而 fail-open 放行。所以这两种
+// 情况一旦 die，最强的那种违规反而最容易过：**整条台账都不在**（= 一张票都没有真机三态）
+// 走 fail-open 放行，而「只有这一张票不在台账里」却被 fail-closed 拒——同一类违规，
+// 相反结果。⇒ 它们必须作为 verdict 报出去，由 `worktree.cjs` 决定拒还是放。
+const RM_ARGV = process.argv[2] === 'rm';
+// `--flow-id <id>`：调用方（`worktree.cjs`）告诉我们它要 close 的是哪条 flow。
+// 本脚本的台账路径取自 `state/active.json`，而 `worktree.cjs` 的 flow_id 取自 argv，两者
+// 可以不一致——关掉上一条 flow 遗留的 worktree 时就是这样。那时读到的是**当前** flow 的
+// 台账，若它恰好也有同号票且带标记，这道门会拿错票的证据放行。
+const fidIdx = process.argv.indexOf('--flow-id');
+const expectFlowId = fidIdx !== -1 ? process.argv[fidIdx + 1] : null;
+if (fidIdx !== -1) process.argv.splice(fidIdx, expectFlowId ? 2 : 1);
+if (RM_ARGV && expectFlowId && expectFlowId !== state.flow_id) {
+  say(`❌ 要 close 的是 flow \`${expectFlowId}\` 的票，而当前活跃 flow 是 \`${state.flow_id}\`。`);
+  say('   本脚本的台账路径取自 state/active.json，这时读到的是**另一条 flow** 的 tickets.md，');
+  say('   拿它的票去判真机三态就是拿错票的证据。先确认你要关的是哪条 flow 的遗留 worktree。');
+  say(`RM-STATE ${process.argv[3] || '?'} flowmismatch`);
+  process.exit(0);
+}
+if (RM_ARGV && !existsSync(ticketsPath)) {
+  say('❌ 缺 tickets.md: ' + ticketsPath);
+  say('   台账整个不在 ⇒ 没有任何一张票能有真机三态标记。这是结论，不是本脚本跑不起来。');
+  say(`RM-STATE ${process.argv[3] || '?'} noledger`);
+  process.exit(0);
+}
 if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 
 // ── 子命令分发 ──────────────────────────────────────────────────────────────

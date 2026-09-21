@@ -114,12 +114,21 @@ export const INJECTED_BRANCH_CAP = 40;
 /** 需求原文被截断时的「去哪取」。`flow_root` 由注入顶部的 `[ai-flow:paths]` 块给出。 */
 export const REQUIREMENT_SOURCE = '`<flow_root>/state/active.json`';
 
+/** 分支名被截断时的「去哪取」。⚠️ 必须和 `REQUIREMENT_SOURCE` 一样是导出常量：它同时被
+ *  `resume.ts` 和预算测试的最坏情况用，写死成两份字面串时，改长其中一份会让测试算出的
+ *  上界**偏小**而测试照绿——正是 `RM-STATE` 那对注释在防的同一种漂移。 */
+export const BRANCH_SOURCE = '`git branch --show-current`';
+
 export function capInjectedText(value: string | null | undefined, where: string, cap: number = INJECTED_FREETEXT_CAP): string {
   const v = (value ?? '').trim();
   if (v.length <= cap) return v;
   // ⚠️ 后缀本身也进预算，所以它必须短。⛔ 别为了「说清楚」把它写长——这段文字在每一次
   // start/resume 注入里都要付一遍，而它换来的信息只有「被截了、去哪取」两件事。
-  return `${v.slice(0, cap)}…（截断，全文见 ${where}）`;
+  const out = `${v.slice(0, cap)}…（截断，全文见 ${where}）`;
+  // 🔴 刚过上限的那一段区间里，「截断形态」反而比原文长（后缀是定长）：实测一个 43 字符的
+  // 分支名会被注入成 77 字符，比不截还多 34，而且名字还读不全了。⇒ 谁短用谁。
+  // ⚠️ 这不改变最坏情况（上界仍是定长的截断形态），所以预算测试的上界断言不受影响。
+  return out.length < v.length ? out : v;
 }
 
 export function commandOutputPrefix(flowName: string): string {

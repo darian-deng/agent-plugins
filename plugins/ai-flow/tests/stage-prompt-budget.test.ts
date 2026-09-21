@@ -4,7 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { advanceStage } from '../src/lib/advance-stage.js';
 import { createFlowTestRepo, writeActiveState, BLOCKING_CONFIG } from './fixtures/helpers.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
+import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
 import { renderedPromptPath, materializeRenderedPrompt } from '../src/lib/state.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -101,7 +101,7 @@ function resumeOverhead(flow: string, gated: boolean): number {
   // 在任何真实输入下能达到的最长形态。⚠️ 用 `需` 这种 3 字节字符：预算按字符算不按字节算，
   // 混用会让这里的最坏情况算小。
   const req = capInjectedText('需'.repeat(5000), REQUIREMENT_SOURCE);
-  const branch = capInjectedText('b'.repeat(5000), '`git branch --show-current`', INJECTED_BRANCH_CAP);
+  const branch = capInjectedText('b'.repeat(5000), BRANCH_SOURCE, INJECTED_BRANCH_CAP);
   const startFrame = assembledOverhead((body) =>
     buildAiFlowPreamble(DEEP_ANCHOR, flow) +
     `Flow '${flow}' started!\n\n` +

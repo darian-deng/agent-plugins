@@ -734,7 +734,7 @@ if (cmd === 'close') {
     try {
       rmOut = execFileSync(
         process.execPath,
-        [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'rm', ticket],
+        [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'rm', ticket, '--flow-id', flowId],
         { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024 }
       );
     } catch (e) {
@@ -767,6 +767,20 @@ if (cmd === 'close') {
       die(`${ticket} 的真机验证三态标记多于一个（约定是**有且仅有一个**），拒绝回合：\n`
         + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '      ' + l).join('\n')
         + `\n    （上面那段是 \`schedule.cjs rm ${ticket}\` 的原样输出。）留一个、删掉其余的，再重跑 close。`);
+    } else if (verdict === 'noledger') {
+      // ⛔ fail-closed。这条曾经走 fail-open：`schedule.cjs` 对缺 tickets.md 是 die（非零），
+      // 而本分支把「子进程非零」一律当工具坏了 ⇒ **整条台账都不在**（= 一张票都没有真机三态）
+      // 反而放行，而「只有这一张票不在台账里」却被拒。同一类违规、相反结果，所以那边改成了
+      // 把它当结论报出来。
+      die('本 flow 的 tickets.md 不在，拒绝回合：\n'
+        + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '    ' + l).join('\n')
+        + '\n    台账不在 ⇒ 这张票的真机验证无处表态，也没有任何东西能在 stage-4 收口时找到它。');
+    } else if (verdict === 'flowmismatch') {
+      // ⛔ fail-closed。`worktree.cjs` 的 flow_id 来自 argv，`schedule.cjs` 的台账路径来自
+      // `state/active.json`，两者在「关掉上一条 flow 遗留的 worktree」时会分叉。那时读到的是
+      // 当前 flow 的台账，若它恰好也有同号票且带标记，这道门就会拿错票的证据放行。
+      die('真机三态核不了，拒绝回合：\n'
+        + rmOut.split('\n').filter((l) => l.trim() && !l.startsWith('RM-STATE')).map((l) => '    ' + l).join('\n'));
     } else if (verdict === 'unknown') {
       die(`${ticket} 在 tickets.md 里找不到 ticket 级行（\`- [ ] ${ticket} …\` / \`- [x] ${ticket} …\`），拒绝回合。\n`
         + `    票面上没这张票，也就没有任何地方能放它的真机验证三态标记。\n`

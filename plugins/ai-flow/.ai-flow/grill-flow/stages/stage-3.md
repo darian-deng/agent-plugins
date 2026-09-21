@@ -114,11 +114,13 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>
 
 - 质量 / smell / spec-drift / bug → 派质量链代理**在该票 worktree 里**改，重跑客观地板，⛔ **改完 `git -C <WT> commit --amend` 折回本票那笔**（另提一笔破「一票一 commit」，机器门③⑥ 都抓不到）
 - **人在环落点（本 stage 唯一）**：命中安全红线（见 `per-ticket-review.md`）或需拍板的取舍 → ⛔ 不许直接问，三步（`ask-before-asking.md`）：① 查它那张「疑问 → 查哪节」表，查到照做**不问**；② 查不到仍不问，先出带依据的推荐、派 fresh-context 子代理专攻（⛔ 不许造反驳，「攻不动」要带攻法与取证；无取证的 finding 不合并，平局保留原方案）；③ 攻不下才 `AskUserQuestion`，写清攻不下在哪。⚠️ 判据是「这事必须开发者决策吗」，不是「你多不确定」——属于那几类的别先审一轮再问
-- 需真机 / 鉴权 / 运行时验证 → **不是停点**，记下来，第 6 步打 `rm:pending`，留 stage-4 环节 C 做
+- 需真机 / 鉴权 / 运行时验证 → **不是停点**，记下来，第 5 步打 `rm:pending`，留 stage-4 环节 C 做
 
 ### 5. 注释清理 → 逐票回合（串行）
 
-裁完、无未决项后，**先清注释、`--amend` 前必跑那节三条核实命令、票面写 `cm:done`，再 close**（见 `quality-chain.md` 第 3 步）：⛔ 顺序反了补不回来——ff 后 `--amend` 不可用。
+裁完、无未决项后，**先清注释、`--amend` 前必跑那节三条核实命令、票面写 `cm:done` 与真机三态，再 close**（见 `quality-chain.md` 第 3 步）：⛔ 顺序反了补不回来——ff 后 `--amend` 不可用。
+
+**真机三态，每票有且仅有一个**（⛔ 写在 close **之前**：`close` 拒缺标记，而第 6 步记账在 close 之后，放那死锁）：需真机 → `rm:pending` + 往 `## 待真机验证` append `- T<n> — <验什么>`；已验 → `rm:done — <命令与输出>`；否则 → `rm:none — <理由，豁免写谁何时>`。🔴「必选其一」**不是「不许 pending」**：pending 自愿，最省力是不写——实测 215 pending / **0** done，两张 P0 在全绿下漏过。
 
 ```sh
 node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
@@ -135,9 +137,8 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 逐票记账（留工作树、不单独 commit），**顺序照这个来**：
 
 1. 落 candidates.md（带 ticket ID 前缀、append 前 grep 去重）
-2. **每票有且仅有一个真机三态**（`close` 拒缺标记的票）：需真机 → `rm:pending` + 往 `## 待真机验证` append `- T<n> — <验什么>`；已验 → `rm:done — <命令与输出>`；不需要 / 开发者豁免 → `rm:none — <理由，豁免写谁何时>`。🔴 是「必选其一」，**不是「不许 pending」**：pending 今天自愿，最省力的过法是不写——实测 215 次 pending / **0** 次 done，两张 P0 在全绿下漏过。
-3. **把质量链回报第二行的 `qc-metrics: …` 原样抄到该票那条**（与 `qc:done` 同一口径）。⛔ 别重算、别改格式——它是「小票该不该减配质量链」的唯一样本来源，commit body 留不住（squash 连分支一起删）
-4. 在该票那条上写 `qc:done`（行内或其缩进子项，别处不算）
+2. **把质量链回报第二行的 `qc-metrics: …` 原样抄到该票那条**（与 `qc:done` 同一口径）。⛔ 别重算、别改格式——它是「小票该不该减配质量链」的唯一样本来源，commit body 留不住（squash 连分支一起删）
+3. 在该票那条上写 `qc:done`（行内或其缩进子项，别处不算）
 5. 勾 `[x]`
 
 ⛔ **`rm:pending` 必须排在 `qc:done` 之前**：重入相位表拿 `qc:done` 当「记账已完成」的锚，它若在后，恰在两者之间 /clear 就会被「有 `qc:done` 无 `[x]` → 补勾」**永久跳过**真机登记，且丢失静默（stage-4 收口只认该段登记过的票）。

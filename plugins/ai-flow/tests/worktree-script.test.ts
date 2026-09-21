@@ -659,6 +659,27 @@ describe('grill-flow worktree.cjs', () => {
       expect(out.stderr).toContain('多于一个');
     });
 
+    it('tickets.md 整个不在 → close 拒（不是 fail-open）', () => {
+      // 🔴 行为反转的回归锚。原先 `schedule.cjs` 对缺 tickets.md 是 die（非零退出），而
+      // `close` 把「子进程非零」一律当工具坏了 ⇒ **整条台账都不在**（= 一张票都没有真机
+      // 三态）反而放行，而「只有这一张票不在台账里」却被拒。同一类违规、相反结果。
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const f = join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md');
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, '- [ ] T1 标题\n  - rm:none — x\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'docs: ledger');
+      run(anchor, 'open', 'f1', 'T1', '--install', 'true');
+      const wt = join(lanes, 'f1-T1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      rmSync(f);                                    // 开树之后台账没了
+      const out = run(anchor, 'close', 'f1', 'T1', '--keep');
+      expect(out.code).not.toBe(0);
+      expect(out.stderr).toContain('tickets.md 不在');
+    });
+
     it('票面上根本没有这张票 → close 拒（它无处表态，且机器门③ 要求每笔 commit 归属某票）', () => {
       const out = closeRmCase('- [ ] T5 别的票\n  - rm:none — x\n', 'T1');
       expect(out.code).not.toBe(0);

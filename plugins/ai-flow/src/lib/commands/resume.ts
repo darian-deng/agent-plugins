@@ -9,7 +9,7 @@ import {
   materializeRenderedPrompt,
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 import { stagePromptPath } from '../flow-paths.js';
 
@@ -130,7 +130,7 @@ export async function handleResume(
   // why the real win is turning this frame's overhead from unbounded into bounded.
   const assemble = (body: string) =>
     buildAiFlowPreamble(repoRoot, flowName, restored.base_sha_code) +
-    `Flow '${flowName}' resumed from branch: ${capInjectedText(trimmedBranch, '`git branch --show-current`', INJECTED_BRANCH_CAP)}\n` +
+    `Flow '${flowName}' resumed from branch: ${capInjectedText(trimmedBranch, BRANCH_SOURCE, INJECTED_BRANCH_CAP)}\n` +
     `current_stage: ${currentStage}\nrequirement: ${capInjectedText(restored.requirement, REQUIREMENT_SOURCE)}\n\n` +
     body;
   const gateNote = stageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
