@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { isBuiltinFlow, flowDefDir } from './flow-paths.js';
-import { LIVE_CONTEXT_KEYS } from './flow-schema.js';
+import { LIVE_OVERRIDE_KEYS } from './flow-schema.js';
 
 /**
  * Delete what an old install left in the project, and reduce its config.json to
@@ -99,25 +99,26 @@ export function pruneLegacyInstall(repoRoot: string, flowName: string): LegacyPr
   // vacuous and delete the project's whole file.
   if (project && defaults) {
     const kept: Record<string, unknown> = {};
-    const defaultContext = (defaults['context'] ?? {}) as Record<string, unknown>;
 
     for (const [key, value] of Object.entries(project)) {
-      if (key !== 'context') {
+      const liveSubKeys = LIVE_OVERRIDE_KEYS.get(key);
+      if (!liveSubKeys) {
         configKeysDropped.push(key);
         continue;
       }
       if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-        configKeysDropped.push('context');
+        configKeysDropped.push(key);
         continue;
       }
-      const keptContext: Record<string, unknown> = {};
+      const defaultBlock = (defaults[key] ?? {}) as Record<string, unknown>;
+      const keptBlock: Record<string, unknown> = {};
       for (const [ck, cv] of Object.entries(value as Record<string, unknown>)) {
-        const isDead = !LIVE_CONTEXT_KEYS.has(ck);
-        const isInheritedDefault = JSON.stringify(cv) === JSON.stringify(defaultContext[ck]);
-        if (isDead || isInheritedDefault) configKeysDropped.push(`context.${ck}`);
-        else keptContext[ck] = cv;
+        const isDead = !liveSubKeys.has(ck);
+        const isInheritedDefault = JSON.stringify(cv) === JSON.stringify(defaultBlock[ck]);
+        if (isDead || isInheritedDefault) configKeysDropped.push(`${key}.${ck}`);
+        else keptBlock[ck] = cv;
       }
-      if (Object.keys(keptContext).length > 0) kept['context'] = keptContext;
+      if (Object.keys(keptBlock).length > 0) kept[key] = keptBlock;
     }
 
     if (configKeysDropped.length > 0) {

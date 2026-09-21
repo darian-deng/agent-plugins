@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { FlowConfigSchema, type FlowConfig, type StageConfig } from './flow-schema.js';
+import { FlowConfigSchema, LIVE_OVERRIDE_KEYS, type FlowConfig, type StageConfig } from './flow-schema.js';
 import { flowDefDir } from './flow-paths.js';
 
 export class FlowNotFoundError extends Error {
@@ -39,9 +39,10 @@ function readJson(path: string): Record<string, unknown> {
 /**
  * Plugin defaults underneath, the project's file on top.
  *
- * Shallow at the top level, one level deep for `context` — the only nested object a
- * project has any reason to tune, and merging it deeply is what lets a project set
- * `wrap_up_at_pct` alone without restating the rest of the block. `stages` is
+ * Shallow at the top level, one level deep for every block in `LIVE_OVERRIDE_KEYS`
+ * (`context`, `watchdog`) — the nested objects a project has reason to tune, and
+ * merging them deeply is what lets a project set `wrap_up_at_pct` alone without
+ * restating the rest of the block. `stages` is
  * replaced wholesale when the project declares it: a partial stage list has no sane
  * merge (by index? by id? what does a missing entry mean?), and the case it would
  * serve — reordering or re-scoping a shipped flow's stages — is what
@@ -52,11 +53,13 @@ function mergeConfig(
   overrides: Record<string, unknown>
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...defaults, ...overrides };
-  const dCtx = defaults['context'];
-  const oCtx = overrides['context'];
-  if (dCtx && typeof dCtx === 'object' && !Array.isArray(dCtx)
-      && oCtx && typeof oCtx === 'object' && !Array.isArray(oCtx)) {
-    merged['context'] = { ...(dCtx as object), ...(oCtx as object) };
+  for (const key of LIVE_OVERRIDE_KEYS.keys()) {
+    const d = defaults[key];
+    const o = overrides[key];
+    if (d && typeof d === 'object' && !Array.isArray(d)
+        && o && typeof o === 'object' && !Array.isArray(o)) {
+      merged[key] = { ...(d as object), ...(o as object) };
+    }
   }
   return merged;
 }

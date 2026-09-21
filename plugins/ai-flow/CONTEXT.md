@@ -139,6 +139,101 @@ the assembly overhead, and compare. `grill-flow`'s stage-3 runs ~230–320 chara
 cap, so it is the one that bites first — put new prose in a `references/*.md` (those are read on
 demand and cost nothing here) and spend stage-page characters only on a pointer.
 
+## Stall watchdog
+
+**Stall watchdog**
+The engine's answer to a session that stopped when it should have kept going — most
+often after a side conversation the model settled and then never returned from. It has
+three moving parts and no process of its own:
+
+| | what it is | where |
+|---|---|---|
+| the clock | `CronCreate`, a Claude Code session-scoped scheduled prompt, `*/5 * * * *` | created by the MODEL, lives in the host |
+| the arming check | `Stop` hook reads `session_crons` and asks the model to create the cron when it is missing | `stop-handler.ts` |
+| the decision | `UserPromptSubmit` recognises the tick and either blocks it or forwards it | `watchdog-tick.ts`, policy in `watchdog.ts` |
+
+There is no timer hook — every hook is event-driven, and "the turn ended and nobody
+came back" is the absence of events. Two mechanisms were rejected before this one:
+
+- **A `Stop` hook that simply continues the turn.** `Stop` fires at the ZEROTH second
+  of idleness, while the developer is still reading what they just got, and at that
+  instant nothing mechanical separates a legitimate hand-back from a stall. Its only
+  clock is the next turn end, which is exactly what a stalled session never produces,
+  so it cannot express "five minutes later" at all.
+- **A detached process posting to the session's inbox socket**
+  (`CLAUDE_CODE_MESSAGING_SOCKET`). Measured on macOS / Claude Code 2.1.278 against a
+  real receiving session: a session running with permission prompts bypassed receives
+  nothing and the sender gets no failure signal; when delivery does work the host
+  frames the text as coming from another session and tells the receiver it carries no
+  consent, and the observed reaction was the model stopping to ask the developer
+  whether the message was legitimate — the nudge producing the stall it exists to
+  break. The frame format that design assumed (`{"type":"message",…}`) is also not the
+  one the host accepts, and a wrong frame is accepted, closed and discarded silently.
+
+**Tick, and the sentinel**
+A tick is the cron firing: an ordinary prompt whose text starts with
+`[ai-flow:watchdog]` (`WATCHDOG_SENTINEL`). Three places key off it — `Stop` matching
+`session_crons[].prompt` to tell whether the cron exists, `UserPromptSubmit` routing
+the prompt to `decideTick` instead of the command parser, and the same handler
+declining to treat it as developer activity. That last one is load-bearing: a tick that
+reset the nudge budget would re-arm its own watchdog every interval with nobody in the
+room.
+
+Recognition is the sentinel AND `UserPromptSubmit`'s `source` field (verified against
+the 2.1.278 binary: `["user","sdk","system","loop_wakeup","schedule_wakeup",
+"poll_event"]`, optional). `source` cannot carry the identity alone — a developer's own
+`/loop` arrives as a wakeup too — but a prompt that arrives as `user` is never a tick,
+so typing or pasting the prefix is not swallowed. An absent `source` falls back to the
+text match.
+
+**Suppression is the common case, and it is free**
+`decideTick` blocks a tick when a gate is pending, when the last turn ended with
+background work still in flight, when the session stopped more recently than
+`idle_minutes`, when the stage's nudge budget is spent, or when the watchdog is off.
+Blocking happens in `UserPromptSubmit` via top-level `decision: "block"`, so the model
+is never invoked and the developer gets one line. That is what makes a five-minute poll
+affordable to leave running: a tick that woke the model each time would re-read the
+whole conversation to conclude nothing.
+
+Note which way the background-task check cuts against the failure this repo actually
+measured (`grill-flow/references/subagent-lifecycle.md`): a session that CLAIMS
+background work it never started reports an empty array, so it is NOT suppressed. The
+claim is invisible to the engine; the absence is not. A missing array (older host, task
+registry unreachable) is read as "nothing running" rather than "unknown", because the
+failure to prefer is the visible one — suppressing on absence would make the watchdog
+do nothing forever, indistinguishable from a flow that never stalls.
+
+**Nudge budget**
+`watchdog.nudges_this_stage`, default cap 3, reset by any developer prompt and by every
+stage advance. Not configurable, deliberately: it is the only bound on an unattended
+loop. A nudged model that answers "I'm waiting for you" and stops produces a new turn
+end, so the next tick sees a fresh `last_stop_at` and the cycle would otherwise repeat
+until the cron's 7-day expiry, each iteration a fully-billed turn carrying the whole
+flow context.
+
+**Owner test: `!== null &&`, not `=== session_id`**
+Both watchdog entry points use posttool-handler's lenient owner test. `<flow> resume`
+writes `last_session_id: null` on purpose — "left null so the next SessionStart binds
+normally" — while the session that typed the command carries straight on driving the
+flow. Under a strict test that session never gets its turn ends stamped and is never
+asked for a cron, `<flow> status` reports the watchdog unarmed for the rest of its life,
+and nothing ever arms it. Same reasoning for the tick side, which would additionally
+tell that session, every interval, that it is not the flow's executor.
+
+**Why the state lives in active.json**
+`ActiveState.watchdog` rather than a `state/watchdog.json`. Four processes write it, so
+it needs the lock-and-re-read `patchActiveState` already provides — a second file
+written whole would silently roll back a concurrent update. And active.json is already
+fenced as control plane by `PreToolUse`, whereas a new file under `state/` matches none
+of those path rules, which would let the model edit its own watchdog counters.
+
+**`LIVE_OVERRIDE_KEYS`**
+The top-level keys a project's sparse `config.json` may set (`context`, `watchdog`),
+each mapped to the sub-keys this version still recognises. `legacy-cleanup` deletes
+every project key absent from this table, so a schema knob added without being added
+here is erased from every project that sets it on the next SessionStart — silently.
+`flow-config-loader` merges the same blocks one level deep for the same reason.
+
 ## Infrastructure
 
 **`/ai-flow` skill**

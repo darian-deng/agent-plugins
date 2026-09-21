@@ -45,7 +45,7 @@ function harvest(repoRoot: string, flowName: string): void {
   const log = join(repoRoot, '.ai-flow', flowName, 'state', 'flow.log');
   if (!existsSync(log)) return;
   for (const line of readFileSync(log, 'utf-8').split('\n')) {
-    if (/\bERROR (pretool|posttool|session|userprompt)\b/.test(line)) swallowed.push(line);
+    if (/\bERROR (pretool|posttool|session|userprompt|stop|watchdog-tick)\b/.test(line)) swallowed.push(line);
   }
 }
 

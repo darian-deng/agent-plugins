@@ -17,6 +17,14 @@ try {
     process.exit(2);
   }
 
+  // Covers both shapes, and deliberately NOT via an early `process.exit(0)`: a write
+  // to a pipe is asynchronous, so exiting on the next line can truncate it. Falling
+  // off the end of the script lets Node flush first.
+  //
+  // A watchdog tick the engine decided not to forward carries a top-level
+  // `decision: "block"`, which drops the prompt before the model sees it and prints
+  // `reason` to the developer. The exit-2 path above would do the same, but as a hook
+  // ERROR, which a suppressed tick is not.
   process.stdout.write(JSON.stringify(result));
 } catch (e) {
   process.stderr.write(`ai-flow internal error: ${String(e)}\n`);

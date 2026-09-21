@@ -78,13 +78,45 @@ export const ContextConfigSchema = z.object({
  */
 export const LIVE_CONTEXT_KEYS: ReadonlySet<string> = new Set(Object.keys(ContextConfigSchema.shape));
 
+/**
+ * Stall watchdog, per flow. Absent → enabled at `DEFAULT_IDLE_MINUTES`.
+ *
+ * Only the two knobs a developer plausibly wants: off, and how long a quiet
+ * session has to stay quiet before the engine lets a self-check reach the model.
+ * The per-stage nudge cap is deliberately NOT configurable — it is a safety bound
+ * on an unattended loop, not a preference, and a flow that could raise it would be
+ * able to un-bound the one thing that keeps a nudged model from re-arming itself
+ * every interval with nobody in the room.
+ */
+export const WatchdogConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  idle_minutes: z.number().int().min(1).max(120).optional(),
+});
+
 export const FlowConfigSchema = z.object({
   schema_version: z.literal('1.0'),
   name: z.string().min(1),
   description: z.string().optional(),
   context: ContextConfigSchema.optional(),
+  watchdog: WatchdogConfigSchema.optional(),
   stages: z.array(StageConfigSchema).min(1, 'at least one stage is required'),
 });
+
+/**
+ * The top-level keys a PROJECT's sparse config.json may legitimately set, each
+ * mapped to the sub-keys that version still recognises.
+ *
+ * legacy-cleanup deletes every project key not listed here, so a knob added to the
+ * schema without being added here is silently erased from every project that sets
+ * it on the next SessionStart — which is how `watchdog` would have behaved had this
+ * table stayed hard-coded to `context`. Derived from the schemas for the same
+ * reason `LIVE_CONTEXT_KEYS` is: adding a key must not require remembering a second
+ * list.
+ */
+export const LIVE_OVERRIDE_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['context', LIVE_CONTEXT_KEYS],
+  ['watchdog', new Set(Object.keys(WatchdogConfigSchema.shape)) as ReadonlySet<string>],
+]);
 
 export type FlowConfig = z.infer<typeof FlowConfigSchema>;
 export type StageConfig = z.infer<typeof StageConfigSchema>;

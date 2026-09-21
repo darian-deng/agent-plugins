@@ -11,6 +11,7 @@ import {
   clearRenderedPrompt,
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
+import { readWatchdog } from './watchdog.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
 import { stagePromptPath } from './flow-paths.js';
 
@@ -74,7 +75,13 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
   // Patch, not whole-state write: the read at the top of this function and this
   // write straddle a config load, and a hook that wrote base_sha_code or the
   // ownership fields inside that window must not be undone by the advance.
-  const advanced = await patchActiveState(repoRoot, flowName, { current_stage: next, first_prompt_handled: false });
+  const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
+    current_stage: next,
+    first_prompt_handled: false,
+    // The nudge budget is per stage: entering one is fresh evidence the session is
+    // moving, and the stage that spent its budget is over.
+    watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 },
+  }));
   if (!advanced) {
     return { additionalContext: `[ai-flow] No active flow found for '${flowName}'.`, terminal: true };
   }

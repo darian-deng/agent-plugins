@@ -15,6 +15,7 @@ import {
   materializeRenderedPrompt,
 } from './state.js';
 import { bindSession } from './session-registry.js';
+import { emptyWatchdog } from './watchdog.js';
 import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
@@ -171,6 +172,16 @@ export async function handleSessionStart(
     };
     if (isNewSession || isClear) {
       patch.context_wrap_up = { at_pct: null };
+      // Deliberately NOT keyed on `isClear`, which also covers `compact`. A compact
+      // keeps the session and its scheduled tasks alive, so wiping `cron_seen` there
+      // makes `<flow> status` answer "未武装" about a cron that is in fact running —
+      // and that line is the whole reason a developer can tell an armed watchdog from
+      // a dead one. It self-heals at the next turn end, i.e. just after the window
+      // where someone would check. A `/clear` (and a new session) really does drop the
+      // crons, so there the blank slate is correct: carrying `cron_seen` across would
+      // leave the watchdog believing a cron exists that the host already dropped, and
+      // it would never ask for a replacement.
+      if (isNewSession || input.source === 'clear') patch.watchdog = emptyWatchdog();
       // Reset so UserPromptSubmit Layer 2 re-injects resume guidance on the next prompt
       patch.first_prompt_handled = false;
     }

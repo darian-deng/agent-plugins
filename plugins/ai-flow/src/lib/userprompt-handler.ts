@@ -11,6 +11,8 @@ import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
 import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
+import { isWatchdogTick, handleWatchdogTick } from './watchdog-tick.js';
+import { readWatchdog } from './watchdog.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
   const o: UserPromptOutput = {
@@ -66,6 +68,27 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // flow's constraints, and marking `first_prompt_handled` would mutate the other
   // checkout's active.json to say a prompt it never saw has been handled.
   const foreign = !!active && isForeignCheckout(active, cwd);
+
+  // ── Stall watchdog ────────────────────────────────────────────────────────────
+  // A prompt carrying the watchdog sentinel is this session's own cron firing, not
+  // a developer typing. It is routed out before anything else because nothing below
+  // should treat it as developer input: it must not be parsed as a flow command, it
+  // must not consume the once-per-stage resume guidance, and — above all — it must
+  // not reset the nudge counter, which is what keeps a nudged model from re-arming
+  // its own watchdog every interval with nobody in the room.
+  if (isWatchdogTick(prompt, input.source)) {
+    return handleWatchdogTick(input, active, cwd);
+  }
+
+  // Everything past this point IS the developer. Their presence is what the nudge
+  // budget is for, so spending it again starts from zero: whatever the watchdog was
+  // worried about, someone is now in the room to see it.
+  if (active && !isNonOwner && !foreign && readWatchdog(active.state).nudges_this_stage > 0) {
+    await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
+      watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 },
+    }));
+  }
+  // ──────────────────────────────────────────────────────────────────────────────
 
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);

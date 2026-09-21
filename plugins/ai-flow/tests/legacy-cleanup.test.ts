@@ -109,6 +109,22 @@ describe('pruneLegacyInstall', () => {
       .toEqual({ context: { wrap_up_at_pct: chosen } });
   });
 
+  it('keeps a project watchdog override instead of deleting it as an unknown key', () => {
+    // Before LIVE_OVERRIDE_KEYS this loop kept `context` and deleted everything
+    // else, so a project that turned the stall watchdog off would have had that
+    // setting erased on its next SessionStart, silently, and the watchdog would
+    // come back on. Any knob added to the schema has to be added there too.
+    const { repoRoot, flowDir } = legacyInstall(BUILTIN, {
+      ...pluginDefaults(),
+      watchdog: { enabled: false },
+    });
+
+    pruneLegacyInstall(repoRoot, BUILTIN);
+
+    expect(JSON.parse(readFileSync(join(flowDir, 'config.json'), 'utf-8')))
+      .toEqual({ watchdog: { enabled: false } });
+  });
+
   it('leaves a flow the plugin does not ship completely alone', () => {
     // `/ai-flow:create` writes custom flows straight into the project; their stages
     // ARE the flow, so pruning them would delete it.
@@ -172,6 +188,13 @@ describe('config merge — plugin defaults under the project override', () => {
     const config = await loadFlowConfig(overrideOnly({ context: { wrap_up_at_pct: 42 } }), BUILTIN);
 
     expect(config.context?.wrap_up_at_pct).toBe(42);
+    expect(config.stages.length).toBeGreaterThan(0);
+  });
+
+  it('a watchdog override merges key-by-key like context does', async () => {
+    const config = await loadFlowConfig(overrideOnly({ watchdog: { idle_minutes: 15 } }), BUILTIN);
+
+    expect(config.watchdog?.idle_minutes).toBe(15);
     expect(config.stages.length).toBeGreaterThan(0);
   });
 

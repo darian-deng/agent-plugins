@@ -18,6 +18,18 @@ export interface BaseHookInput {
 export interface UserPromptInput extends BaseHookInput {
   hook_event_name: 'UserPromptSubmit';
   prompt: string;
+  /**
+   * Who authored or injected this prompt. Verified against the 2.1.278 binary, where
+   * the schema is `z(["user","sdk","system","loop_wakeup","schedule_wakeup",
+   * "poll_event"]).optional()`:
+   *   user           interactive composer
+   *   sdk            `-p` / Agent SDK entrypoint
+   *   loop_wakeup    a `/loop` firing
+   *   schedule_wakeup a scheduled task firing — what a watchdog tick arrives as
+   * Optional, so a client that omits it must keep working: the watchdog treats a
+   * missing value as "unknown" and falls back to matching the prompt text.
+   */
+  source?: 'user' | 'sdk' | 'system' | 'loop_wakeup' | 'schedule_wakeup' | 'poll_event';
 }
 
 export interface PostToolInput extends BaseHookInput {
@@ -43,6 +55,41 @@ export interface SessionStartInput extends BaseHookInput {
 
 export interface SessionEndInput extends BaseHookInput {
   hook_event_name: 'SessionEnd';
+}
+
+/** One in-flight background task as reported in `Stop` input. */
+export interface BackgroundTaskEntry {
+  id?: string;
+  /** `shell` | `subagent` | `monitor` | `workflow` | `teammate` | … */
+  type?: string;
+  status?: string;
+  description?: string;
+}
+
+/** One session-scoped scheduled wakeup (CronCreate / ScheduleWakeup / /loop). */
+export interface SessionCronEntry {
+  id?: string;
+  schedule?: string;
+  recurring?: boolean;
+  /** The prompt submitted when it fires — how the watchdog recognises its own cron. */
+  prompt?: string;
+}
+
+export interface StopInput extends BaseHookInput {
+  hook_event_name: 'Stop';
+  /**
+   * True when this turn only happened because a Stop hook asked for it. Used the
+   * way the host documents: bail out, so a hook can never chain continuations.
+   */
+  stop_hook_active?: boolean;
+  last_assistant_message?: string;
+  /**
+   * Present when the task registry is reachable, empty when nothing is in flight.
+   * ABSENT is therefore not the same as empty, and the watchdog must not read a
+   * missing array as "nothing is running" — see stop-handler.
+   */
+  background_tasks?: BackgroundTaskEntry[];
+  session_crons?: SessionCronEntry[];
 }
 
 // ─── Hook Output Types ─────────────────────────────────────────────────────────
@@ -72,6 +119,16 @@ export interface SessionOutput {
 
 export interface HookOutput {
   systemMessage?: string;
+  /**
+   * Top-level block, the form `UserPromptSubmit` uses to drop a prompt before the
+   * model ever sees it: `reason` goes to the developer, nothing goes to the model.
+   * The watchdog's suppressed ticks ride this — it is what makes a tick that finds
+   * nothing wrong cost zero tokens.
+   */
+  decision?: 'block';
+  reason?: string;
+  /** Keeps the blocked prompt's own text out of the message shown to the developer. */
+  suppressOriginalPrompt?: boolean;
   hookSpecificOutput?:
     | PreToolOutput
     | PostToolOutput

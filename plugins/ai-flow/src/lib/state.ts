@@ -16,6 +16,7 @@ import { randomBytes } from 'crypto';
 import { execFileSync } from 'child_process';
 import { join, dirname, resolve, relative } from 'path';
 import type { FlowConfig } from './flow-schema.js';
+import type { WatchdogState } from './watchdog.js';
 import { lookupSession, listBindings, removeBinding } from './session-registry.js';
 
 /**
@@ -81,6 +82,22 @@ export interface ActiveState {
    * cross-flow pollution.
    */
   base_sha_code?: string;
+  /**
+   * Stall-watchdog bookkeeping: when this session last ended a turn, whether
+   * background work was in flight then, whether the watchdog cron exists, and how
+   * many nudges the current stage has already spent. Absent on flows created
+   * before the watchdog existed — read it through `readWatchdog`, never directly.
+   *
+   * It lives HERE rather than in a `state/watchdog.json` of its own for two
+   * reasons, both of which a separate file gets wrong: four processes write it
+   * (UserPromptSubmit, PostToolUse, Stop, and the advance path), so it needs the
+   * same lock-and-re-read `patchActiveState` already provides — a whole-document
+   * write from a second file would silently roll back a concurrent update; and
+   * active.json is already fenced as control plane by PreToolUse, whereas a new
+   * file under `state/` would match none of those path rules and the model could
+   * simply edit its own watchdog counters.
+   */
+  watchdog?: WatchdogState;
 }
 
 function statePath(repoRoot: string, flowName: string, file: string): string {

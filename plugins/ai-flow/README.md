@@ -60,6 +60,16 @@ flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `
 
 **状态持久化**：运行状态存储在 `.ai-flow/{flow-name}/state/`（已 gitignore），随时可以 `/clear` 重开对话，下一个 session 自动接续。
 
+**停滞自检（watchdog）**：执行 flow 的 session 停下来之后，如果五分钟内没人来、也没有任何东西会把它叫醒，engine 会让它自己判断一次「这次停下来合不合理」。
+
+- **定时器是 Claude Code 自带的**：由模型建一条 session 内的定时任务（`CronCreate`，`/clear` 后自动消失）。engine 不起任何常驻进程。
+- **建没建由 engine 核验**，不靠提示词纪律：Stop hook 的输入里带着本 session 所有定时任务的原文，没建就当场让模型补建（一个 session 最多要 3 次）。
+- **绝大多数触发不花钱**：定时任务每次触发，engine 先机械判定——在等 approve、有后台任务在跑、刚停下不到阈值、本 stage 已经催满——命中任意一条就在到达模型之前拦掉，终端留一行，模型不消耗 token。只有确认停滞才会叫醒模型，并告诉它「在等开发者就回一行，否则接着做」。
+- **每个 stage 最多催 3 次**，开发者一说话或阶段推进就清零。这是无人值守时唯一的上界。
+- **只作用于真正在执行的那个 session**：非 owner session、同仓库另一检出的 session、子代理，一律不参与。
+- **关掉**：`config.json` 里 `"watchdog": { "enabled": false }`，或环境变量 `AI_FLOW_WATCHDOG=0`；`"idle_minutes"` 改阈值（默认 5）。
+- **有没有生效是看得见的**：`{flow-name} status` 会报「已武装 / 未武装」以及本 stage 已催几次。
+
 ### 安全保障
 
 ai-flow 通过两项机械保证确保 AI 无法绕过流程控制：
@@ -167,6 +177,29 @@ the token never enters AI's context and AI can't read it. Once you run
 **State persistence**: Runtime state lives in `.ai-flow/{flow-name}/state/`
 (gitignored). You can `/clear` and restart at any time; the next session picks
 up exactly where you left off.
+
+**Stall watchdog**: When the session driving a flow stops, and five minutes pass
+with nobody returning and nothing scheduled to wake it, the engine has it check
+once whether stopping was the right move.
+
+- **The timer is Claude Code's own.** The model schedules a session-scoped task
+  (`CronCreate`, dropped on `/clear`). The engine runs no daemon of its own.
+- **The engine verifies it exists**, rather than trusting a prompt: `Stop` hook
+  input carries every scheduled task's prompt text, so a missing one is asked for
+  again (at most three times per session).
+- **Most ticks cost nothing.** On each tick the engine decides mechanically —
+  gate pending, background work in flight, stopped more recently than the
+  threshold, stage budget spent — and a tick matching any of those is blocked
+  before the model sees it: one line in your terminal, zero tokens. Only a
+  confirmed stall reaches the model.
+- **At most three nudges per stage**, reset by any developer prompt and by every
+  stage advance. Unattended, that cap is the only bound there is.
+- **Only the session actually executing the flow** takes part — never a non-owner
+  session, a session in another checkout, or a subagent.
+- **Turning it off**: `"watchdog": { "enabled": false }` in `config.json`, or
+  `AI_FLOW_WATCHDOG=0`. `"idle_minutes"` changes the threshold (default 5).
+- **Whether it is armed is visible**: `{flow-name} status` reports armed / not
+  armed and how much of the stage's budget is spent.
 
 ### Security
 
