@@ -10,7 +10,6 @@ import { readFileSync as readFileSync7 } from "fs";
 
 // src/lib/session-handler.ts
 import { readFileSync as readFileSync6, existsSync as existsSync7 } from "fs";
-import { dirname as dirname3 } from "path";
 
 // src/lib/state.ts
 import {
@@ -29,7 +28,7 @@ import {
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join2, dirname, resolve, relative } from "path";
+import { join as join2, dirname, basename, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -229,7 +228,17 @@ function siblingCheckoutAnchors(dir) {
       while (n < x.length && n < y.length && x[n] === y[n]) n++;
       return n;
     };
-    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const ownsLane = (root) => {
+      const r = resolve(root);
+      return self.startsWith(join2(dirname(r), basename(r) + ".ai-flow-worktrees") + "/");
+    };
+    const claims = (root) => {
+      const cand = rel ? join2(root, rel) : root;
+      return isRegisteredWorktree(cand, self);
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort(
+      (a, b) => (claims(b) ? 1 : 0) - (claims(a) ? 1 : 0) || (ownsLane(b) ? 1 : 0) - (ownsLane(a) ? 1 : 0) || sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self)
+    );
     const seen = /* @__PURE__ */ new Set();
     const out2 = [];
     for (const root of ordered) {
@@ -244,10 +253,43 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+var WORKTREE_REGISTRY_DIR = "worktrees";
+function registeredWorktreePaths(anchorDir) {
+  const aiFlowDir = join2(anchorDir, ".ai-flow");
+  let flows;
+  try {
+    flows = readdirSync2(aiFlowDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const flowName of flows) {
+    const dir = join2(aiFlowDir, flowName, "state", WORKTREE_REGISTRY_DIR);
+    let entries;
+    try {
+      entries = readdirSync2(dir).filter((f) => f.endsWith(".json"));
+    } catch {
+      continue;
+    }
+    for (const f of entries) {
+      try {
+        const rec = JSON.parse(readFileSync2(join2(dir, f), "utf-8"));
+        if (typeof rec.path === "string" && rec.path) out.push(realPath(rec.path));
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+function isRegisteredWorktree(anchorDir, absPath) {
+  const self = realPath(absPath) + "/";
+  return registeredWorktreePaths(anchorDir).some((p) => self.startsWith(p + "/") || self === p + "/");
+}
 function isForeignCheckout(active, cwd) {
   if (!active.viaSibling) return false;
+  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
   const self = realPath(cwd) + "/";
-  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes(".ai-flow-worktrees/")) return false;
   if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
   return true;
 }
@@ -4818,7 +4860,6 @@ async function handleSessionStart(input2) {
     await appendLog(repoRoot, flowName, session_id, `SESSION source=${input2.source} stage=${state.current_stage}`);
     if (foreign) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_FOREIGN_CHECKOUT anchor=${repoRoot}`);
-      const stateDirOfOwner = dirname3(activeJsonPath(repoRoot, flowName));
       return {
         systemMessage: `[ai-flow:${flowName}] \u8BE5 flow \u7684\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA\uFF0C\u672C session \u4E0D\u53D7\u5B83\u7EA6\u675F\uFF08\u53EF\u6B63\u5E38\u6539\u672C\u68C0\u51FA\uFF09`,
         additionalContext: [
@@ -4828,16 +4869,13 @@ async function handleSessionStart(input2) {
           `\u4E24\u8005\u662F\u540C\u4E00\u4E2A git \u4ED3\u5E93\u7684\u4E0D\u540C\u68C0\u51FA\uFF08git worktree\uFF09\uFF0C\u662F\u4E24\u4EFD\u72EC\u7ACB\u7684\u5DE5\u4F5C\u526F\u672C\u3002`,
           ``,
           `\u21D2 **\u672C session \u4E0D\u53D7\u90A3\u6761 flow \u7EA6\u675F**\uFF1A\u672C\u68C0\u51FA\u7684\u6587\u4EF6\u53EF\u4EE5\u6B63\u5E38\u4FEE\u6539\uFF0C\u4E0D\u5FC5\u4E3A\u5B83\u505A\u4EFB\u4F55\u4E8B\u3002`,
-          `   \u4ECD\u7136\u88AB\u62E6\u7684\u53EA\u6709\u4E24\u7C7B\uFF1A\u6539\u4EFB\u610F\u68C0\u51FA\u4E0B '.ai-flow/${flowName}/' \u91CC\u7684\u63A7\u5236\u9762\u6587\u4EF6\uFF08stage \u63D0\u793A\u8BCD /`,
-          `   config / \u811A\u672C / signal\uFF09\uFF0C\u4EE5\u53CA\u5728\u672C\u68C0\u51FA\u6267\u884C\u4F1A\u4F5C\u7528\u5230\u5BF9\u65B9\u951A\u70B9\u7684\u6D41\u7A0B\u547D\u4EE4\u3002`,
+          `   \u4ECD\u7136\u88AB\u62E6\u7684\u53EA\u6709\u4E00\u7C7B\uFF1A\u6539\u4EFB\u610F\u68C0\u51FA\u4E0B '.ai-flow/${flowName}/' \u91CC\u7684\u63A7\u5236\u9762\u6587\u4EF6`,
+          `   \uFF08stage \u63D0\u793A\u8BCD / config / \u811A\u672C / signal\uFF09\u3002`,
           ``,
-          `\u26D4 \u4E0D\u8981\u5728\u672C\u68C0\u51FA\u6267\u884C '${flowName} abort'/'approve'/'resume'\uFF1A\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728 ${repoRoot} \u4E0A\u3002`,
-          `   \u8981\u64CD\u4F5C\u90A3\u6761 flow\uFF0C\u53BB\u5B83\u81EA\u5DF1\u7684\u68C0\u51FA\u91CC\u64CD\u4F5C\u3002`,
-          ``,
-          `\u5982\u679C\u5F00\u53D1\u8005\u60F3\u5728**\u672C\u68C0\u51FA**\u8DD1\u4E00\u6761\u81EA\u5DF1\u7684 flow\uFF1A'${flowName} start' \u5728\u8FD9\u91CC\u4ECD\u4F1A\u88AB\u62D2\uFF08\u89E3\u6790\u4F1A\u843D\u5230\u5BF9\u65B9`,
-          `\u951A\u70B9\uFF09\u3002\u505A\u6CD5\u662F\u5148\u628A\u5BF9\u65B9\u7684\u6D41\u7A0B\u72B6\u6001\u632A\u8D70\uFF0C\u518D\u5728\u672C\u68C0\u51FA start\uFF0C\u7136\u540E\u632A\u56DE\u6765\uFF1A`,
-          `     mv ${stateDirOfOwner} ${stateDirOfOwner}.parked`,
-          `   \u26A0\uFE0F \u632A\u56DE\u4E4B\u540E\u5B83\u7684 "last_session_id" \u4ECD\u6307\u5411\u90A3\u4E2A\u5DF2\u7ECF\u4E0D\u5728\u7684 session\uFF0C\u8981\u63A5\u7BA1\u5F97\u5148\u628A\u8BE5\u5B57\u6BB5\u6539\u6210 null\u3002`
+          `\u21D2 \u672C\u68C0\u51FA\u7684\u6D41\u7A0B\u547D\u4EE4\u4E00\u5F8B\u843D\u5728**\u672C\u68C0\u51FA\u81EA\u5DF1\u7684\u951A\u70B9**\u4E0A\uFF0C\u78B0\u4E0D\u5230 ${repoRoot}\uFF1A`,
+          `   \u60F3\u5728\u8FD9\u513F\u8DD1\u81EA\u5DF1\u7684 flow\uFF0C\u76F4\u63A5 '${flowName} start <\u9700\u6C42>' \u5373\u53EF\uFF0C\u4E0D\u9700\u8981\u52A8\u5BF9\u65B9\u4EFB\u4F55\u6587\u4EF6\u3002`,
+          `\u26D4 \u53CD\u8FC7\u6765\u4E5F\u6210\u7ACB\uFF1A\u5728\u8FD9\u513F\u6267\u884C '${flowName} abort'/'approve'/'resume' **\u505C\u4E0D\u4E86\u5BF9\u65B9\u90A3\u6761 flow**\uFF0C`,
+          `   \u8981\u64CD\u4F5C\u5B83\u5F97\u53BB ${repoRoot} \u90A3\u4E2A session\u3002`
         ].join("\n")
       };
     }

@@ -25,7 +25,7 @@ import {
 } from "fs";
 import { randomBytes } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join2, dirname, resolve, relative } from "path";
+import { join as join2, dirname, basename, resolve, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, unlinkSync } from "fs";
@@ -178,7 +178,17 @@ function siblingCheckoutAnchors(dir) {
       while (n < x.length && n < y.length && x[n] === y[n]) n++;
       return n;
     };
-    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+    const ownsLane = (root) => {
+      const r = resolve(root);
+      return self.startsWith(join2(dirname(r), basename(r) + ".ai-flow-worktrees") + "/");
+    };
+    const claims = (root) => {
+      const cand = rel ? join2(root, rel) : root;
+      return isRegisteredWorktree(cand, self);
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)].sort(
+      (a, b) => (claims(b) ? 1 : 0) - (claims(a) ? 1 : 0) || (ownsLane(b) ? 1 : 0) - (ownsLane(a) ? 1 : 0) || sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self)
+    );
     const seen = /* @__PURE__ */ new Set();
     const out2 = [];
     for (const root of ordered) {
@@ -193,10 +203,43 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+var WORKTREE_REGISTRY_DIR = "worktrees";
+function registeredWorktreePaths(anchorDir) {
+  const aiFlowDir = join2(anchorDir, ".ai-flow");
+  let flows;
+  try {
+    flows = readdirSync2(aiFlowDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const flowName of flows) {
+    const dir = join2(aiFlowDir, flowName, "state", WORKTREE_REGISTRY_DIR);
+    let entries;
+    try {
+      entries = readdirSync2(dir).filter((f) => f.endsWith(".json"));
+    } catch {
+      continue;
+    }
+    for (const f of entries) {
+      try {
+        const rec = JSON.parse(readFileSync2(join2(dir, f), "utf-8"));
+        if (typeof rec.path === "string" && rec.path) out.push(realPath(rec.path));
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+function isRegisteredWorktree(anchorDir, absPath) {
+  const self = realPath(absPath) + "/";
+  return registeredWorktreePaths(anchorDir).some((p) => self.startsWith(p + "/") || self === p + "/");
+}
 function isForeignCheckout(active, cwd) {
   if (!active.viaSibling) return false;
+  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
   const self = realPath(cwd) + "/";
-  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes(".ai-flow-worktrees/")) return false;
   if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
   return true;
 }

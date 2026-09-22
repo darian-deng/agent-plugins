@@ -9,7 +9,7 @@ var __export = (target, all) => {
 import { readFileSync as readFileSync9 } from "fs";
 
 // src/lib/userprompt-handler.ts
-import { join as join11, dirname as dirname4 } from "path";
+import { join as join10 } from "path";
 
 // src/lib/flow-config-loader.ts
 import { existsSync as existsSync2, readdirSync, readFileSync } from "fs";
@@ -4345,7 +4345,6 @@ function parseFlowCommand(prompt, knownFlows) {
 
 // src/lib/commands/start.ts
 import { existsSync as existsSync8, readFileSync as readFileSync5 } from "fs";
-import { join as join8 } from "path";
 import { execSync } from "child_process";
 
 // src/lib/state.ts
@@ -4365,7 +4364,7 @@ import {
 } from "fs";
 import { randomBytes as randomBytes2 } from "crypto";
 import { execFileSync } from "child_process";
-import { join as join4, dirname as dirname2, resolve as resolve2, relative } from "path";
+import { join as join4, dirname as dirname2, basename, resolve as resolve2, relative } from "path";
 
 // src/lib/session-registry.ts
 import { existsSync as existsSync3, mkdirSync, writeFileSync, readFileSync as readFileSync2, readdirSync as readdirSync2, renameSync, unlinkSync } from "fs";
@@ -4544,7 +4543,17 @@ function siblingCheckoutAnchors(dir) {
       while (n < x.length && n < y.length && x[n] === y[n]) n++;
       return n;
     };
-    const ordered = [mainRoot, ...roots.filter((r) => resolve2(r) !== mainRoot)].sort((a, b) => sharedPrefix(resolve2(b), self) - sharedPrefix(resolve2(a), self));
+    const ownsLane = (root) => {
+      const r = resolve2(root);
+      return self.startsWith(join4(dirname2(r), basename(r) + ".ai-flow-worktrees") + "/");
+    };
+    const claims = (root) => {
+      const cand = rel ? join4(root, rel) : root;
+      return isRegisteredWorktree(cand, self);
+    };
+    const ordered = [mainRoot, ...roots.filter((r) => resolve2(r) !== mainRoot)].sort(
+      (a, b) => (claims(b) ? 1 : 0) - (claims(a) ? 1 : 0) || (ownsLane(b) ? 1 : 0) - (ownsLane(a) ? 1 : 0) || sharedPrefix(resolve2(b), self) - sharedPrefix(resolve2(a), self)
+    );
     const seen = /* @__PURE__ */ new Set();
     const out2 = [];
     for (const root of ordered) {
@@ -4559,10 +4568,43 @@ function siblingCheckoutAnchors(dir) {
     return [];
   }
 }
+var WORKTREE_REGISTRY_DIR = "worktrees";
+function registeredWorktreePaths(anchorDir) {
+  const aiFlowDir = join4(anchorDir, ".ai-flow");
+  let flows;
+  try {
+    flows = readdirSync3(aiFlowDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const flowName of flows) {
+    const dir = join4(aiFlowDir, flowName, "state", WORKTREE_REGISTRY_DIR);
+    let entries;
+    try {
+      entries = readdirSync3(dir).filter((f) => f.endsWith(".json"));
+    } catch {
+      continue;
+    }
+    for (const f of entries) {
+      try {
+        const rec = JSON.parse(readFileSync3(join4(dir, f), "utf-8"));
+        if (typeof rec.path === "string" && rec.path) out.push(realPath(rec.path));
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+function isRegisteredWorktree(anchorDir, absPath) {
+  const self = realPath(absPath) + "/";
+  return registeredWorktreePaths(anchorDir).some((p) => self.startsWith(p + "/") || self === p + "/");
+}
 function isForeignCheckout(active, cwd) {
   if (!active.viaSibling) return false;
+  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
   const self = realPath(cwd) + "/";
-  if (self.includes("/.ai-flow-worktrees/")) return false;
+  if (self.includes(".ai-flow-worktrees/")) return false;
   if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
   return true;
 }
@@ -4869,16 +4911,16 @@ async function handleStart(repoRoot, flowName, requirement, sessionId, contextSi
   } catch (e) {
     return { action: "deny", reason: String(e) };
   }
-  const active = await hasActiveFlow(repoRoot);
+  const resolved = await hasActiveFlow(repoRoot);
+  const active = resolved && isForeignCheckout(resolved, cwd ?? repoRoot) ? null : resolved;
   if (active) {
     if (active.viaSibling) {
       return {
         action: "deny",
-        reason: `\u6D41\u7A0B '${active.flowName}' \u6B63\u5728\u8FD0\u884C\uFF0C\u4F46\u5B83\u7684**\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA**\uFF1A${active.repoRoot}
-\uFF08\u672C\u6B21 start \u7684\u76EE\u6807\u951A\u70B9\u662F ${repoRoot}\uFF09
-\u26D4 \u4E0D\u8981\u5728\u8FD9\u91CC abort \u5B83\u2014\u2014\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728\u90A3\u4E2A\u68C0\u51FA\u4E0A\u3002\u8981\u505C\u5B83\u5C31\u53BB\u5B83\u81EA\u5DF1\u7684\u68C0\u51FA\u91CC\u505C\u3002
-\u21D2 \u60F3\u5728\u672C\u68C0\u51FA\u8DD1\u81EA\u5DF1\u7684 flow\uFF1A\u5148\u628A\u5B83\u7684\u6D41\u7A0B\u72B6\u6001\u632A\u8D70\uFF08\u4EE3\u7801\u4E00\u884C\u4E0D\u52A8\uFF09\uFF0C\u518D\u91CD\u542F\u672C session \u4E0A\u4E0B\u6587\uFF1A
-     mv ${join8(active.repoRoot, ".ai-flow", active.flowName, "state")} ${join8(active.repoRoot, ".ai-flow", active.flowName, "state")}.parked`
+        reason: `\u6D41\u7A0B '${active.flowName}' \u6B63\u5728\u8FD0\u884C\uFF0C\u800C\u4F60\u73B0\u5728\u5728\u5B83\u7ED9\u7968\u5F00\u7684**\u4E34\u65F6\u5DE5\u4F5C\u6811**\u91CC\uFF1A${repoRoot}
+\uFF08\u5B83\u7684\u951A\u70B9\u662F ${active.repoRoot}\uFF09
+\u26D4 \u4E0D\u8981\u5728\u8FD9\u91CC abort \u5B83\u2014\u2014\u547D\u4EE4\u4F1A\u4F5C\u7528\u5230\u951A\u70B9\u4E0A\uFF0C\u9500\u6BC1\u7684\u6B63\u662F\u6253\u5F00\u8FD9\u68F5\u6811\u7684\u90A3\u6761\u6D41\u7A0B\u3002
+\u21D2 \u7968\u6811\u53EA\u901A\u8FC7 signal \u6587\u4EF6\u53C2\u4E0E\u6D41\u7A0B\uFF0C\u4E0D\u5728\u8FD9\u91CC\u5F00\u65B0 flow\uFF1B\u8981\u64CD\u4F5C\u5B83\u5C31\u56DE\u5230 ${active.repoRoot}\u3002`
       };
     }
     return {
@@ -5111,7 +5153,7 @@ ${systemMessage}` : systemMessage,
 // src/lib/commands/abort.ts
 import { execFileSync as execFileSync2 } from "child_process";
 import { existsSync as existsSync10, mkdirSync as mkdirSync3, writeFileSync as writeFileSync4, unlinkSync as unlinkSync4, realpathSync as realpathSync2 } from "fs";
-import { join as join9, dirname as dirname3, basename } from "path";
+import { join as join8, dirname as dirname3, basename as basename2 } from "path";
 function git(args, cwd) {
   return execFileSync2("git", args, { cwd, stdio: "pipe", encoding: "utf-8" }).trim();
 }
@@ -5128,8 +5170,8 @@ function flowWorktrees(repoRoot, flowId) {
   } catch {
   }
   const prefixes = [
-    join9(base, ".worktrees") + "/" + flowId + "-",
-    join9(dirname3(base), basename(base) + ".ai-flow-worktrees") + "/" + flowId + "-"
+    join8(base, ".worktrees") + "/" + flowId + "-",
+    join8(dirname3(base), basename2(base) + ".ai-flow-worktrees") + "/" + flowId + "-"
   ];
   const found = [];
   let cur = null;
@@ -5195,10 +5237,10 @@ ${worktreeList}
   let snapshotCommitted = false;
   try {
     git(["checkout", "-b", branchName], repoRoot);
-    const snapshotDir = join9(repoRoot, "docs", flowName, state.flow_id);
+    const snapshotDir = join8(repoRoot, "docs", flowName, state.flow_id);
     mkdirSync3(snapshotDir, { recursive: true });
     writeFileSync4(
-      join9(snapshotDir, "state-snapshot.json"),
+      join8(snapshotDir, "state-snapshot.json"),
       JSON.stringify(state, null, 2)
     );
     git(["add", "-A"], repoRoot);
@@ -5223,7 +5265,7 @@ Error: ${String(err)}
 Flow remains active \u2014 active.json was NOT deleted.`;
     return { action: "deny", reason };
   }
-  const activeJsonPath2 = join9(repoRoot, ".ai-flow", flowName, "state", "active.json");
+  const activeJsonPath2 = join8(repoRoot, ".ai-flow", flowName, "state", "active.json");
   if (existsSync10(activeJsonPath2)) unlinkSync4(activeJsonPath2);
   await appendLog(repoRoot, flowName, sessionId, `ABORTED branch=${branchName}`);
   const headNote = !originalBranch || originalBranch === "HEAD" ? `
@@ -5387,10 +5429,10 @@ async function handleStatus(repoRoot, flowName) {
 
 // src/lib/commands/help.ts
 import { existsSync as existsSync12, readFileSync as readFileSync8 } from "fs";
-import { join as join10 } from "path";
+import { join as join9 } from "path";
 async function handleHelp(repoRoot, flowName) {
   if (flowName) {
-    const helperPath = join10(flowDefDir(repoRoot, flowName), "helper.md");
+    const helperPath = join9(flowDefDir(repoRoot, flowName), "helper.md");
     if (existsSync12(helperPath)) {
       const content = readFileSync8(helperPath, "utf-8");
       return { action: "allow", additionalContext: content };
@@ -5475,15 +5517,18 @@ function resultToHookOutput(result, flowName) {
 async function handleUserPrompt(input2) {
   const { cwd, prompt, session_id } = input2;
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
-  const repoRoot = active?.repoRoot ?? findRepoRoot(cwd) ?? cwd;
-  const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
   const foreign = !!active && isForeignCheckout(active, cwd);
+  const repoRoot = (foreign ? null : active?.repoRoot) ?? findRepoRoot(cwd) ?? cwd;
+  const isNonOwner = !!(active && active.state.last_session_id && active.state.last_session_id !== session_id);
   if (isLegacyCronTick(prompt, input2.source)) {
-    return {
-      decision: "block",
-      reason: `[ai-flow:watchdog] \u8FD9\u662F 0.76.0 \u7559\u4E0B\u7684\u5B9A\u65F6\u81EA\u68C0\u4EFB\u52A1\uFF0C\u65B0\u7248\u672C\u5DF2\u4E0D\u7528\u5B83\uFF08\u6539\u6210\u4E86\u540E\u53F0\u8FDB\u7A0B\uFF09\u3002\u5B83\u4F1A\u4E00\u76F4\u6309\u70B9\u89E6\u53D1\uFF1A\u6267\u884C CronList \u627E\u5230\u8FD9\u6761\u3001CronDelete \u5220\u6389\u5373\u53EF\uFF0C\u5220\u5B8C\u8FD9\u884C\u5C31\u4E0D\u518D\u51FA\u73B0\u3002`,
-      suppressOriginalPrompt: true
-    };
+    return makeOutput([
+      `${WATCHDOG_LABEL} \u8FD9\u6761\u5B9A\u65F6\u4EFB\u52A1\u662F ai-flow 0.76.0 \u7559\u4E0B\u7684\uFF0C\u5F53\u524D\u7248\u672C\u5DF2\u7ECF\u4E0D\u7528\u5B83\u4E86`,
+      `\uFF08\u505C\u6EDE\u81EA\u68C0\u6539\u6210\u4E86\u540E\u53F0\u8FDB\u7A0B\uFF0C\u4E0D\u518D\u8D70 cron\uFF09\u3002\u5B83\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD\uFF0C\u4E5F\u6CA1\u6709\u4EFB\u4F55\u81EA\u68C0\u8981\u505A\u3002`,
+      ``,
+      `\u73B0\u5728\u5C31\u628A\u5B83\u5220\u6389\uFF0C\u5426\u5219\u5B83\u4F1A\u6BCF 5 \u5206\u949F\u518D\u53EB\u9192\u4F60\u4E00\u6B21\u3001\u5E76\u4E14\u80FD\u6491\u8FC7 \`claude --resume\`\uFF1A`,
+      `\u8C03\u7528 CronList \u627E\u5230 prompt \u4EE5 "${WATCHDOG_LABEL}" \u5F00\u5934\u7684\u90A3\u6761\uFF0C\u7528 CronDelete \u5220\u9664\u3002`,
+      `\u5220\u5B8C\u56DE\u4E00\u884C\u8BF4\u5220\u4E86\u54EA\u6761\u5C31\u7ED3\u675F\u56DE\u5408\u2014\u2014\u4E0D\u8981\u987A\u624B\u505A\u522B\u7684\u3001\u4E0D\u8981\u590D\u8FF0\u6D41\u7A0B\u72B6\u6001\u3002`
+    ].join("\n"));
   }
   if (active && !isNonOwner && !foreign) {
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
@@ -5502,14 +5547,20 @@ async function handleUserPrompt(input2) {
   if (!parsed) {
     if (active && !isNonOwner && !foreign && !(active.state.first_prompt_handled ?? false)) {
       let gatePending = false;
+      let docsPaths = [];
       try {
         const config = await loadFlowConfig(active.repoRoot, active.flowName);
         const signal = readSignal(active.repoRoot, active.flowName);
         gatePending = isGatePending(signal, config, active.state.current_stage);
+        docsPaths = resolveDocsPaths(
+          getStageConfig(config, active.state.current_stage).docs_paths ?? [],
+          active.state.flow_id
+        );
       } catch {
       }
       await patchActiveState(active.repoRoot, active.flowName, { first_prompt_handled: true });
-      const flowRoot = join11(active.repoRoot, ".ai-flow", active.flowName);
+      const stateDir2 = join10(active.repoRoot, ".ai-flow", active.flowName, "state");
+      const defDir = flowDefDir(active.repoRoot, active.flowName);
       const statusLine = flowStatusLine({
         flowName: active.flowName,
         stageId: active.state.current_stage,
@@ -5526,13 +5577,33 @@ async function handleUserPrompt(input2) {
         ``,
         `\u7136\u540E\u5224\u65AD\u672C\u6761\u6D88\u606F\u7684\u610F\u56FE\uFF0C\u4E8C\u9009\u4E00\uFF1A`,
         `\xB7 \u82E5\u662F\u300C\u7EE7\u7EED/\u63A8\u8FDB\u5F53\u524D\u9636\u6BB5/approve/\u8BA8\u8BBA\u5F53\u524D stage \u4EA7\u7269\u300D\u2192 \u6309\u5F53\u524D stage \u72B6\u6001\u76F4\u63A5\u63A5\u7EED\uFF0C\u4E0D\u53E6\u8D77\u7089\u7076\u3002`,
-        `\xB7 \u82E5\u662F\u4E00\u4E2A\u770B\u8D77\u6765\u72EC\u7ACB\u7684\u65B0\u4EFB\u52A1 \u2192 \u5148\u8BFB ${flowRoot} \u4E0B active.json\u3001\u5F53\u524D stage \u4EA7\u7269\u3001references/\u3001helper.md \u638C\u63E1 flow \u80CC\u666F\uFF0C\u5224\u65AD\u5B83\u4E0E\u5F53\u524D flow \u7684\u5173\u7CFB\uFF0C\u518D\u52A8\u624B\uFF1B\u5168\u7A0B\u4FDD\u6301 flow \u7EA6\u675F\uFF08gate \u5F85\u786E\u8BA4\u65F6\u52FF\u64C5\u81EA\u63A8\u8FDB stage\uFF0Cwrite_scope \u9650\u5236\u4ECD\u751F\u6548\uFF09\u3002`
+        `\xB7 \u82E5\u662F\u4E00\u4E2A\u770B\u8D77\u6765\u72EC\u7ACB\u7684\u65B0\u4EFB\u52A1 \u2192 \u5148\u638C\u63E1 flow \u80CC\u666F\uFF0C\u518D\u5224\u65AD\u5B83\u4E0E\u5F53\u524D flow \u7684\u5173\u7CFB\uFF0C\u7136\u540E\u52A8\u624B\u3002`,
+        `  \u80CC\u666F\u6309\u8FD9\u4E2A\u987A\u5E8F\u53D6\uFF08\u4E09\u4E2A\u76EE\u5F55\u4E0D\u662F\u4E00\u4E2A\uFF0C\u522B\u4E92\u76F8\u4EE3\u5165\uFF09\uFF1A`,
+        `    1. ${join10(defDir, "helper.md")} \u2014 \u6D41\u7A0B\u603B\u89C8\uFF1A\u51E0\u4E2A stage\u3001\u5404\u81EA\u4EA7\u51FA\u4EC0\u4E48`,
+        `    2. ${join10(defDir, "references")}/ \u2014 \u5404\u9879\u7EAA\u5F8B\u4E0E\u5951\u7EA6\uFF08\u4EA4\u63A5\u3001\u4FEE\u8BA2\u3001\u5B50\u4EE3\u7406\u8FB9\u754C\uFF09`,
+        `    3. ${stateDir2}/active.json \u2014 \u5F53\u524D stage\u3001flow_id\u3001base_sha`,
+        ...docsPaths.length > 0 ? [
+          `    4. \u672C\u6B21\u4EA7\u7269\uFF08\u9700\u6C42 / \u65B9\u6848 / \u7968\u9762\u90FD\u5728\u8FD9\u513F\uFF0C\u662F\u300C\u8FD9\u4EF6\u4E8B\u5F53\u65F6\u5B9A\u8FC7\u5417\u300D\u7684\u7B54\u6848\u6240\u5728\uFF09\uFF1A`,
+          ...docsPaths.map((d) => `       ${join10(active.repoRoot, d)}`)
+        ] : [`    4. \u672C stage \u6CA1\u914D docs_paths\uFF0C\u4EA7\u7269\u843D\u70B9\u95EE\u5F00\u53D1\u8005\uFF0C\u26D4 \u522B\u731C\u4E00\u4E2A\u8DEF\u5F84\u53BB Read\u3002`],
+        `  \u5168\u7A0B\u4FDD\u6301 flow \u7EA6\u675F\uFF08gate \u5F85\u786E\u8BA4\u65F6\u52FF\u64C5\u81EA\u63A8\u8FDB stage\uFF0Cwrite_scope \u9650\u5236\u4ECD\u751F\u6548\uFF09\u3002`
       ].join("\n");
       return makeOutput(guidance);
     }
     return makeOutput();
   }
   const { flowName, subCmd, args } = parsed;
+  const MUTATING = ["start", "abort", "approve", "resume"];
+  if (active?.viaSibling && !foreign && subCmd && MUTATING.includes(subCmd)) {
+    return resultToHookOutput({
+      action: "deny",
+      reason: `[ai-flow] \u62D2\u7EDD\u6267\u884C '${flowName} ${subCmd}'\uFF1A\u4F60\u73B0\u5728\u5728\u6D41\u7A0B '${active.flowName}' \u7ED9\u7968\u5F00\u7684**\u4E34\u65F6\u5DE5\u4F5C\u6811**\u91CC\uFF0C\u6D41\u7A0B\u951A\u70B9\u4E0D\u5728\u8FD9\u513F\uFF0C\u547D\u4EE4\u4F1A\u4F5C\u7528\u5230\u951A\u70B9\u90A3\u8FB9\u800C\u4E0D\u662F\u4F60\u5F53\u524D\u76EE\u5F55\u3002
+    \u672C session \u7684 cwd\uFF1A${cwd}
+    \u6D41\u7A0B\u951A\u70B9\uFF1A        ${active.repoRoot}
+\u7968\u6811\u53EA\u901A\u8FC7 signal \u6587\u4EF6\u53C2\u4E0E\u6D41\u7A0B\uFF0C\u4E0D\u53D1\u6D41\u7A0B\u547D\u4EE4\u3002
+\u21D2 \u8981\u64CD\u4F5C '${active.flowName}'\uFF08approve / abort / resume\uFF09\u2192 \u56DE\u5230 ${active.repoRoot} \u90A3\u4E2A session\u3002`
+    });
+  }
   const targetFlowState = await readActiveState(repoRoot, flowName).catch(() => null);
   if (targetFlowState?.last_session_id && targetFlowState.last_session_id !== session_id) {
     const ownerSession = targetFlowState.last_session_id;
@@ -5543,23 +5614,6 @@ async function handleUserPrompt(input2) {
 \u6062\u590D\u6B65\u9AA4\uFF08\u8BEF\u62A5\u65F6\uFF09\uFF1A
   1. \u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00 ${activeFile}\uFF0C\u5C06 "last_session_id" \u6539\u4E3A null \u5E76\u4FDD\u5B58\u3002
   2. \u4FDD\u5B58\u5B8C\u6210\u540E\uFF0C\u5728\u672C session \u6267\u884C /clear\u3002`
-    });
-  }
-  const MUTATING = ["start", "abort", "approve", "resume"];
-  if (active?.viaSibling && subCmd && MUTATING.includes(subCmd)) {
-    const ownerState = dirname4(activeJsonPath(active.repoRoot, active.flowName));
-    return resultToHookOutput({
-      action: "deny",
-      reason: `[ai-flow] \u62D2\u7EDD\u6267\u884C '${flowName} ${subCmd}'\uFF1A\u672C session \u89E3\u6790\u5230\u7684\u6D41\u7A0B '${active.flowName}' **\u951A\u70B9\u5728\u672C\u4ED3\u5E93\u7684\u53E6\u4E00\u4E2A\u68C0\u51FA**\uFF0C\u547D\u4EE4\u4F1A\u4F5C\u7528\u5728\u90A3\u91CC\u800C\u4E0D\u662F\u4F60\u73B0\u5728\u8FD9\u4E2A\u76EE\u5F55\u3002
-    \u672C session \u7684 cwd\uFF1A${cwd}
-    \u89E3\u6790\u5230\u7684\u951A\u70B9\uFF1A    ${active.repoRoot}
-\u4E24\u8005\u662F\u540C\u4E00 git \u4ED3\u5E93\u7684\u4E0D\u540C\u68C0\u51FA\uFF08git worktree\uFF09\u3002\u5F15\u64CE\u5728\u5F53\u524D\u68C0\u51FA\u627E\u4E0D\u5230\u6D41\u7A0B\u72B6\u6001\u65F6\u4F1A\u53BB\u540C\u4ED3\u5E93\u5176\u5B83\u68C0\u51FA\u627E\u540C\u8DEF\u5F84\u7684\u951A\u70B9\uFF08\u4E3A\u4E86\u8BA9 flow \u7ED9\u7968\u5F00\u7684\u4E34\u65F6\u5DE5\u4F5C\u6811\u80FD\u627E\u56DE\u771F\u6B63\u7684\u951A\u70B9\uFF09\uFF0C\u5B83\u5206\u8FA8\u4E0D\u51FA\u90A3\u662F\u300C\u7968\u6811\u300D\u8FD8\u662F\u300C\u4F60\u624B\u5EFA\u7684\u53E6\u4E00\u6761\u72EC\u7ACB\u5F00\u53D1\u7EBF\u300D\u3002
-
-\u21D2 \u60F3\u64CD\u4F5C '${active.flowName}' \u2192 \u5230 ${active.repoRoot} \u7684 session \u91CC\u53BB\u64CD\u4F5C\u3002
-\u21D2 \u60F3\u5728\u672C\u68C0\u51FA\u8DD1\u81EA\u5DF1\u7684 flow \u2192 \u5148\u628A\u90A3\u6761 flow \u7684\u72B6\u6001\u632A\u8D70\uFF08\u4EE3\u7801\u4E00\u884C\u4E0D\u52A8\uFF09\uFF0C\u518D\u91CD\u542F\u672C session \u4E0A\u4E0B\u6587\uFF1A
-     mv ${ownerState} ${ownerState}.parked
-   \u4E4B\u540E\u53EF\u4EE5\u632A\u56DE\u6765\u2014\u2014\u4E24\u4E2A\u68C0\u51FA\u5404\u6709\u81EA\u5DF1\u7684 active.json \u662F\u88AB\u652F\u6301\u7684\u5F62\u6001\uFF0C\u53EA\u662F**\u8D77\u6B65**\u8FD9\u4E00\u523B\u4F1A\u88AB\u8FD9\u4E2A\u9501\u6321\u4F4F\u3002
-   \u26A0\uFE0F \u632A\u56DE\u540E\u5B83\u7684 "last_session_id" \u4ECD\u6307\u5411\u90A3\u4E2A\u5DF2\u4E0D\u5728\u7684 session\uFF0C\u8981\u63A5\u7BA1\u5F97\u5148\u628A\u8BE5\u5B57\u6BB5\u6539\u6210 null\u3002`
     });
   }
   if (!subCmd || !VALID_COMMANDS.includes(subCmd)) {

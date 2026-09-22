@@ -24,7 +24,7 @@ import {
   realpathSync
 } from "fs";
 import { randomBytes } from "crypto";
-import { join, dirname, resolve, relative } from "path";
+import { join, dirname, basename, resolve, relative } from "path";
 function statePath(repoRoot2, flowName2, file) {
   return join(repoRoot2, ".ai-flow", flowName2, "state", file);
 }
