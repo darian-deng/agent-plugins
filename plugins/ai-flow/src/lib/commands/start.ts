@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
 import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
-import { hasActiveFlow, writeActiveState, appendLog, materializeRenderedPrompt, type ActiveState } from '../state.js';
+import { hasActiveFlow, isForeignCheckout, writeActiveState, appendLog, materializeRenderedPrompt, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
 import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, REQUIREMENT_SOURCE } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
@@ -82,16 +81,23 @@ export async function handleStart(
     return { action: 'deny', reason: String(e) };
   }
 
-  const active = await hasActiveFlow(repoRoot);
+  const resolved = await hasActiveFlow(repoRoot);
+  // A flow resolved in an UNRELATED checkout of this repository does not block a start
+  // here: that checkout is a working copy this flow never reads and never writes (see
+  // `isForeignCheckout`), and every other hook already treats it as flow-less. Refusing
+  // was the whole reason a developer with two hand-made worktrees could not start a flow
+  // in the second one — the refusal's own way out ("park the other checkout's state")
+  // asked them to disturb a running flow to get there. Only the flow's OWN ticket trees
+  // keep the refusal below.
+  const active = resolved && isForeignCheckout(resolved, cwd ?? repoRoot) ? null : resolved;
   if (active) {
-    // The cross-checkout case needs a different refusal. `hasActiveFlow` also resolves
-    // a flow living in ANOTHER checkout of this repository (see `ResolvedFlow.viaSibling`),
-    // and the generic wording below then suggested `<flow> abort` for a flow the developer
-    // cannot see from where they stand — running it here would destroy that other
-    // checkout's flow state. Name both ends and give the route that actually applies.
+    // Reaching `viaSibling` here means the caller sits in one of the flow's OWN ticket
+    // worktrees (an unrelated checkout was filtered out above). The generic wording below
+    // would suggest `<flow> abort`, which from a ticket tree destroys the state of the very
+    // flow that opened it. Name the anchor and send the caller there instead.
     //
     // Second line of defence, not the main path: a `start` typed at the prompt is already
-    // refused upstream by handleUserPrompt's cross-checkout guard, which has the session's
+    // refused upstream by handleUserPrompt's ticket-tree guard, which has the session's
     // real cwd to name. This branch covers every other caller of the exported handleStart —
     // its own contract admits a viaSibling result, so answering it correctly belongs here
     // rather than being assumed away.
@@ -99,16 +105,13 @@ export async function handleStart(
       return {
         action: 'deny',
         reason:
-          `流程 '${active.flowName}' 正在运行，但它的**锚点在本仓库的另一个检出**：${active.repoRoot}
+          `流程 '${active.flowName}' 正在运行，而你现在在它给票开的**临时工作树**里：${repoRoot}
 ` +
-          `（本次 start 的目标锚点是 ${repoRoot}）
+          `（它的锚点是 ${active.repoRoot}）
 ` +
-          `⛔ 不要在这里 abort 它——命令会作用在那个检出上。要停它就去它自己的检出里停。
+          `⛔ 不要在这里 abort 它——命令会作用到锚点上，销毁的正是打开这棵树的那条流程。
 ` +
-          `⇒ 想在本检出跑自己的 flow：先把它的流程状态挪走（代码一行不动），再重启本 session 上下文：
-` +
-          `     mv ${join(active.repoRoot, '.ai-flow', active.flowName, 'state')} ` +
-          `${join(active.repoRoot, '.ai-flow', active.flowName, 'state')}.parked`,
+          `⇒ 票树只通过 signal 文件参与流程，不在这里开新 flow；要操作它就回到 ${active.repoRoot}。`,
       };
     }
     return {

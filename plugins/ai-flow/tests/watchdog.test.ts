@@ -414,18 +414,25 @@ describe('nudge budget lifecycle', () => {
 });
 
 describe('a leftover 0.76.0 scheduled task', () => {
-  it('is stopped before it reaches the model, with the command to remove it', async () => {
+  it('is turned into an order to delete the task, so it stops for good', async () => {
     // A cron scheduled under 0.76.0 outlives the upgrade and `--resume` restores it.
     // 0.77.0 removed the interception with the design, so it arrived as an ordinary
     // prompt and the model answered it in full — observed once, on a resume.
+    //
+    // 0.78.0 blocked it instead, which costs no tokens but never ENDS it: the task keeps
+    // firing every five minutes, and `CronDelete` is a tool the MODEL has — a blocked
+    // prompt's text goes to the developer, who cannot run it. So the tick is let through
+    // carrying the order to delete the task: one turn, then it is gone.
     const repo = makeRepo();
     seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog() });
     const out = await handleUserPrompt({
       hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repo.repoRoot,
       prompt: '[ai-flow:watchdog] test-flow 停滞自检',
     });
-    expect(out.decision).toBe('block');
-    expect(out.reason).toContain('CronDelete');
+    expect(out.decision).toBeUndefined();
+    const ctx = (out.hookSpecificOutput as { additionalContext?: string }).additionalContext ?? '';
+    expect(ctx).toContain('CronList');
+    expect(ctx).toContain('CronDelete');
   });
 
   it('the same words typed by a developer are not stopped', () => {

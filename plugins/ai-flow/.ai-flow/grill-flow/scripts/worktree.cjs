@@ -81,7 +81,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { existsSync, lstatSync, unlinkSync, readFileSync, writeFileSync, statSync, realpathSync } = require('fs');
+const { existsSync, lstatSync, mkdirSync, unlinkSync, readFileSync, writeFileSync, statSync, realpathSync } = require('fs');
 const { createHash } = require('crypto');
 const { join, dirname, basename, relative, resolve } = require('path');
 
@@ -393,6 +393,35 @@ const wtPath =
   : wtPathCurrent;
 const isLegacyPath = wtPath === wtPathLegacy;
 
+// ── 票树登记表 ────────────────────────────────────────────────────────────────
+// `<flowDir>/state/worktrees/<树名>.json`，一棵树一个文件。引擎读它来回答「这个目录是
+// flow 自己开的树，还是开发者自己的检出」——见 `src/lib/state.ts` 的
+// `WORKTREE_REGISTRY_DIR`。在此之前那个判断只能看路径长相（`<repo>.ai-flow-worktrees/`
+// 或 `.worktrees/<flow_id>-`），落点不符合约定的树会被当成开发者的检出，属主锁、
+// write_scope、signal 拦截一起失效。
+//
+// 为什么不写进 active.json：本目录下四个脚本读它都用 `require()`（有缓存），多一个写方
+// 会让同进程后续读到旧对象；并行开票还要在 CJS 里重实现引擎那套 `acquireStateLock`。
+// 一棵树一个文件，创建与删除本身就是原子的，两个问题都不存在。
+//
+// 登记只做加法：登记了 ⇒ 一定是票树；**没登记推不出任何东西**（手搓 `git worktree add`
+// 没有围栏拦得住）。所以这里写失败、删失败都只是退回约定，绝不能让命令失败。
+const registryDir = () => join(flowDir, 'state', 'worktrees');
+function registerWorktree(wtAbsPath, branchName) {
+  try {
+    mkdirSync(registryDir(), { recursive: true });
+    writeFileSync(
+      join(registryDir(), basename(wtAbsPath) + '.json'),
+      JSON.stringify({ path: realDir(wtAbsPath), flow_id: flowId, branch: branchName, opened_at: new Date().toISOString() }, null, 2)
+    );
+  } catch { /* 登记不上只是退回按路径约定判断，不是错误 */ }
+}
+function unregisterWorktree(wtAbsPath) {
+  try { unlinkSync(join(registryDir(), basename(wtAbsPath) + '.json')); }
+  catch { /* 本来就没登记，或已被 gate 的 prune 收走 */ }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 if (cmd === 'status') {
   // 存在理由：这张表原先只活在主 session 的上下文里——四条车道 × 当前票 × 是否脏 ×
   // 是否还是 HEAD 的直接后继 × 依赖新不新。靠记忆维护它的代价实测是：漏 sync 后 close
@@ -505,6 +534,7 @@ if (cmd === 'open') {
   }
   const add = gitQuiet(['worktree', 'add', wtPath, '-b', branch, ...(baseRef ? [baseRef] : [])]);
   if (!add.ok) die('git worktree add 失败:\n' + add.out);
+  registerWorktree(wtPath, branch);
   say(`worktree: ${wtPath}\nbranch:   ${branch}`);
 
   const prefix = anchorPrefix();
@@ -702,6 +732,7 @@ if (cmd === 'park') {
   const head = gitQuiet(['rev-parse', '--short', branch]);
   const rm = gitQuiet(['worktree', 'remove', wtPath]);
   if (!rm.ok) die('`git worktree remove` 失败（分支与 commit 都还在，工作没丢）:\n' + rm.out);
+  unregisterWorktree(wtPath);
 
   say(`已收树，分支留着没有合进任何地方：\n`
     + `      分支: ${branch}\n`
@@ -980,6 +1011,8 @@ if (cmd === 'close') {
 
   const rm = gitQuiet(['worktree', 'remove', wtPath]);
   if (!rm.ok) die('回合成功，但 `git worktree remove` 失败（分支已合，工作未丢）:\n' + rm.out);
+  // `close --keep`（车道模式逐票回合）在上面就 exit 了，树还在 ⇒ 登记项也该留着。
+  unregisterWorktree(wtPath);
 
   // 旧落点的兼容软链接：0.50.0 把落点搬出仓库后，手工搬迁的人往往会在旧路径留一个指向新
   // 落点的符号链接（怕还有什么东西按旧路径找车道）。它比看上去贵得多——`.gitignore` 只挡

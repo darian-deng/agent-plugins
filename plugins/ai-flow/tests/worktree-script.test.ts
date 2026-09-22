@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, lstatSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, realpathSync, rmSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -840,6 +840,57 @@ describe('grill-flow worktree.cjs', () => {
       const r = run(anchor, 'sync', 'f1', 'R1');
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('无需 rebase');
+    });
+  });
+  // 登记表是引擎判「这是 flow 自己开的树，还是开发者自己的检出」的第一优先级证据
+  // （`state.ts` 的 `WORKTREE_REGISTRY_DIR`）。在它之前那个判断只看路径长相，落点不符合
+  // 命名约定的树会被当成开发者的检出，属主锁 / write_scope / signal 拦截一起失效。
+  describe('票树登记表', () => {
+    const regEntry = (anchor: string, name: string) =>
+      join(anchor, '.ai-flow', 'grill-flow', 'state', 'worktrees', name + '.json');
+
+    function deliver2(repo: string, wt: string, file: string, subject: string): void {
+      writeFileSync(join(wt, file), subject + '\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', subject);
+      expect(git(repo, 'status', '--porcelain')).toBe('');
+    }
+
+    // 用车道号 R1：票号 T<n> 的 close 还要过「真机三态」那道门（要 tickets.md），
+    // 与登记表无关，会把这条用例变成在测别的东西。
+    it('open 登记，close 拆树后销记', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const entry = regEntry(anchor, 'f1-R1');
+      expect(existsSync(entry)).toBe(true);
+      const rec = JSON.parse(readFileSync(entry, 'utf-8')) as { path: string; flow_id: string; branch: string };
+      expect(realpathSync(rec.path)).toBe(realpathSync(join(lanes, 'f1-R1')));
+      expect(rec.flow_id).toBe('f1');
+      expect(rec.branch).toBe('wt/f1-R1');
+
+      deliver2(repo, join(lanes, 'f1-R1'), 'src/one.txt', 'feat(T1): one');
+      expect(run(anchor, 'close', 'f1', 'R1', '--no-install').code).toBe(0);
+      expect(existsSync(join(lanes, 'f1-R1'))).toBe(false);   // 树真的拆了
+      expect(existsSync(entry)).toBe(false);
+    });
+
+    it('close --keep 不销记：树还在，登记就得还在', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      deliver2(repo, join(lanes, 'f1-R1'), 'src/one.txt', 'feat(T1): one');
+      expect(run(anchor, 'close', 'f1', 'R1', '--keep', '--no-install').code).toBe(0);
+      expect(existsSync(join(lanes, 'f1-R1'))).toBe(true);
+      expect(existsSync(regEntry(anchor, 'f1-R1'))).toBe(true);
+    });
+
+    it('park 收旁路树后销记', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      expect(run(anchor, 'open', 'f1', 'S1', '--base', base, '--install', 'true').code).toBe(0);
+      expect(existsSync(regEntry(anchor, 'f1-S1'))).toBe(true);
+      deliver2(repo, join(lanes, 'f1-S1'), 'src/side.txt', 'fix(S1): side');
+      expect(run(anchor, 'park', 'f1', 'S1').code).toBe(0);
+      expect(existsSync(regEntry(anchor, 'f1-S1'))).toBe(false);
     });
   });
 });

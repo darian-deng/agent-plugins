@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import type { SessionStartInput } from './types.js';
 import {
   resolveActiveFlow,
@@ -55,9 +55,12 @@ export async function handleSessionStart(
   // refusal of mutating flow commands routed at a foreign anchor (UserPromptSubmit).
   //
   // The message is informational for exactly that reason: the developer has to be told
-  // why a flow they cannot see is being mentioned at all, and that `<flow> start` here is
-  // still blocked (start.ts refuses a viaSibling resolution) — that refusal is the one
-  // piece of the old lock that survives.
+  // why a flow they cannot see is being mentioned at all. It must not claim anything else.
+  // It used to say flow commands here were refused and hand out `mv <the other checkout's
+  // state> …parked` as the way around it — text a model will relay or run, moving the
+  // state directory of a RUNNING flow. Commands from a foreign checkout now route at this
+  // checkout's own anchor (`userprompt-handler`) and `start` no longer refuses
+  // (`commands/start.ts`), so nothing here needs parking.
   const foreign = isForeignCheckout(active, cwd);
 
   try {
@@ -66,7 +69,6 @@ export async function handleSessionStart(
   // ── Foreign checkout: not this session's flow ─────────────────────────────────
   if (foreign) {
     await appendLog(repoRoot, flowName, session_id, `SESSION_FOREIGN_CHECKOUT anchor=${repoRoot}`);
-    const stateDirOfOwner = dirname(activeJsonPath(repoRoot, flowName));
     return {
       systemMessage: `[ai-flow:${flowName}] 该 flow 的锚点在本仓库的另一个检出，本 session 不受它约束（可正常改本检出）`,
       additionalContext: [
@@ -76,16 +78,13 @@ export async function handleSessionStart(
         `两者是同一个 git 仓库的不同检出（git worktree），是两份独立的工作副本。`,
         ``,
         `⇒ **本 session 不受那条 flow 约束**：本检出的文件可以正常修改，不必为它做任何事。`,
-        `   仍然被拦的只有两类：改任意检出下 '.ai-flow/${flowName}/' 里的控制面文件（stage 提示词 /`,
-        `   config / 脚本 / signal），以及在本检出执行会作用到对方锚点的流程命令。`,
+        `   仍然被拦的只有一类：改任意检出下 '.ai-flow/${flowName}/' 里的控制面文件`,
+        `   （stage 提示词 / config / 脚本 / signal）。`,
         ``,
-        `⛔ 不要在本检出执行 '${flowName} abort'/'approve'/'resume'：命令会作用在 ${repoRoot} 上。`,
-        `   要操作那条 flow，去它自己的检出里操作。`,
-        ``,
-        `如果开发者想在**本检出**跑一条自己的 flow：'${flowName} start' 在这里仍会被拒（解析会落到对方`,
-        `锚点）。做法是先把对方的流程状态挪走，再在本检出 start，然后挪回来：`,
-        `     mv ${stateDirOfOwner} ${stateDirOfOwner}.parked`,
-        `   ⚠️ 挪回之后它的 "last_session_id" 仍指向那个已经不在的 session，要接管得先把该字段改成 null。`,
+        `⇒ 本检出的流程命令一律落在**本检出自己的锚点**上，碰不到 ${repoRoot}：`,
+        `   想在这儿跑自己的 flow，直接 '${flowName} start <需求>' 即可，不需要动对方任何文件。`,
+        `⛔ 反过来也成立：在这儿执行 '${flowName} abort'/'approve'/'resume' **停不了对方那条 flow**，`,
+        `   要操作它得去 ${repoRoot} 那个 session。`,
       ].join('\n'),
     };
   }

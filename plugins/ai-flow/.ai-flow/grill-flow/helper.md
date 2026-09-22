@@ -92,6 +92,17 @@ docs/grill-flows/<flow_id>/
                              #   「gate-pending 重入」这两条指路路径上生成；每次 stage 推进与 flow
                              #   收尾都会删掉它。文件开头有 `stage=<id>` 头——**与你当前 stage 不符
                              #   就是旧件，别照它执行**）
+.ai-flow/grill-flow/state/worktrees/<树名>.json
+                             # 票树登记表，一棵树一个文件（path / flow_id / branch / opened_at）。
+                             # `worktree.cjs open` 写、`close`/`park` 拆树成功后删（`close --keep`
+                             # 不删——树还在）。两个消费方：① 引擎的 isForeignCheckout 用它把
+                             # 「flow 自己开的树」和「开发者自己的另一个检出」分开，登记过的一定是
+                             # 票树，落点不合命名约定也认得出；② 机器门⑤ 的残留清单 = 命名前缀
+                             # 匹配到的 ∪ 登记表里仍在 `git worktree list` 的（登记项指向的树已经
+                             # 不在了 = 拆过但没删干净，门会静默收走那个 json，不报成残留）。
+                             # ⚠️ 登记只做加法：登记了 ⇒ 一定是票树；**没登记推不出任何东西**
+                             # （手搓 `git worktree add` 没有围栏拦），所以写失败只是退回按路径
+                             # 约定判断，不是错误
 ../<repo 名>.ai-flow-worktrees/<flow_id>-T<n>/
                              # stage-3 并行票的隔离工作树，在**仓库同级**（不在仓库内，
                              # 所以不需要 gitignore）；分支 wt/<flow_id>-T<n>；

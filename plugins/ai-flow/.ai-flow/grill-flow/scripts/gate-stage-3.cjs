@@ -40,7 +40,7 @@
 //          则报缺 commit —— 两者都 fail-closed，不会因此误放行。
 'use strict';
 
-const { existsSync, readFileSync, realpathSync } = require('fs');
+const { existsSync, readFileSync, readdirSync, realpathSync, unlinkSync } = require('fs');
 const { join, relative, sep, dirname, basename, resolve } = require('path');
 const { execFileSync } = require('child_process');
 
@@ -457,10 +457,39 @@ try {
   const top = git(['rev-parse', '--show-toplevel']).trim();
   wtPrefixes.push(join(dirname(top), basename(top) + '.ai-flow-worktrees') + '/' + flowId + '-');
 } catch { /* 非 git 仓库时上面的 git log 早已 fail-closed，走不到这里 */ }
-const staleWt = wtRaw.split('\n')
+const liveWt = wtRaw.split('\n')
   .filter((l) => l.startsWith('worktree '))
-  .map((l) => l.slice('worktree '.length).trim())
-  .filter((p) => wtPrefixes.some((pre) => p.startsWith(pre)));
+  .map((l) => l.slice('worktree '.length).trim());
+const realOf = (p) => { try { return realpathSync(p); } catch { return p; } };
+const liveReal = new Set(liveWt.map(realOf));
+
+// 登记表（`state/worktrees/<树名>.json`，`worktree.cjs open` 写、`close`/`park` 删）是
+// 第二个来源，和上面的命名前缀取**并集**：前缀只认得出落在两个约定落点、且按 `<flow_id>-`
+// 命名的树，而这道门漏掉一棵的方向是 fail-open——残留工作树带着没合回来的改动，门却放行。
+// 登记表认的是 flow 自己写下的绝对路径，落点再怎么不合约定也跑不掉。
+//
+// 反过来，登记项指向的树已经不在 `worktree list` 里 = 树早就拆了、只是登记项没删干净
+// （`worktree remove` 成功但 unlink 失败，或有人手工 `git worktree remove`）。那不是残留，
+// 静默收走那个 json 即可——报成残留会让这道门拿一个不存在的路径恒失败。
+const registryPaths = [];
+try {
+  const regDir = join(flowDir, 'state', 'worktrees');
+  for (const f of readdirSync(regDir).filter((n) => n.endsWith('.json'))) {
+    const entry = join(regDir, f);
+    let rec;
+    try { rec = JSON.parse(readFileSync(entry, 'utf-8')); } catch { continue; }
+    if (!rec || typeof rec.path !== 'string' || !rec.path) continue;
+    // 只管本 flow 自己的：同一锚点跑过的上一条 flow 若留下登记项，不该算进本期。
+    if (rec.flow_id && rec.flow_id !== flowId) continue;
+    if (liveReal.has(realOf(rec.path))) registryPaths.push(rec.path);
+    else try { unlinkSync(entry); } catch { /* 删不掉只是下次再看一眼，不影响判定 */ }
+  }
+} catch { /* 没有登记表（旧 flow / 没开过树）⇒ 只用命名前缀，与改动前一致 */ }
+
+const staleWt = [...new Set([
+  ...liveWt.filter((p) => wtPrefixes.some((pre) => p.startsWith(pre))),
+  ...registryPaths,
+])];
 if (staleWt.length > 0) {
   // 旁路树（`<flow_id>-S<n>`，references/side-fix.md）混在里面时，处置方式是**相反**的：
   // 它不属于本期、永远不回合，照下面那句 ff 做就是把它混进本期 squash——那正是它存在要

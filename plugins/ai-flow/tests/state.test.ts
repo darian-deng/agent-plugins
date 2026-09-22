@@ -8,6 +8,7 @@ import {
   writeActiveState,
   patchActiveState,
   hasActiveFlow,
+  isForeignCheckout,
   readSignal,
   writeSignalFile,
   isGatePending,
@@ -692,5 +693,131 @@ describe('nextStage', () => {
   it('returns null for last stage', () => {
     const result = nextStage(MINIMAL_CONFIG, 'review');
     expect(result).toBeNull();
+  });
+});
+
+
+// 路径判据，直接测。之前这里写的是 `/.ai-flow-worktrees/`（要求前面紧挨一个斜杠），而
+// `worktree.cjs` 的落点是 `<repo 名>.ai-flow-worktrees/`——那个点前面是仓库名，不是斜杠。
+// 于是**没有一棵真实票树**匹配得上，全部被判成「无关检出」，票树里的 mutex / 收尾 / write_scope
+// 一起失效；而所有上层用例断言的都是别的字符串，没人发现。判据本身是刻意偏向「算票树」的：
+// 误判成票树只是保守（继续受约束），误判成无关检出才会把保护拆掉。
+describe('isForeignCheckout — 路径判据', () => {
+  const probe = (cwd: string, flowId = 'flow-abc') =>
+    isForeignCheckout(
+      { flowName: 'f', repoRoot: '/anchor', viaSibling: true, state: { flow_id: flowId } as ActiveState },
+      cwd
+    );
+
+  it('flow 自己的票树（worktree.cjs 的真实落点）不算无关检出', () => {
+    expect(probe('/tmp/line-a.ai-flow-worktrees/flow-abc-T1')).toBe(false);
+  });
+
+  it('0.69 之前的 `.worktrees/<flow_id>-` 落点同样不算', () => {
+    expect(probe('/tmp/repo/.worktrees/flow-abc-T1')).toBe(false);
+  });
+
+  it('开发者手建的另一条开发线算无关检出', () => {
+    expect(probe('/tmp/line-b')).toBe(true);
+    // 同名目录但 flow id 对不上：`.worktrees/` 是开发者也会用的名字，那里要求带 flow id
+    expect(probe('/tmp/repo/.worktrees/other-flow-T1')).toBe(true);
+  });
+
+  it('不是跨检出解析出来的（viaSibling 未置位）永远不算', () => {
+    expect(
+      isForeignCheckout(
+        { flowName: 'f', repoRoot: '/anchor', state: { flow_id: 'flow-abc' } as ActiveState },
+        '/tmp/line-b'
+      )
+    ).toBe(false);
+  });
+});
+
+
+// 两个检出各跑一条 flow 时，票树必须认自己的那条。判据在路径里写着：`worktree.cjs` 把票树放在
+// `dirname(<git toplevel>)/<basename>.ai-flow-worktrees/`。原先只按路径相近度排序，而
+// `line-b.ai-flow-worktrees` 和 `line-b` 按「目录段」比是**不共享**额外段的，两个候选打平、
+// 主检出赢，于是 B 的票树解析到了 A 的 flow——A 的属主锁 / signal 路径 / write_scope 全都套到了
+// 另一条 flow 的树上。
+describe('siblingCheckoutAnchors — 票树归属优先于路径相近度', () => {
+  it('B 的票树解析到 B 的 flow，不是 A 的', async () => {
+    const repoRoot = makeTmp();
+    execFileSync('git', ['init', '-q'], { cwd: repoRoot });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoRoot });
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repoRoot });
+    // `.ai-flow/<flow>/` 里被跟踪的那部分：worktree 里也会有一份，`state/` 则被 gitignore
+    mkdirSync(join(repoRoot, '.ai-flow', 'test-flow'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai-flow', 'test-flow', 'config.json'), '{}\n');
+    writeFileSync(join(repoRoot, '.gitignore'), '**/.ai-flow/**/state/\n');
+    execFileSync('git', ['add', '-A'], { cwd: repoRoot });
+    execFileSync('git', ['commit', '-qm', 'base'], { cwd: repoRoot });
+
+    const parent = mkdtempSync(join(tmpdir(), 'ai-flow-lane-'));
+    tmpDirs.push(parent);
+    const a = join(parent, 'line-a');
+    const b = join(parent, 'line-b');
+    execFileSync('git', ['worktree', 'add', '-q', a, '-b', 'feat/line-a'], { cwd: repoRoot });
+    execFileSync('git', ['worktree', 'add', '-q', b, '-b', 'feat/line-b'], { cwd: repoRoot });
+    for (const [root, id] of [[a, 'flow-in-a'], [b, 'flow-in-b']] as const) {
+      mkdirSync(join(root, '.ai-flow', 'test-flow', 'state'), { recursive: true });
+      writeFileSync(
+        join(root, '.ai-flow', 'test-flow', 'state', 'active.json'),
+        JSON.stringify(makeActiveState({ flow_id: id, requirement: id }))
+      );
+    }
+    const lanes = b + '.ai-flow-worktrees';
+    tmpDirs.push(lanes);
+    const ticket = join(lanes, 'flow-in-b-T1');
+    execFileSync('git', ['worktree', 'add', '-q', ticket, '-b', 'wt/flow-in-b-T1'], { cwd: repoRoot });
+
+    const got = await hasActiveFlow(ticket);
+    expect(got?.state.flow_id).toBe('flow-in-b');
+    expect(realpathSync(got!.repoRoot)).toBe(realpathSync(b));
+    expect(got?.viaSibling).toBe(true);
+    // 票树不是「无关检出」：它必须继续受自己那条 flow 的约束
+    expect(isForeignCheckout(got!, ticket)).toBe(false);
+  });
+});
+
+
+// flow 自己开的树，登记在 `state/worktrees/<树名>.json`（写方是 `worktree.cjs`，见
+// `WORKTREE_REGISTRY_DIR`）。登记只做加法：登记了 ⇒ 一定是票树；没登记**不能**反推成
+// 「开发者自己的检出」——没有任何东西拦得住手搓 `git worktree add`，自定义 flow 也不一定
+// 走那个脚本，而误判成无关检出会当场拆掉活票树的属主锁 / write_scope / signal 拦截。
+describe('worktree 登记表', () => {
+  function register(anchor: string, flowName: string, name: string, wtPath: string): void {
+    const dir = join(anchor, '.ai-flow', flowName, 'state', 'worktrees');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name + '.json'), JSON.stringify({ path: wtPath, flow_id: 'f1', opened_at: new Date().toISOString() }));
+  }
+
+  it('登记过的路径判为票树，哪怕它不符合任何命名约定', () => {
+    const anchor = makeTmp();
+    const odd = join(makeTmp(), 'somewhere-else');
+    mkdirSync(odd, { recursive: true });
+    const active = { flowName: 'test-flow', repoRoot: anchor, viaSibling: true, state: makeActiveState() };
+    expect(isForeignCheckout(active, odd)).toBe(true);          // 登记前：约定认不出，判无关检出
+    register(anchor, 'test-flow', 'f1-T1', odd);
+    expect(isForeignCheckout(active, odd)).toBe(false);         // 登记后：确定是票树
+  });
+
+  it('登记表为空/不存在时不改变任何既有判定（只做加法）', () => {
+    const anchor = makeTmp();
+    const active = { flowName: 'test-flow', repoRoot: anchor, viaSibling: true, state: makeActiveState() };
+    // 约定认得出的票树，没有登记表也照样是票树
+    expect(isForeignCheckout(active, '/tmp/line-a.ai-flow-worktrees/f1-T1')).toBe(false);
+    // 开发者自己的检出，没有登记表仍然是无关检出
+    expect(isForeignCheckout(active, '/tmp/line-b')).toBe(true);
+  });
+
+  it('损坏的登记项被跳过，不抛异常', () => {
+    const anchor = makeTmp();
+    const dir = join(anchor, '.ai-flow', 'test-flow', 'state', 'worktrees');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'broken.json'), '{ 半 条 json');
+    writeFileSync(join(dir, 'nopath.json'), '{"flow_id":"f1"}');
+    const active = { flowName: 'test-flow', repoRoot: anchor, viaSibling: true, state: makeActiveState() };
+    expect(() => isForeignCheckout(active, '/tmp/line-b')).not.toThrow();
+    expect(isForeignCheckout(active, '/tmp/line-b')).toBe(true);
   });
 });

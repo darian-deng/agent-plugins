@@ -14,7 +14,7 @@ import {
 } from 'fs';
 import { randomBytes } from 'crypto';
 import { execFileSync } from 'child_process';
-import { join, dirname, resolve, relative } from 'path';
+import { join, dirname, basename, resolve, relative } from 'path';
 import type { FlowConfig } from './flow-schema.js';
 import type { WatchdogState } from './watchdog.js';
 import { lookupSession, listBindings, removeBinding } from './session-registry.js';
@@ -389,8 +389,35 @@ function siblingCheckoutAnchors(dir: string): string[] {
       while (n < x.length && n < y.length && x[n] === y[n]) n++;
       return n;
     };
+    // A ticket tree names its owner outright, and that beats every heuristic below:
+    // `worktree.cjs` puts it in `dirname(<git toplevel>)/<basename>.ai-flow-worktrees/`, so
+    // the checkout it belongs to is recoverable from the path. `sharedPrefix` alone gets
+    // this WRONG once two checkouts each run their own flow — measured: with flows in
+    // `<p>/line-a` and `<p>/line-b`, the tree `<p>/line-b.ai-flow-worktrees/<id>-T1` shares
+    // no extra component with `line-b` (component-wise, `line-b.ai-flow-worktrees` ≠
+    // `line-b`), the two candidates tie, `mainRoot` wins the tie, and the tree resolved to
+    // `line-a`'s flow — whose ownership mutex, signal path and write_scope then governed
+    // writes in a tree belonging to the other flow entirely.
+    const ownsLane = (root: string): boolean => {
+      const r = resolve(root);
+      return self.startsWith(join(dirname(r), basename(r) + '.ai-flow-worktrees') + '/');
+    };
+    // Ranked by how directly each candidate claims `self`, strongest evidence first:
+    //   1. its registry lists a tree containing `self` (the flow wrote that down itself);
+    //   2. it owns the `<name>.ai-flow-worktrees/` that `self` sits in (naming convention);
+    //   3. plain path proximity.
+    // The registry is checked against the ANCHOR candidate, not the checkout root, since
+    // that is where `state/` lives.
+    const claims = (root: string): boolean => {
+      const cand = rel ? join(root, rel) : root;
+      return isRegisteredWorktree(cand, self);
+    };
     const ordered = [mainRoot, ...roots.filter((r) => resolve(r) !== mainRoot)]
-      .sort((a, b) => sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self));
+      .sort((a, b) =>
+        (claims(b) ? 1 : 0) - (claims(a) ? 1 : 0) ||
+        (ownsLane(b) ? 1 : 0) - (ownsLane(a) ? 1 : 0) ||
+        sharedPrefix(resolve(b), self) - sharedPrefix(resolve(a), self)
+      );
 
     const seen = new Set<string>();
     const out2: string[] = [];
@@ -433,6 +460,62 @@ export type ResolvedFlow = {
 };
 
 /**
+ * Directory holding one entry per worktree the flow opened for itself.
+ *
+ * The name is exported because the writer is a FLOW SCRIPT, not the engine: only the
+ * flow knows when it opens a tree (`worktree.cjs open`) and when it takes one down
+ * (`close` / `park`). One file per tree instead of a list inside active.json, for three
+ * reasons measured in this repo: the flow scripts read active.json through `require()`,
+ * which caches, so a writer among them would hand later readers a stale object; parallel
+ * ticket opens would need `acquireStateLock`'s protocol reimplemented in CJS; and
+ * create/unlink of a separate file is atomic on its own, so neither is needed.
+ *
+ * Entries are advisory in ONE direction only. A registered path is certainly a ticket
+ * tree. An unregistered one proves nothing: nothing stops a subagent from running `git
+ * worktree add` by hand, and a custom flow need not use `worktree.cjs` at all. Treating
+ * absence as "this is the developer's own checkout" would flip an unregistered LIVE
+ * ticket tree to foreign and drop its ownership mutex, write_scope and signal
+ * interception — the one direction `isForeignCheckout` is built to avoid. So the registry
+ * only ever ADDS ticket trees; the path conventions stay as the fallback.
+ */
+export const WORKTREE_REGISTRY_DIR = 'worktrees';
+
+/**
+ * Absolute real paths of the worktrees registered under `anchorDir`, across every flow
+ * anchored there. Returns [] for anything unreadable — this is a hint, and a missing or
+ * broken registry must cost nothing that was working before.
+ */
+function registeredWorktreePaths(anchorDir: string): string[] {
+  const aiFlowDir = join(anchorDir, '.ai-flow');
+  let flows: string[];
+  try {
+    flows = readdirSync(aiFlowDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch { return []; }
+  const out: string[] = [];
+  for (const flowName of flows) {
+    const dir = join(aiFlowDir, flowName, 'state', WORKTREE_REGISTRY_DIR);
+    let entries: string[];
+    try { entries = readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { continue; }
+    for (const f of entries) {
+      try {
+        const rec = JSON.parse(readFileSync(join(dir, f), 'utf-8')) as { path?: unknown };
+        if (typeof rec.path === 'string' && rec.path) out.push(realPath(rec.path));
+      } catch { /* half-written or hand-edited entry — skip it, never throw */ }
+    }
+  }
+  return out;
+}
+
+/** True when `absPath` is inside a worktree registered under `anchorDir`. */
+function isRegisteredWorktree(anchorDir: string, absPath: string): boolean {
+  const self = realPath(absPath) + '/';
+  return registeredWorktreePaths(anchorDir).some((p) => self.startsWith(p + '/') || self === p + '/');
+}
+
+
+/**
  * True when `cwd` is in a checkout of this repository that the resolved flow does
  * NOT belong to — i.e. the cross-checkout fallback found the flow somewhere else
  * and `cwd` is not one of that flow's own ticket worktrees.
@@ -457,8 +540,19 @@ export type ResolvedFlow = {
  */
 export function isForeignCheckout(active: ResolvedFlow, cwd: string): boolean {
   if (!active.viaSibling) return false;
+  // The flow said so itself — see `WORKTREE_REGISTRY_DIR`. Checked first and trusted
+  // absolutely, because it is the only evidence here that does not depend on a naming
+  // convention: a tree opened at a path no convention covers is invisible to everything
+  // below, and reads as "the developer's own checkout" with the flow's protections off.
+  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
   const self = realPath(cwd) + '/';
-  if (self.includes('/.ai-flow-worktrees/')) return false;
+  // `<repo 名>.ai-flow-worktrees/`, not `/.ai-flow-worktrees/`: `worktree.cjs` puts ticket
+  // trees in a SIBLING of the repo root named after it (`<repo>.ai-flow-worktrees/<flow_id>-<name>`),
+  // so the segment never starts with a dot. Requiring one matched no real ticket tree at
+  // all — every one of them read as "foreign", which is the direction this test is
+  // deliberately lopsided AGAINST: it drops the ownership mutex, the context wrap-up and
+  // write_scope inside a tree the flow is actively driving.
+  if (self.includes('.ai-flow-worktrees/')) return false;
   if (self.includes('/.worktrees/' + active.state.flow_id + '-')) return false;
   return true;
 }

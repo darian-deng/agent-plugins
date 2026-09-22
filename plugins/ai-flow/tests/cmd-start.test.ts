@@ -127,10 +127,11 @@ describe('handleStart', () => {
   });
 });
 
-// `hasActiveFlow` 会解析到本仓库**另一个检出**里的 flow（`ResolvedFlow.viaSibling`）。原先那条
-// 通用拒绝在这种情况下建议 `<flow> abort`——在当前检出执行会销毁另一条开发线的流程状态。
+// `hasActiveFlow` 会解析到本仓库**另一个检出**里的 flow（`ResolvedFlow.viaSibling`）。两件事要分开：
+// 无关的另一条开发线（`isForeignCheckout`）不该被那条 flow 挡住——它在自己的锚点上开自己的 flow；
+// flow 自己开的票树则仍然不许 start，那里 `<flow> abort` 会销毁真正在跑的那条流程的状态。
 describe('handleStart — 跨检出', () => {
-  it('解析到的 flow 在另一个检出 → 拒绝，且⛔不再建议 abort', async () => {
+  function twoLines() {
     const repo = makeRepo();
     const parent = mkdtempSync(join(tmpdir(), 'ai-flow-xco-start-'));
     const a = join(parent, 'line-a');
@@ -142,13 +143,30 @@ describe('handleStart — 跨检出', () => {
       current_stage: 'work', base_sha: 'aaa111',
     });
     cleanups.push(() => execSync(`rm -rf "${parent}"`));
+    return { repo, a, b };
+  }
 
+  it('无关的另一条开发线 → 放行，在自己的锚点上建 flow，A 不受影响', async () => {
+    const { a, b } = twoLines();
     const result = await handleStart(b, 'test-flow', '在 B 上做另一件事', 'sess-in-b', 0, b);
+    expect(result.action).toBe('allow');
+    expect(await readActiveState(b, 'test-flow')).not.toBeNull();
+    expect((await readActiveState(a, 'test-flow'))!.flow_id).toBe('flow-in-a');
+  });
+
+  it('flow 自己的票树 → 仍然拒绝，点名锚点且⛔不建议 abort（那会销毁在跑的流程）', async () => {
+    const { repo, a } = twoLines();
+    // 落点命名由 worktree.cjs 决定：`<repo 同级>/<repo 名>.ai-flow-worktrees/<flow_id>-<name>`
+    const lanes = a + '.ai-flow-worktrees';
+    const ticket = join(lanes, 'flow-in-a-T1');
+    execSync(`git worktree add -q "${ticket}" -b wt/flow-in-a-T1`, { cwd: repo.repoRoot });
+    cleanups.push(() => execSync(`rm -rf "${lanes}"`));
+
+    const result = await handleStart(ticket, 'test-flow', '在票树里开新 flow', 'sess-in-ticket', 0, ticket);
     expect(result.action).toBe('deny');
     const reason = (result as { action: 'deny'; reason: string }).reason;
-    expect(reason).toContain(a);                        // 点名那个检出
-    expect(reason).toContain('mv ');                    // 给可执行出路
+    expect(reason).toContain(a);                        // 点名锚点
     expect(reason).not.toMatch(/Run 'test-flow abort'/); // ⛔ 这条建议会销毁 A 的状态
-    expect(await readActiveState(b, 'test-flow')).toBeNull();
+    expect(await readActiveState(ticket, 'test-flow')).toBeNull();
   });
 });

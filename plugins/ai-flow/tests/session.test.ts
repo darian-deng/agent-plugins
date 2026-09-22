@@ -456,15 +456,19 @@ describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）
     const ctx = out!.additionalContext;
     expect(ctx).toContain(a);                       // flow 的锚点
     expect(ctx).toContain(b);                       // 本 session 的 cwd
-    expect(ctx).toContain('mv ');                   // 想在本检出 start 的出路仍要给，且可执行
     expect(ctx).toMatch(/不受.*约束|可以正常修改/);
+    // ⛔ 这段文案曾经把「先 mv 走 A 的 state 目录」当成在 B 起 flow 的前置步骤——模型会照做，
+    // 挪的是一条**正在跑**的流程的状态。现在 B 的 start 直接落在 B 自己的锚点上，不需要动 A。
+    expect(ctx).not.toContain('mv ');
+    expect(ctx).not.toContain('.parked');
+    expect(ctx).toMatch(/start <需求>|直接 'test-flow start/);
     // 只读是这次要去掉的行为：任何「本 session 只读 / 禁止修改本项目文件」的措辞都不该再出现。
     expect(ctx).not.toContain('禁止修改本项目文件');
     expect(out!.systemMessage).not.toMatch(/只读/);
     // 「当前工程」在这个形态下是错的：它读起来像 B 自己在跑流程。
     expect(ctx).not.toContain('当前工程已在进行流程');
-    // ⛔ 不能建议在本检出 abort——那会销毁 A 的流程状态。
-    expect(ctx).toMatch(/不要在本检出执行|去它自己的检出/);
+    // 在 B 执行 abort 已经碰不到 A 了，但文案必须说清这一点，否则开发者以为自己停掉了 A。
+    expect(ctx).toMatch(/停不了对方那条 flow/);
     expect(out!.systemMessage).toMatch(/另一个检出/);
     // 仍然不注入 stage 提示词，也不动 A 的状态。
     expect(ctx).not.toContain('Do the work.');
@@ -504,8 +508,10 @@ describe('handleSessionStart — 跨检出（flow 的锚点在另一个检出）
 
     const out = await handleSessionStart(makeInput(t, 'sess-in-ticket-tree'));
     expect(out).not.toBeNull();                                   // 解析到了 flow（没 fail-OPEN）
-    expect(out!.additionalContext).not.toContain('不在你现在这个检出里');
-    expect(out!.additionalContext).not.toContain('先停下告知');
+    // 断言打的是这条消息**现在的**原文。旧断言写的是两句早就不存在的字符串，所以在票树被
+    // 误判成「无关检出」的那段时间里它照样通过——票树里的子代理因此丢了 mutex / 收尾 / write_scope。
+    expect(out!.additionalContext ?? '').not.toContain('本仓库的**另一个检出**正在进行流程');
+    expect(out!.systemMessage ?? '').not.toContain('本 session 不受它约束');
   });
 
   it('同检出不带这段警告（别把正常路径也灌上跨检出噪音）', async () => {

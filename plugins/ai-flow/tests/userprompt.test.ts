@@ -1,10 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'child_process';
 import { mkdtempSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { handleUserPrompt } from '../src/lib/userprompt-handler.js';
 import { readActiveState } from '../src/lib/state.js';
+import { flowDefDir } from '../src/lib/flow-paths.js';
 import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
 import type { UserPromptInput } from '../src/lib/types.js';
 
@@ -180,6 +181,33 @@ describe('handleUserPrompt — routing', () => {
     expect(o.permissionDecisionReason).toContain('owner-se'); // 8-char truncated owner id
   });
 
+  // 这段注入常常是一个 /clear 之后的 session 关于本 flow 的**全部**背景，所以它给的路径
+  // 必须都真实存在、且分得清是哪一层。0.69.0 把 flow 定义搬进插件之后，项目里的
+  // `.ai-flow/<flow>/` 只剩 `config.json` 和 `state/`，而这段话当时仍让人去那儿读
+  // `references/` 和 `helper.md`，并且把「当前 stage 产物」也算在那个目录下——三样里两样
+  // 根本不在，Read 失败且没有任何东西说明为什么。
+  it('resume-guidance 的路径分三层给对：定义层取 flowDefDir、状态取 state/、产物取 docs_paths', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc',
+      flow_name: 'test-flow',
+      requirement: 'build',
+      current_stage: 'review',          // MINIMAL_CONFIG 里带 docs_paths 的那个 stage
+      base_sha: 'abc',
+    });
+    const out = await handleUserPrompt(makeInput('顺便问个别的事', repo.repoRoot, 'sess-1'));
+    const ctx = (out.hookSpecificOutput as { additionalContext?: string }).additionalContext ?? '';
+    expect(ctx).toContain('resume-guidance');
+
+    const defDir = flowDefDir(repo.repoRoot, 'test-flow');
+    expect(ctx).toContain(join(defDir, 'helper.md'));
+    expect(ctx).toContain(join(defDir, 'references'));
+    expect(ctx).toContain(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'active.json'));
+    // 产物按 docs_paths 给，且 {flow_id} 已展开——旧文案把产物算在 flow 锚点下，那里从来没有产物
+    expect(ctx).toContain(join(repo.repoRoot, 'docs/test-flow/test-flow-abc/'));
+    expect(ctx).not.toContain('{flow_id}');
+  });
+
   it('non-owner session sends plain prompt → allowed (read-only), no resume-guidance injected', async () => {
     const repo = makeRepo();
     writeActiveState(repo.repoRoot, 'test-flow', {
@@ -246,10 +274,12 @@ describe('handleUserPrompt — routing', () => {
   });
 });
 
-// 同一 git 仓库的两个检出（git worktree）互锁的那个形态。实测事故：开发者手建两条开发线，
-// A 里跑着一个 flow，于是 B 里什么都干不了——而所有拒绝消息都不说 flow 在哪个检出，`start`
-// 的拒绝还建议 `<flow> abort`，在 B 里执行会**销毁 A 的流程状态**。这一组用例锁住两件事：
-// 破坏性命令在这个形态下必须被拦、且消息必须点名两个检出；只读命令不受影响。
+// 同一 git 仓库的两个检出（git worktree）互锁的那个形态。实测事故两轮：
+//  1. A 里跑着 flow，B 里 `<flow> abort` 会**销毁 A 的流程状态**（拒绝消息还不说 flow 在哪）。
+//  2. 拦住破坏性命令之后，B 里连 `<flow> start` 都起不来：报「流程由 session X 控制」并让开发者
+//     去把 A 的 active.json 改成 null——照做就是接管了 A 的 flow，而不是在 B 上开自己的。
+// 现在的契约：B 是一条无关的开发线（`isForeignCheckout`），它的命令一律落在 B 自己的锚点上——
+// 既碰不到 A，也不被 A 挡住。只有 flow 自己开的票树仍然不许发流程命令。
 describe('handleUserPrompt — 跨检出（另一个检出持有 flow）', () => {
   function makeCrossCheckout() {
     const repo = makeRepo();                      // 主检出：flow 模板已提交，无活跃 flow
@@ -273,29 +303,81 @@ describe('handleUserPrompt — 跨检出（另一个检出持有 flow）', () =>
     return { repo, a, b };
   }
 
-  it('B 里 abort → 拒绝，且消息点名两个检出（不能静默销毁 A 的流程状态）', async () => {
+  it('B 里 abort → 只作用在 B 自己的锚点上，A 的流程状态原封不动', async () => {
     const { a, b } = makeCrossCheckout();
     const out = await handleUserPrompt(makeInput('test-flow abort --confirm', b, 'sess-in-b'));
     const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
-    expect(o.permissionDecision).toBe('deny');
-    const reason = o.permissionDecisionReason ?? '';
-    expect(reason).toContain(a);          // 解析到的锚点
-    expect(reason).toContain(b);          // 本 session 的 cwd
-    expect(reason).toMatch(/另一个检出|不同检出/);
+    // B 上本来就没有 flow，所以这条 abort 什么都没得停——关键是它没去停 A 的
+    expect(o.permissionDecisionReason ?? '').not.toContain(a);
     // A 的流程状态必须还在——这条是本用例真正要守的东西
     expect(await readActiveState(a, 'test-flow')).not.toBeNull();
   });
 
-  it('B 里 start → 拒绝，且给出「把 A 的状态挪走」这条可执行出路', async () => {
+  it('B 里 start → 放行，在 B 自己的锚点上建 flow，A 不受影响', async () => {
     const { a, b } = makeCrossCheckout();
     const out = await handleUserPrompt(makeInput('test-flow start 在 B 上做另一件事', b, 'sess-in-b'));
     const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+    const inB = await readActiveState(b, 'test-flow');
+    expect(inB).not.toBeNull();
+    expect(inB!.requirement).toContain('在 B 上做另一件事');
+    // A 仍然是 A 的那条 flow，没有被接管、没有被覆盖
+    const inA = await readActiveState(a, 'test-flow');
+    expect(inA!.flow_id).toBe('flow-in-a');
+  });
+
+  it('B 里 start 不再被 A 的 last_session_id 挡住（不会再让开发者去改 A 的 active.json）', async () => {
+    const { a, b } = makeCrossCheckout();
+    writeActiveState(a, 'test-flow', {
+      flow_id: 'flow-in-a',
+      flow_name: 'test-flow',
+      requirement: 'A 那条开发线的需求',
+      current_stage: 'work',
+      base_sha: 'aaa111',
+      last_session_id: 'sess-in-a',      // A 正被另一个 session 握着
+    });
+    const out = await handleUserPrompt(makeInput('test-flow start 在 B 上做另一件事', b, 'sess-in-b'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
+    expect(o.permissionDecision).not.toBe('deny');
+    expect(o.permissionDecisionReason ?? '').not.toContain('last_session_id');
+    expect((await readActiveState(a, 'test-flow'))!.last_session_id).toBe('sess-in-a');
+  });
+
+  it('flow 自己的票树里 abort → 仍然拒绝，并指回锚点（票树只走 signal，不发流程命令）', async () => {
+    const { repo, a } = makeCrossCheckout();
+    // `worktree.cjs` 建票树的位置：<锚点父目录>/<repo>.ai-flow-worktrees/<...>
+    const ticketParent = join(dirname(a), 'line-a.ai-flow-worktrees');
+    const ticket = join(ticketParent, 'slice-1');
+    execSync(`git worktree add -q "${ticket}" -b wt/flow-in-a-slice-1`, { cwd: repo.repoRoot });
+    cleanups.push(() => execSync(`rm -rf "${ticketParent}"`));
+
+    const out = await handleUserPrompt(makeInput('test-flow abort --confirm', ticket, 'sess-in-ticket'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
+    expect(o.permissionDecision).toBe('deny');
+    expect(o.permissionDecisionReason ?? '').toContain(a);   // 指回锚点
+    expect(await readActiveState(a, 'test-flow')).not.toBeNull();
+  });
+
+  it('票树里 approve：锚点有属主时也走票树拒绝，⛔不能给「改 last_session_id」那套接管步骤', async () => {
+    const { repo, a } = makeCrossCheckout();
+    // 有票树就必然有属主——这正是上一版这条守卫够不着的状态：属主检查排在它前面先返回了
+    writeActiveState(a, 'test-flow', {
+      flow_id: 'flow-in-a', flow_name: 'test-flow', requirement: 'A 那条开发线的需求',
+      current_stage: 'work', base_sha: 'aaa111', last_session_id: 'sess-owner-in-a',
+    });
+    const lanes = a + '.ai-flow-worktrees';
+    const ticket = join(lanes, 'flow-in-a-T2');
+    execSync(`git worktree add -q "${ticket}" -b wt/flow-in-a-T2`, { cwd: repo.repoRoot });
+    cleanups.push(() => execSync(`rm -rf "${lanes}"`));
+
+    const out = await handleUserPrompt(makeInput('test-flow approve', ticket, 'sess-in-ticket'));
+    const o = out.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string };
     expect(o.permissionDecision).toBe('deny');
     const reason = o.permissionDecisionReason ?? '';
-    expect(reason).toContain('mv ');                       // 出路是可执行的，不是「请自行处理」
-    expect(reason).toContain(join(a, '.ai-flow', 'test-flow', 'state'));
-    // B 上不能被偷偷建出 flow
-    expect(await readActiveState(b, 'test-flow')).toBeNull();
+    // 照着这套做就是接管了打开这棵票树的那条 flow
+    expect(reason).not.toContain('last_session_id');
+    expect(reason).not.toContain('/clear');
+    expect(reason).toMatch(/临时工作树|票树/);
   });
 
   it('B 里 status → 放行（只读命令不受跨检出守卫影响）', async () => {
