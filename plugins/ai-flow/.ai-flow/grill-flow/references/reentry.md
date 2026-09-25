@@ -3,12 +3,12 @@
 > **触发**：`/clear` 之后回到 stage-3；或注入 context 里已有 `base_sha_code`、或 tickets.md 已有 `[x]`（都表示不是首次进入）。
 > `<FD>` = 本文件所在目录的上一级（定义层，随插件走：`stages/` `references/` `scripts/` 都在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（state 在这儿）。两个都给**绝对路径**：主 session 从 stage 提示词 `[ai-flow:paths]` 块的 `flow_def:` / `flow_root:` 行取；子代理用主 session 在派发 prompt 里给的那个。
 
-⛔ **在跑下面任何一条命令之前，先读 `<产物目录>/tickets.md` 的 `## 🔴 重入交接` 全段。**
+⛔ **在跑下面任何一条命令之前，先读 `docs/grill-flows/<flow_id>/tickets.md` 的 `## 🔴 重入交接` 全段。**
 本文件只回答「物理上走到哪」，回答不了「该知道什么才不会做错方向」——后者在交接段里，
 尤其是第 ⑧ 格（**主 session 自己的行为纪律**：什么时候该问开发者、什么时候必须自裁）。
 
 ```sh
-node <FD>/scripts/read-section.cjs --flow-dir <FR> <产物目录>/tickets.md '^## 🔴 重入交接' '^(## |- \[[ xX]\] T[0-9])'
+node <FD>/scripts/read-section.cjs --flow-dir <FR> docs/grill-flows/<flow_id>/tickets.md '^## 🔴 重入交接' '^(## |- \[[ xX]\] T[0-9])'
 ```
 
 结束图案是「下一个二级标题或第一条票行」：契约只规定交接段在文件最开头，没规定它后面接什么。
