@@ -6,6 +6,7 @@ import { advanceStage } from '../src/lib/advance-stage.js';
 import { createFlowTestRepo, writeActiveState, BLOCKING_CONFIG } from './fixtures/helpers.js';
 import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
 import { renderedPromptPath, materializeRenderedPrompt } from '../src/lib/state.js';
+import { PLUGIN_ROOT } from '../src/lib/flow-paths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
@@ -52,6 +53,13 @@ function stagePrompts(): Array<{ id: string; file: string; gated: boolean }> {
 // 一份带十个占位符的提示词在深路径下要多花几百字符——按浅路径量会低估。
 const DEEP_ANCHOR = '/Users/someone/Documents/Codes/worktrees/some-repo_main/apps/desktop';
 
+// `flow_def:` 行与 `{{flow_def}}` 展开成**插件自己所在的目录**——跑测试时是这份 checkout，用户那儿是
+// 插件缓存。前者短：实测 `grill-flow/stages/stage-3.md` 在仓库里量出 9,992、在缓存
+// `~/.claude/plugins/cache/darian-agent-plugins/ai-flow/0.80.0/` 里跑同一份测试是 10,001 ⇒ CI 绿、
+// 装好的插件溢出。所以把插件根一律换成一条比真实缓存路径更长的，量悲观值。
+const DEEP_PLUGIN_ROOT = '/Users/someone/.claude/plugins/cache/darian-agent-plugins/ai-flow/0.100.0';
+const atInstalledPath = (s: string): string => s.split(PLUGIN_ROOT).join(DEEP_PLUGIN_ROOT);
+
 /**
  * ⚠️ 宿主的上限管的是**组装后的整条 `additionalContext`**，不是提示词本身。只量 `renderPrompt()`
  * 会少算几百字符——一份实际会溢出的提示词就这么当成「内联得下」通过，而溢出是静默的。
@@ -69,7 +77,7 @@ const DEEP_ANCHOR = '/Users/someone/Documents/Codes/worktrees/some-repo_main/app
  *   「余量 200」这种页其实撑不住任何一条真实需求。现在它由下面的 `resumeOverhead` 单独量。
  */
 function injectionOverhead(flow: string, gated: boolean): number {
-  const preamble = buildAiFlowPreamble(DEEP_ANCHOR, flow, 'a'.repeat(40));
+  const preamble = atInstalledPath(buildAiFlowPreamble(DEEP_ANCHOR, flow, 'a'.repeat(40)));
   const advance = assembledOverhead((body) =>
     `[ai-flow] Stage 'stage-N' 已完成，进入 'stage-N'。\n\n` +
     `════════════════════════════════\n${body}\n════════════════════════════════\n\n` +
@@ -103,12 +111,12 @@ function resumeOverhead(flow: string, gated: boolean): number {
   const req = capInjectedText('需'.repeat(5000), REQUIREMENT_SOURCE);
   const branch = capInjectedText('b'.repeat(5000), BRANCH_SOURCE, INJECTED_BRANCH_CAP);
   const startFrame = assembledOverhead((body) =>
-    buildAiFlowPreamble(DEEP_ANCHOR, flow) +
+    atInstalledPath(buildAiFlowPreamble(DEEP_ANCHOR, flow)) +
     `Flow '${flow}' started!\n\n` +
     `flow_id: 2026-09-20-abcd\nrequirement: ${req}\ncurrent_stage: stage-N\n\n` +
     body);
   const resumeFrame = assembledOverhead((body) =>
-    buildAiFlowPreamble(DEEP_ANCHOR, flow, 'a'.repeat(40)) +
+    atInstalledPath(buildAiFlowPreamble(DEEP_ANCHOR, flow, 'a'.repeat(40))) +
     `Flow '${flow}' resumed from branch: ${branch}\n` +
     `current_stage: stage-N\nrequirement: ${req}\n\n` +
     body);
@@ -129,7 +137,7 @@ describe('stage 提示词的内联预算', () => {
     const known = KNOWN_OVERSIZE.has(p.id);
     it(`${p.id} ${known ? '（已知欠账，只许变小）' : '渲染后不超过内联上限'}`, () => {
       const flow = p.id.split('/')[0]!;
-      const rendered = renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow);
+      const rendered = atInstalledPath(renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow));
       const overhead = injectionOverhead(flow, p.gated);
       const total = rendered.length + overhead;
       if (!known) {
@@ -146,7 +154,7 @@ describe('stage 提示词的内联预算', () => {
     if (known) continue;
     it(`${p.id} 在 /ai-flow:start 与 resume 上也装得下（按封顶后的最坏情况）`, () => {
       const flow = p.id.split('/')[0]!;
-      const rendered = renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow).length;
+      const rendered = atInstalledPath(renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow)).length;
       const overhead = resumeOverhead(flow, p.gated);
       const total = rendered + overhead;
       expect(

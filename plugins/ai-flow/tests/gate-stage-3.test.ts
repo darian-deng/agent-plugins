@@ -107,6 +107,30 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(runGate(flowDir).code).toBe(0);
   });
 
+  it('产物目录下有 HANDOFF.md → 拦下，且在尚有未勾票时就报（不被断言 ① 挡在后面）', () => {
+    const { repo, flowDir, base } = makeRepo();
+    writeFileSync(
+      join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '# tickets\n\n- [ ] T1 — impl one\n'
+    );
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'HANDOFF.md'), '# 交接\n');
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('契约外的交接文件: HANDOFF.md');
+    expect(r.stderr).not.toContain('未完成 ticket');
+  });
+
+  it('产物目录下只有名字里带 handoff 但不以它开头的文件 → 不误拦', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'one.txt', 'feat(T1): impl one');
+    commit(repo, 'two.txt', 'feat(T2): impl two');
+    writeTickets(repo);
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'notes-on-handoff.md'), 'x\n');
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
   it('串行两笔 commit（每票 subject 含自己票号）→ 放行', () => {
     const { repo, flowDir, base } = makeRepo();
     commit(repo, 'one.txt', 'feat(T1): impl one');

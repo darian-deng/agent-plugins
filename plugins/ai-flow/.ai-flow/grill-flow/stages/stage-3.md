@@ -21,7 +21,7 @@
 | 发现与本期无关的问题、想现在就修 | `side-fix.md` |
 | 派实施代理（第一段） | `per-ticket-review.md` |
 | 实施回报了，派质量链代理（第二段） | `quality-chain.md` |
-| 想停下来问开发者（⛔ 不许直接问，三步在第 4 步） | `ask-before-asking.md` |
+| 想停下来问开发者（⛔ 不许直接问，三步在第 4 步）。⚠️ 同时撞上加票 / 旁路修 / 改产物那格 → **先走那格**：它判该不该问，本格只管怎么问 | `ask-before-asking.md` |
 | 要改前置产物（alignment / spec / tickets）· **开发者纠正了一条事实** | `revision-protocol.md` |
 
 ## 前置读取
@@ -70,7 +70,7 @@
 node <FD>/scripts/worktree.cjs --flow-dir <FR> open <flow_id> T<n>
 ```
 
-它负责位置、gitignore 检查、分支命名、装依赖，打印派发用的绝对路径——**不必记，这条命令就是全部。**
+它负责位置、gitignore 检查、分支命名、装依赖，打印派发用的绝对路径。
 
 **用打印的哪个路径**：锚点是 monorepo 子项目时打印两个——`<WT>`（项目根，和 `Touches` 同基准）与 worktree 根（`<WT_ROOT>`）。**两个都要带进 dispatch prompt**：只给后者，子代理会在整仓根凭空建一层同名目录，机器门⑥ 抓不到。
 
@@ -142,7 +142,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 3. 在该票那条上写 `qc:done`（行内或其缩进子项，别处不算）
 4. 勾 `[x]`
 
-⛔ **真机三态不在这清单里，它在第 5 步、close 之前**（`close` 拒缺标记，放这儿死锁）。⚠️ 它原先在这儿，依据是下一条那个 `qc:done` 重入锚——**搬到第 5 步后那条依据更强地成立**（第 5 步整个在 `qc:done` 前），⛔ 别拿它当搬回来的理由。
+⛔ **真机三态不在这清单里，它在第 5 步、close 之前**（`close` 拒缺标记，放这儿死锁）。
 
 ⛔ **车道模式下这份清单还多一步「已知碰撞面登记」，同样必须排在 `qc:done` 之前**；收口测试也不按批、按轮且有硬上限——两条都在 `lane-mode.md`，**漏做不会有任何东西变红**。
 

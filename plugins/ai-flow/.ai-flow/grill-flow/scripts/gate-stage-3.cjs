@@ -16,6 +16,9 @@
 //          commit」推出「不含票号的 commit 是安全的」，照此产生了 3 笔；而门在 ① （尚有未勾票）
 //          就退出、根本报不到它 ⇒ 那 3 笔要到收口那一刻才炸，而 stage-3 没有人工 gate。
 //          它为什么必须存在：见下面 ③ 的 err 之后那段注释（⑥⑦ 对不归属任何票的 commit 全盲）。
+//       ⓪附 产物目录下没有 `handoff*.md`（不分大小写）——交接只许住在 tickets.md 的 `## 🔴 重入交接`。
+//          同样**不占编号、同样阻断**，理由见 references/handoff.md 第一节；放在 ① 之前跑，
+//          否则尚有未勾票时 ① 先退出，它要到收口才第一次报出来。
 //       ④ base_sha_code..HEAD **无 merge commit**（历史线性）；
 //       ⑤ 本 flow 落点下无残留 worktree（并行票已全部收口；新旧两个落点都查）；
 //       ⑥ 每个 [x] ticket 那笔 commit 实际改的文件 ⊆ 它声明的 Touches；
@@ -131,6 +134,15 @@ if (!baseSha) {
 const tickets = join(projectRoot, 'docs', 'grill-flows', flowId, 'tickets.md');
 if (!existsSync(tickets)) {
   err('缺 tickets.md');
+  process.exit(FAIL);
+}
+
+const strayHandoffs = readdirSync(dirname(tickets)).filter((f) => /^handoff.*\.md$/i.test(f));
+if (strayHandoffs.length > 0) {
+  err('产物目录下有契约外的交接文件: ' + strayHandoffs.join(', ')
+    + '\n    交接只许写在 tickets.md 的 `## 🔴 重入交接`（references/handoff.md 第一节）。第二份文件没有任何环节'
+    + '检查它写全了没有，入场表的 ⑥⑦⑧ 会在里面整片缺失而不报错。'
+    + '\n    修法：把它里面还没落盘的内容并进交接段与 spec.md，然后删掉该文件。');
   process.exit(FAIL);
 }
 
