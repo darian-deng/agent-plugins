@@ -60,6 +60,8 @@ let sched;
 try { sched = JSON.parse(r.stdout.trim().split('\n').pop()); } catch (e) { fail('schedule.cjs 输出不是 JSON: ' + r.stdout.slice(0, 200)); }
 
 const eligible = sched.eligible || [];
+const frozen = sched.frozen || [];
+const freezeDesc = (sched.freeze || []).filter((f) => f.count > 0).map((f) => `${f.id} 冻 ${f.count} 张，解冻: ${f.lift || '未写'}`).join('；');
 const wrappingUp = facts.wrap_up_pct !== null && facts.wrap_up_pct !== undefined;
 const holdPath = facts.hold_path || join(flowDir, 'state', 'hold');
 const signalPath = join(flowDir, 'state', 'signal');
@@ -72,7 +74,10 @@ const factBits = [
   '在飞子代理 0',
   `开着的树 ${openTrees.length}` + (openTrees.length ? `（${openTrees.join(' ')}）` : ''),
 ];
-if (!wrappingUp) factBits.push(`够格未开 ${eligible.length}` + (eligible.length ? `（${eligible.join(' ')}）` : '') + `；未勾 ${sched.open}/${sched.total}`);
+if (!wrappingUp) {
+  factBits.push(`够格未开 ${eligible.length}` + (eligible.length ? `（${eligible.join(' ')}）` : '') + `；未勾 ${sched.open}/${sched.total}`);
+  if (frozen.length) factBits.push(`冻结面冻住 ${frozen.length}（${freezeDesc}）`);
+}
 if (facts.bash_in_flight) {
   const names = (facts.bash_tasks || []).slice(0, 3).join('；');
   factBits.push(`后台 shell 任务 ${(facts.bash_tasks || []).length} 个（${names}）——它们不会把你叫醒，别当成在等它`);
@@ -84,6 +89,11 @@ if (sched.open === 0) {
 } else if (wrappingUp) {
   lines.push(`context 已过收尾线：**只收不派**。开着的树按票面标记走完剩余段（派质量链 / 注释清理 / close / 记账），`
     + `然后重写交接段、结束回合。⛔ 不开新票。`);
+} else if (openTrees.length === 0 && eligible.length === 0 && frozen.length > 0) {
+  lines.push(`够格 0 是因为冻结面（${freezeDesc}）。这是**等门期**，不是停点——按 \`freeze.md\` 的等门期工单做：`
+    + `细化下一切片的粗票（补机器判据与 Touches）/ 为冻结票预落 AC 与 Touches 收窄 / 跑欠的收口测试 / 收口 candidates.md。`
+    + `解冻条件是否已满足也核一遍——满足就在那条冻结面下写 \`- lifted: <日期>\` 然后开票。`
+    + `真的一件都没有 → 用 Write 写 \`${holdPath}\`，一行写清冻结面 id 与解冻条件（等谁做什么）。`);
 } else if (openTrees.length === 0 && eligible.length === 0) {
   lines.push(`未勾的票没有一张够格（全部 Blocked by 未清）。可做的事：核对 Blocked by 是否成环或指向不存在的票；`
     + `按 execution-unit.md 跑 \`schedule.cjs\` 看依赖链；细化下一切片的粗票；跑欠的收口测试。`);

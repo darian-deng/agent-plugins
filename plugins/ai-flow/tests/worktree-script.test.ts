@@ -954,7 +954,7 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/b/x.ts') + T('T4', false, 'src/c/');
     const j = JSON.parse(sched(makeFlow(t), 'missed', '--json', 'T2').trim().split('\n').pop()!);
     // T3 与在飞的 T2 写集相交（目录前缀），T4 够格。
-    expect(j).toEqual({ live: ['T2'], eligible: ['T4'], open: 3, done: 1, total: 4 });
+    expect(j).toMatchObject({ live: ['T2'], eligible: ['T4'], frozen: [], open: 3, done: 1, total: 4 });
   });
 
   it('stop-guard：有够格票 / 有树待收 → exit 3，文案带票号、hold 路径与两个选项', () => {
@@ -988,6 +988,40 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     const r = guard(makeFlow(blocked), { wrap_up_pct: null });
     expect(r.code).toBe(3);
     expect(r.out).toContain('没有一张够格');
+  });
+
+  it('冻结面：paths 按写集前缀冻、except 放行、only 只冻点名的、lifted 整条忽略、Touches none 不按路径冻', () => {
+    const t = T('T1', true, 'src/a/')
+      + T('T2', false, 'src/main/boot/tasks.ts')          // 撞 paths → 冻
+      + T('T3', false, 'src/main/boot/ports.ts')          // 撞 paths 但在 except → 不冻
+      + T('T4', false, 'src/other/')                      // 不撞 → 够格
+      + T('T5', false, 'none')                            // none 不按路径冻 → 够格候选
+      + T('T6', false, 'src/x/')                          // 被 F2 的 only 点名 → 冻
+      + T('T7', false, 'src/main/host/')                  // F3 已 lifted → 不冻
+      + '\n## 冻结面\n\n'
+      + '- F1 — 解冻: 切片① 真机通过\n  - paths: src/main/boot/ src/preload/\n  - except: T3\n'
+      + '- F2 — 解冻: 开发者说可以\n  - only: T6 T99\n'
+      + '- F3 — 解冻: 旧的\n  - paths: src/main/host/\n  - lifted: 2026-09-28 已验\n';
+    const j = JSON.parse(sched(makeFlow(t), 'missed', '--json').trim().split('\n').pop()!);
+    expect(j.frozen).toEqual(['T2', 'T6']);
+    // T3 放行后与 T4/T7 写集不相交；T5 是 none，overlap() 把它当与一切相交，被前面的票挤掉。
+    expect(j.eligible).toEqual(['T3', 'T4', 'T7']);
+    expect(j.freeze.map((f: { id: string; count: number }) => [f.id, f.count])).toEqual([['F1', 1], ['F2', 1]]);
+    const human = sched(makeFlow(t), 'missed');
+    expect(human).toContain('❄️  冻结面 F1（解冻: 切片① 真机通过）冻住 1 张：T2');
+    expect(human).not.toMatch(/够格同批开[^\n]*\n[^\n]*T2/);
+    expect(sched(makeFlow(t))).toContain('冻结面 F1 F2 当前冻住 2 张未勾票：T2 T6');
+  });
+
+  it('stop-guard：够格 0 是因为冻结面 → 报等门期工单，不是「没有一张够格」', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/main/boot/x.ts')
+      + '\n## 冻结面\n\n- F1 — 解冻: 切片① 真机通过\n  - paths: src/main/boot/\n';
+    const r = guard(makeFlow(t), { wrap_up_pct: null, hold_path: '/h' });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('冻结面冻住 1（F1 冻 1 张，解冻: 切片① 真机通过）');
+    expect(r.out).toContain('等门期');
+    expect(r.out).toContain('freeze.md');
+    expect(r.out).not.toContain('没有一张够格');
   });
 
   it('stop-guard：脚本自身故障（缺 AI_FLOW_FLOW_DIR）→ 非 0 非 3，引擎只记日志', () => {

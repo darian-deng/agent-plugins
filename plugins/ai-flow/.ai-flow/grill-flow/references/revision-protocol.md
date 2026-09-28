@@ -78,6 +78,7 @@ AI 自查发现前置产物漏写/错了。直接进影响评估。**禁止自�
 在 stage-3 触发、且 L2 改了 spec/tickets → grep 已完成 ticket（`[x]`）的改动文件，评估是否需就地在 tickets.md 追加/重切 ticket。不允许"改了 spec 但不修已 ship 代码"。
 
 ### 4. 暴露纪律 + gate 无 reject
+- **开发者的停令 / 冻结令不是 L1/L2**——它是一条冻结面，走 `freeze.md`：同一回复里落条目、贴给他看、开始等门期工单，不停。
 - **L1/L2 必须停在当前位置等开发者确认**，禁止继续推进。停之前用 Write 写 `<FR>/state/hold` 一行（等他确认什么、L 几）——引擎只认这个文件；没有它，停滞自检和 Stop 守卫会把这次停判成停滞、催你继续。
 - **L3 禁止默默改**，在 gate 前审查清单或（无 gate 的 stage-3）当场告知。
 - **gate 无 reject 语义**：开发者不批 gate ≠ 引擎回退。只能"继续讨论 → 就地改产物（spec/tickets/findings/代码）→ 重新呈现 → 再 approve"，或 abort 整个 flow。

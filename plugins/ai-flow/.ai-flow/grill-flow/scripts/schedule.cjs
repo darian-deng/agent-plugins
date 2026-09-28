@@ -217,6 +217,70 @@ for (const l of lines) {
 }
 if (tk.size === 0) die('tickets.md 里没有 ticket 级行（`- [ ] T<n>`）');
 
+// ── 冻结面（`## 冻结面` 段；references/freeze.md）────────────────────────────────
+// 开发者的停令（「切片①真机通过前不开新切片首票」）以前只活在散文里：主循环的够格判定
+// 看不见它，`missed` 会把冻着的票列成「够格」，而主 session 把它解读成「整片停摆」——实测
+// 一条这样的令让 15 个批次连续单票、frontier 三次清零共等了 12 小时。所以它成了票面字段：
+//
+//   ## 冻结面
+//   - F1 — 解冻: <条件一句话>
+//     - paths: src/main/host/ src/main/boot/        # 写集与之相交的票被冻（目录前缀语义同 overlap）
+//     - only: T17 T18                                # 可选：只考虑这些票（票级停令用它）
+//     - except: T45 T47                              # 可选：这些票不受本条冻结（解冻条件自身的关键路径）
+//     - lifted: 2026-09-28                           # 可选：已解冻，本条整段忽略
+//
+// 判定：frozen(t) = 未勾 ∧ 无 lifted ∧ t∉except ∧ (only 非空 ? t∈only : true)
+//                 ∧ (paths 非空 ? t.touches 与 paths 相交 : only 非空)
+// ⚠️ 与 overlap() 的一处刻意差别：`Touches: none/无/-` 的票**不**按路径冻（预估不了写集不等于
+// 一定撞冻结面；要冻它就写进 only）。overlap() 那边把 none 当「与一切相交」是为了并行安全——
+// 收紧方向；这里若照搬，任何非空冻结面都会把所有 none 票冻住，方向反了。
+const freeze = [];   // [{ id, lift, paths:[], only:[], except:[], lifted:false, line }]
+{
+  let inFreeze = false, ent = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#{1,6}\s/.test(l)) { inFreeze = /^##\s/.test(l) && /冻结面/.test(l); ent = null; continue; }
+    if (!inFreeze) continue;
+    // 顶格 `- F1 — 解冻: …` 开一条；缩进 `- paths: …` 等是它的字段。
+    if (/^-\s+\S/.test(l)) {
+      const mm = /^-\s+(\S+)\s*(?:[—–-]+\s*)?(.*)$/.exec(l);
+      ent = { id: mm[1], lift: (mm[2] || '').replace(/^解冻[:：]\s*/, '').trim(), paths: [], only: [], except: [], lifted: false, line: i + 1 };
+      freeze.push(ent);
+      continue;
+    }
+    if (!ent || !/^\s+-\s*/.test(l)) continue;
+    const kv = /^\s+-\s*`?(paths|only|except|lifted|解冻)`?\s*[:：]\s*(.*)$/.exec(l);
+    if (!kv) continue;
+    const vals = kv[2].split(/[,\s]+/).map((x) => x.replace(/`/g, '')).filter(Boolean);
+    if (kv[1] === 'paths') ent.paths.push(...vals);
+    else if (kv[1] === 'only') ent.only.push(...vals.filter((x) => /^T\d+$/.test(x)));
+    else if (kv[1] === 'except') ent.except.push(...vals.filter((x) => /^T\d+$/.test(x)));
+    else if (kv[1] === 'lifted') ent.lifted = true;
+    else if (kv[1] === '解冻') ent.lift = kv[2].trim();
+  }
+}
+const activeFreeze = freeze.filter((f) => !f.lifted && (f.paths.length > 0 || f.only.length > 0));
+function pathsOverlap(touches, paths) {
+  const real = touches.filter((x) => !NONE.test(x));
+  if (real.length === 0) return false;
+  for (const x of real) for (const y of paths) {
+    const nx = norm(x), ny = norm(y);
+    if (nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/')) return true;
+  }
+  return false;
+}
+/** 冻住 t 的那条冻结面，或 null。 */
+function frozenBy(t) {
+  const rec = tk.get(t);
+  if (!rec || rec.done) return null;
+  for (const f of activeFreeze) {
+    if (f.except.includes(t)) continue;
+    if (f.only.length > 0 && !f.only.includes(t)) continue;
+    if (f.paths.length > 0 ? pathsOverlap(rec.touches, f.paths) : f.only.length > 0) return f;
+  }
+  return null;
+}
+
 // 写集相交：目录前缀也算相交（`src/a/` 与 `src/a/b.ts` 是同一处）。这里只做前缀比较、
 // 不展开 glob——判断「能不能同批」时把 `src/*.ts` 与 `src/x.ts` 算作相交是收紧方向。
 const norm = (g) => g.replace(/\/+$/, '').replace(/\/\*+$/, '');
@@ -260,8 +324,13 @@ if (SUB === 'missed') {
   // 两棵写集相交的 worktree，rebase 必撞。主循环的准入是「与批内**其它已入选票**也不相交」
   // （`roundsPerTicket` 里那句 `batch.some(...)`），这里必须同口径，否则这条提示在教人违规。
   const eligible = [];
+  const frozen = [];   // [{ t, f }]
   for (const t of order) {
     if (done.has(t) || live.has(t)) continue;
+    // 冻结面先于一切：被冻的票连「够格」两个字都不该出现在它旁边——上一版把它们列成够格，
+    // 主 session 就得每轮自己记着「这几张其实不能开」，而那正是散文冻结令的失败形态。
+    const fz = frozenBy(t);
+    if (fz) { frozen.push({ t, f: fz }); continue; }
     // 与主循环同一口径：只看**本 tickets.md 里存在**的前驱。指向别处（已删的票、别的
     // flow）的 Blocked by 永远勾不上，按它挡就等于把票永久冻住。
     if (tk.get(t).blocked.some((b) => tk.has(b) && !done.has(b))) continue;
@@ -276,8 +345,20 @@ if (SUB === 'missed') {
 
   if (asJson) {
     const open = order.filter((t) => !done.has(t));
-    say(JSON.stringify({ live: [...live], eligible, open: open.length, done: done.size, total: order.length }));
+    say(JSON.stringify({
+      live: [...live], eligible, frozen: frozen.map((x) => x.t),
+      freeze: activeFreeze.map((f) => ({ id: f.id, lift: f.lift, paths: f.paths, only: f.only, except: f.except, count: frozen.filter((x) => x.f === f).length })),
+      open: open.length, done: done.size, total: order.length,
+    }));
     process.exit(0);
+  }
+  if (frozen.length > 0) {
+    for (const f of activeFreeze) {
+      const mine = frozen.filter((x) => x.f === f).map((x) => x.t);
+      if (mine.length === 0) continue;
+      say(`❄️  冻结面 ${f.id}（解冻: ${f.lift || '（未写解冻条件——补上，否则没人知道什么时候能开）'}）冻住 ${mine.length} 张：${mine.join(' ')}`);
+    }
+    say('   这些票**不算够格**，下面的清单已经排除它们。解冻条件满足 → 在那条冻结面下加 `- lifted: <日期>`。');
   }
   if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（missed 后面只认 T<n> 形态的票号）`);
   if (unknown.length > 0) {
@@ -523,6 +604,10 @@ function roundsLanes(k) {
 }
 
 say(`${tk.size} 票 · 最长依赖链 ${lowerBound} 票（墙钟下限，任何并行度都压不到它以下）`);
+if (activeFreeze.length > 0) {
+  const fzAll = order.filter((t) => frozenBy(t));
+  say(`❄️  冻结面 ${activeFreeze.map((f) => f.id).join(' ')} 当前冻住 ${fzAll.length} 张未勾票：${fzAll.join(' ') || '—'}（下面的轮数按全量算、不扣冻结；此刻能开的看 \`missed\`）`);
+}
 say(`分组来源：${source} → ${parts.length} 个分量：${parts.map((p) => `${p.name}(${p.n})`).join(' ')}`);
 say('');
 say('同一并发预算下的两种执行单位（轮数越小越快）：');

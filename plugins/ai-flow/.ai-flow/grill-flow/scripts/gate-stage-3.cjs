@@ -260,6 +260,11 @@ if (done.length === 0) {
 // 注释清理是后来才从质量链子代理上收给主 session 的，在那之前收口的票面上没有这个字段，
 // 硬断言会把一个跑到一半的 flow 整个卡住。缺它的真实防线在 `reentry.md` 的相位表
 // （重入时判得出「已 commit 但注释没清」），这里只负责让漏做**可见**。
+// 同一趟量块大小。**只警告**：记账膨胀不是违规，是成本——实测 tickets.md 1.27 MB 里 82% 是
+// 记账散文、`cm:done` 均长 784 字节，每 session 抄进去 6–11 万字符，下一 session 再切片读回来。
+// 阈值 8 KB ≈ 票面本体 + 白名单里那几行的上限（quality-chain.md 第 6 步）；超了说明回报正文被抄进来了。
+const BLOCK_WARN_BYTES = 8 * 1024;
+const fatBlocks = [];
 const missingQc = [];
 const missingCm = [];
 for (let k = 0; k < done.length; k++) {
@@ -285,6 +290,13 @@ for (let k = 0; k < done.length; k++) {
   }
   if (!found) missingQc.push(done[k].num);
   if (!foundCm) missingCm.push(done[k].num);
+  const bytes = Buffer.byteLength(blockLines.join('\n'), 'utf-8');
+  if (bytes > BLOCK_WARN_BYTES) fatBlocks.push(`${done[k].num}(${Math.round(bytes / 1024)}KB)`);
+}
+if (fatBlocks.length > 0) {
+  process.stderr.write('⚠  票块超过 ' + (BLOCK_WARN_BYTES / 1024) + ' KB（只警告不阻断）：' + fatBlocks.join(' ')
+    + '\n    票面只放票面字段 + 单行标记；子代理回报正文不抄进来（quality-chain.md 第 6 步的白名单），'
+    + '它已在子代理 transcript 里（handoff.md 有找回路径）。\n');
 }
 // 只在「这个 flow 已经在用 cm:done、但漏了几张」时才说话。全部已勾票都没有它 = 这一轮跑在
 // 注释清理上收之前的契约上，那时票面本来就没有这个字段 —— 对那种 flow 报一长串票号是纯噪音。

@@ -138,7 +138,7 @@ const SPLIT_STAGES: SplitStage[] = [
     routed: [
       'execution-unit.md', 'lane-mode.md', 'subagent-lifecycle.md',
       'reentry.md', 'recovery.md', 'mid-flight-ticket.md',
-      'per-ticket-review.md', 'quality-chain.md', 'revision-protocol.md',
+      'per-ticket-review.md', 'quality-chain.md', 'revision-protocol.md', 'freeze.md',
     ],
     resident: [
       // `## 入场` 的 Step 0 三条预检。它们完全符合本字段的定义却一直没被钉住：`worktree.cjs` 从主仓

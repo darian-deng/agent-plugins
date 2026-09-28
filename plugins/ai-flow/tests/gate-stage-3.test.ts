@@ -604,6 +604,20 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(r.stderr).toContain('T1 T2');
   });
 
+  it('`## 冻结面` 段不是票、不是交接段，门照常放行；超 8 KB 的票块只警告', () => {
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'a.txt', 'feat(T1): one');
+    commit(repo, 'b.txt', 'feat(T2): two');
+    writeState(flowDir, base);
+    const fat = '  - 📝 ' + 'x'.repeat(9000) + '\n';
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'),
+      '## 🔴 重入交接\n\n- ① …\n\n## 票\n\n- [x] T1 — impl one\n  - qc:done\n' + fat + '- [x] T2 — impl two\n  - qc:done\n\n'
+      + '## 冻结面\n\n- F1 — 解冻: 切片① 真机通过\n  - paths: src/main/boot/\n  - except: T1\n  - lifted: 2026-09-28\n');
+    const r = runGate(flowDir);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain('票块超过 8 KB（只警告不阻断）：T1(9KB)');
+  });
+
   it('交接段只许一份、只许叫 `## 🔴 重入交接`：换个名字的第二段照样拦', () => {
     // 实测：撞 60% 后新建 `## 🔴🔴🔴 下一个 session 最重要的三件事`，下个 session 改名
     // `## 上一轮交班`，23.6 KB 纯快照；handoff.md 的自检按精确标题 grep，一直打印 1。
