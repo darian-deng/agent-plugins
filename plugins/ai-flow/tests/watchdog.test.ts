@@ -10,8 +10,14 @@ import {
   decideStall,
   resolveWatchdogConfig,
   readWatchdog,
+  emptyWatchdog,
   watcherCommand,
   isWatcherTask,
+  isOwnWatcher,
+  classifyInFlight,
+  watcherOwnership,
+  ownerChangedText,
+  BASH_IDLE_MULTIPLIER,
   WATCHER_MARKER,
   MAX_ARM_ASKS,
   DEFAULT_NUDGE_CAP,
@@ -23,6 +29,11 @@ import {
   nudgeText,
 } from '../src/lib/watchdog.js';
 import { createFlowTestRepo, writeActiveState, readActiveState, writeSignal, MINIMAL_CONFIG } from './fixtures/helpers.js';
+import { holdPath, readHold } from '../src/lib/state.js';
+import { STOP_GUARD_CONTINUE_EXIT, STOP_GUARD_LABEL } from '../src/lib/stop-handler.js';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import type { FlowConfig } from '../src/lib/flow-schema.js';
 import type { StopInput, UserPromptInput, PostToolInput, SessionStartInput } from '../src/lib/types.js';
 
 let cleanups: Array<() => void> = [];
@@ -72,6 +83,10 @@ function armedWatchdog(over: Record<string, unknown> = {}) {
     last_stop_at: new Date().toISOString(),
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
+    last_user_prompt_at: null,
     watcher_seen: true,
     arm_asks: 1,
     nudges_this_stage: 0,
@@ -87,7 +102,9 @@ describe('decideStall', () => {
     now: 1_000_000,
     lastStopAt: 1_000_000 - 10 * 60_000,
     lastActivityAt: 1_000_000 - 12 * 60_000,
-    background: false,
+    agentsInFlight: false,
+    bashInFlight: false,
+    holdPresent: false,
     gatePending: false,
     nudgesThisStage: 0,
     config: CFG,
@@ -118,8 +135,25 @@ describe('decideStall', () => {
     expect(decideStall({ ...base, gatePending: true }).stalled).toBe(false);
   });
 
-  it('background work in flight → not stalled (something will wake the session)', () => {
-    expect(decideStall({ ...base, background: true }).stalled).toBe(false);
+  it('a subagent in flight → not stalled (it will end and wake the session)', () => {
+    expect(decideStall({ ...base, agentsInFlight: true }).stalled).toBe(false);
+    // Even hours later: a subagent's end is certain, a shell task's is not.
+    expect(decideStall({ ...base, agentsInFlight: true, lastStopAt: base.now - 5 * 60 * 60_000, lastActivityAt: base.now - 5 * 60 * 60_000 }).stalled).toBe(false);
+  });
+
+  it('a shell task in flight → the fuse is longer, not infinite', () => {
+    // The task may be a `pnpm dev` that never exits. Under the old absolute exemption
+    // one flow sat 212 minutes with nothing but that instance in flight.
+    const shell = { ...base, bashInFlight: true };
+    expect(decideStall(shell).stalled).toBe(false);                                    // 10 min < 30
+    const long = { ...shell, lastStopAt: base.now - (CFG.idleMs * BASH_IDLE_MULTIPLIER + 1_000), lastActivityAt: base.now - ACTIVITY_STALE_MS - 1 };
+    expect(decideStall(long).stalled).toBe(true);
+    expect(decideStall({ ...long, agentsInFlight: true }).stalled).toBe(false);
+  });
+
+  it('a hold → not stalled (the model wrote down what it is waiting for)', () => {
+    expect(decideStall({ ...base, holdPresent: true }).stalled).toBe(false);
+    expect(decideStall({ ...base, holdPresent: true, lastStopAt: base.now - 5 * 60 * 60_000 }).stalled).toBe(false);
   });
 
   it('stopped less than the idle threshold ago → not stalled', () => {
@@ -223,9 +257,57 @@ describe('the nudge carries its own replacement', () => {
     const text = nudgeText({
       flowName: 'test-flow', stageId: 'work', idleMs: 10 * 60_000, remaining: 2,
       wrapUpPct: null, rearmCommand: watcherCommand('/repo', 'test-flow', 'test-flow-abc', OWNER),
+      holdPath: '/repo/.ai-flow/test-flow/state/hold',
     });
     expect(text).toContain(WATCHER_MARKER);
     expect(text).toContain('run_in_background');
+  });
+
+  it('offers exactly two actions: keep working, or write the hold file — never "say you are waiting and stop"', () => {
+    // The previous wording's first option was "waiting for the developer → say so and
+    // stop". It was taken verbatim on the first nudge a flow received; the developer
+    // had been asking the flow not to stop.
+    const text = nudgeText({
+      flowName: 'test-flow', stageId: 'work', idleMs: 10 * 60_000, remaining: 2,
+      wrapUpPct: null, rearmCommand: watcherCommand('/repo', 'test-flow', 'test-flow-abc', OWNER),
+      holdPath: '/repo/.ai-flow/test-flow/state/hold', bashTasks: ['pnpm dev'],
+    });
+    expect(text).toContain('/repo/.ai-flow/test-flow/state/hold');
+    expect(text).toContain('pnpm dev');
+    expect(text).not.toMatch(/回一行说清在等什么，然后结束回合/);
+  });
+
+  it('the owner-changed exit hands the NEW session its own arming command', () => {
+    const text = ownerChangedText('test-flow', watcherCommand('/repo', 'test-flow', 'test-flow-abc', 'new-sess'));
+    expect(text).toContain('--session "new-sess"');
+    expect(text).toContain('run_in_background');
+  });
+});
+
+describe('own watcher vs inherited watcher', () => {
+  it('the same flow instance under a previous session id is NOT this session\'s watcher', () => {
+    // `/clear` keeps the host process and its background tasks; the next session
+    // inherits the old watcher, which stays silent for an owner it does not know.
+    const old = watcherCommand('/repo', 'test-flow', 'test-flow-abc', 'prev-sess');
+    expect(isWatcherTask(old, 'test-flow-abc')).toBe(true);
+    expect(isOwnWatcher(old, 'test-flow-abc', OWNER)).toBe(false);
+    expect(isOwnWatcher(watcherCommand('/repo', 'test-flow', 'test-flow-abc', OWNER), 'test-flow-abc', OWNER)).toBe(true);
+  });
+
+  it('classifyInFlight: agents wake, shell tasks may not, any watcher is neither, unknown host tasks are ignored', () => {
+    const w = watcherCommand('/repo', 'test-flow', 'test-flow-abc', 'prev-sess');
+    const c = classifyInFlight([
+      { id: '1', type: 'shell', command: w },
+      { id: '2', type: 'local_bash', command: 'sleep 900', description: 'timer' },
+      { id: '3', type: 'monitor' },
+      { id: '4', type: 'dream' },
+    ]);
+    expect(c).toEqual({ agents: false, bash: true, bashTasks: ['timer'] });
+    expect(classifyInFlight([{ id: '5', type: 'local_agent' }]).agents).toBe(true);
+    expect(classifyInFlight([{ id: '6', type: 'subagent' }]).agents).toBe(true);
+    // Older client without `type`: a command means shell, otherwise a subagent.
+    expect(classifyInFlight([{ id: '7', command: 'pnpm dev' }])).toEqual({ agents: false, bash: true, bashTasks: ['pnpm dev'] });
+    expect(classifyInFlight([{ id: '8' }]).agents).toBe(true);
   });
 });
 
@@ -258,13 +340,39 @@ describe('handleStop', () => {
     expect(readWatchdog(readActiveState(repo.repoRoot, 'test-flow')).background).toBe(false);
   });
 
-  it('another background task does count as work in flight', async () => {
+  it('another background task does count as work in flight, by kind', async () => {
     const repo = makeRepo();
     seedFlow(repo.repoRoot, 'test-flow');
     await handleStop(stopInput(repo.repoRoot, {
       background_tasks: [ourWatcher(repo.repoRoot), { id: 't2', type: 'subagent', status: 'running' }],
     }));
-    expect(readWatchdog(readActiveState(repo.repoRoot, 'test-flow')).background).toBe(true);
+    let w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+    expect(w.background).toBe(true);
+    expect(w.agents_in_flight).toBe(true);
+    expect(w.bash_in_flight).toBe(false);
+    await handleStop(stopInput(repo.repoRoot, {
+      background_tasks: [{ id: 't3', type: 'shell', status: 'running', command: 'pnpm dev', description: 'dev server' }],
+    }));
+    w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+    expect(w.agents_in_flight).toBe(false);
+    expect(w.bash_in_flight).toBe(true);
+    expect(w.bash_tasks).toEqual(['dev server']);
+  });
+
+  it('a watcher inherited from the previous session is neither armed nor work in flight', async () => {
+    // The 0.80.x zombie: same flow instance, old session id, still listed after /clear.
+    // Counted as armed it silenced the whole flow for six days; counted as work in
+    // flight it would silence the watchdog that replaces it.
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    const inherited = { id: 'bg0', type: 'shell', status: 'running',
+      command: watcherCommand(repo.repoRoot, 'test-flow', 'test-flow-abc', 'prev-sess') };
+    const out = await handleStop(stopInput(repo.repoRoot, { background_tasks: [inherited] }));
+    expect(out?.additionalContext).toContain(WATCHER_MARKER);
+    const w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+    expect(w.watcher_seen).toBe(false);
+    expect(w.background).toBe(false);
+    expect(w.bash_in_flight).toBe(false);
   });
 
   it('a scheduled wakeup counts as work in flight', async () => {
@@ -455,10 +563,7 @@ describe('session boundaries', () => {
     const input: SessionStartInput = { hook_event_name: 'SessionStart', session_id: 'fresh-sess', cwd: repo.repoRoot, source: 'clear' };
     await handleSessionStart(input);
     const w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
-    expect(w).toEqual({
-      last_stop_at: null, last_activity_at: null, background: false,
-      watcher_seen: false, arm_asks: 0, nudges_this_stage: 0, last_nudge_at: null,
-    });
+    expect(w).toEqual(emptyWatchdog());
   });
 
   it('a resume starts blank too — its timestamps describe a session that was put down', async () => {
@@ -502,5 +607,241 @@ describe('status reports whether the watchdog is armed', () => {
       expect(res.additionalContext).toContain('未武装');
       expect(res.additionalContext).toContain('停滞不会被发现');
     }
+  });
+});
+
+describe('the watcher knows whose flow it is looking at', () => {
+  const st = (over: Partial<{ flow_id: string; last_session_id: string | null }> = {}) =>
+    ({ flow_id: 'test-flow-abc', last_session_id: OWNER, ...over });
+  it('same flow, same owner → ours', () => {
+    expect(watcherOwnership(st(), 'test-flow-abc', OWNER)).toBe('ours');
+  });
+  it('no owner (the shape `<flow> resume` leaves) → still ours', () => {
+    expect(watcherOwnership(st({ last_session_id: null }), 'test-flow-abc', OWNER)).toBe('ours');
+  });
+  it('same flow, another owner → owner-changed (exit and hand over)', () => {
+    // The 0.80.x zombie was this verdict handled as `continue`: silent forever, and
+    // counted as armed by every session that inherited it.
+    expect(watcherOwnership(st({ last_session_id: 'new-sess' }), 'test-flow-abc', OWNER)).toBe('owner-changed');
+  });
+  it('another flow instance, or no flow → foreign-flow (silent, no exit)', () => {
+    expect(watcherOwnership(st({ flow_id: 'test-flow-xyz' }), 'test-flow-abc', OWNER)).toBe('foreign-flow');
+    expect(watcherOwnership(null, 'test-flow-abc', OWNER)).toBe('foreign-flow');
+  });
+});
+
+describe('state/hold', () => {
+  function promptInput(repoRoot: string, over: Partial<UserPromptInput> = {}): UserPromptInput {
+    return { hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repoRoot, prompt: '继续', ...over };
+  }
+  function writeHold(repoRoot: string, text = '等开发者在已登录浏览器里点深链；只有他有会话；点完继续 T58') {
+    const p = holdPath(repoRoot, 'test-flow');
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, text);
+    return p;
+  }
+
+  it('a developer prompt clears it and logs what was held', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    writeHold(repo.repoRoot);
+    await handleUserPrompt(promptInput(repo.repoRoot, { source: 'user' }));
+    expect(readHold(repo.repoRoot, 'test-flow')).toBeNull();
+    const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'flow.log'), 'utf-8');
+    expect(log).toContain('HOLD_CLEARED 等开发者在已登录浏览器里点深链');
+    expect(readWatchdog(readActiveState(repo.repoRoot, 'test-flow')).last_user_prompt_at).not.toBeNull();
+  });
+
+  it('a wakeup nobody typed does not clear it', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    writeHold(repo.repoRoot);
+    await handleUserPrompt(promptInput(repo.repoRoot, { source: 'schedule_wakeup' }));
+    expect(readHold(repo.repoRoot, 'test-flow')).not.toBeNull();
+    expect(readWatchdog(readActiveState(repo.repoRoot, 'test-flow')).last_user_prompt_at).toBeNull();
+  });
+
+  it('a subagent may not write it', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    const res = await handlePreTool({
+      hook_event_name: 'PreToolUse', session_id: OWNER, cwd: repo.repoRoot, agent_id: 'sub-1',
+      tool_name: 'Write', tool_input: { file_path: holdPath(repo.repoRoot, 'test-flow'), content: 'waiting' },
+    });
+    expect(res?.permissionDecision).toBe('deny');
+    const main = await handlePreTool({
+      hook_event_name: 'PreToolUse', session_id: OWNER, cwd: repo.repoRoot,
+      tool_name: 'Write', tool_input: { file_path: holdPath(repo.repoRoot, 'test-flow'), content: 'waiting' },
+    });
+    expect(main?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('cannot be written through Bash by anyone — Bash cannot tell a subagent from the main session', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    for (const agent of [undefined, 'sub-1']) {
+      for (const cmd of [
+        `echo waiting > ${holdPath(repo.repoRoot, 'test-flow')}`,
+        'printf x > .ai-flow/test-flow/state/hold',
+      ]) {
+        const res = await handlePreTool({
+          hook_event_name: 'PreToolUse', session_id: OWNER, cwd: repo.repoRoot,
+          ...(agent && { agent_id: agent }), tool_name: 'Bash', tool_input: { command: cmd },
+        });
+        expect(res?.permissionDecision, `${agent ?? 'main'}: ${cmd}`).toBe('deny');
+        expect(res?.permissionDecisionReason).toContain('hold');
+      }
+    }
+  });
+
+  it('stays writable during context wrap-up, when everything but the flow docs is refused', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow', { context_wrap_up: { at_pct: 61 } });
+    // MINIMAL_CONFIG's `work` stage has no docs_paths → wrap-up refuses nothing there.
+    // Use the `review` stage, which does, so the refusal is live and the carve-out is what passes.
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'x', current_stage: 'review', base_sha: 'abc',
+      last_session_id: OWNER, context_wrap_up: { at_pct: 61 },
+    });
+    const denied = await handlePreTool({
+      hook_event_name: 'PreToolUse', session_id: OWNER, cwd: repo.repoRoot,
+      tool_name: 'Write', tool_input: { file_path: join(repo.repoRoot, 'src', 'x.ts'), content: 'x' },
+    });
+    expect(denied?.permissionDecision).toBe('deny');
+    const hold = await handlePreTool({
+      hook_event_name: 'PreToolUse', session_id: OWNER, cwd: repo.repoRoot,
+      tool_name: 'Write', tool_input: { file_path: holdPath(repo.repoRoot, 'test-flow'), content: 'waiting on developer' },
+    });
+    expect(hold?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('writing it is acknowledged and logged', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    const p = writeHold(repo.repoRoot);
+    const out = await handlePostTool({
+      hook_event_name: 'PostToolUse', session_id: OWNER, cwd: repo.repoRoot,
+      tool_name: 'Write', tool_input: { file_path: p }, tool_response: {},
+    });
+    expect(out?.additionalContext).toContain('state/hold 已登记');
+    const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'flow.log'), 'utf-8');
+    expect(log).toContain('HOLD_SET stage=work 等开发者');
+  });
+
+  it('advancing a stage clears it', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow');
+    writeHold(repo.repoRoot);
+    await advanceStage(repo.repoRoot, 'test-flow', OWNER);
+    expect(readHold(repo.repoRoot, 'test-flow')).toBeNull();
+  });
+});
+
+describe('stage stop guard', () => {
+  const GUARDED: FlowConfig = {
+    schema_version: '1.0',
+    name: 'guarded-flow',
+    stages: [
+      { id: 'work', prompt: 'stages/work.md', write_scope: 'unrestricted', completion: {}, stop_guard: 'node scripts/guard.cjs' },
+      { id: 'review', prompt: 'stages/review.md', write_scope: 'unrestricted', completion: { gate: true } },
+    ],
+  };
+  // The script echoes the facts the engine passed, so the tests can assert on them.
+  const GUARD_SCRIPT = `
+const f = JSON.parse(process.env.AI_FLOW_STOP_FACTS || '{}');
+if (process.env.GUARD_MODE === 'crash') { process.stderr.write('boom'); process.exit(1); }
+if (process.env.GUARD_MODE === 'pass') process.exit(0);
+process.stdout.write('${STOP_GUARD_LABEL} 够格未开 2 张 stage=' + f.stage + ' bash=' + f.bash_in_flight + ' hold=' + f.hold_path);
+process.exit(${STOP_GUARD_CONTINUE_EXIT});
+`;
+  function guardedRepo() {
+    const repo = makeRepo(GUARDED);
+    writeFileSync(join(repo.flowDir, 'scripts', 'guard.cjs'), GUARD_SCRIPT);
+    writeActiveState(repo.repoRoot, 'guarded-flow', {
+      flow_id: 'guarded-flow-abc', flow_name: 'guarded-flow', requirement: 'x', current_stage: 'work', base_sha: 'abc',
+      last_session_id: OWNER,
+      // A previous turn ended long ago and no developer prompt since: the turn that is
+      // ending now was started by something else (a task notification, a continuation).
+      watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 60_000).toISOString(), last_user_prompt_at: null }),
+    });
+    return repo;
+  }
+  const input = (repoRoot: string, over: Partial<StopInput> = {}) =>
+    stopInput(repoRoot, { background_tasks: [ourWatcher(repoRoot, 'guarded-flow')], ...over });
+
+  it('a turn nobody started, nothing in flight, no hold → the guard runs and its verdict continues the turn', async () => {
+    const repo = guardedRepo();
+    const out = await handleStop(input(repo.repoRoot));
+    expect(out?.additionalContext).toContain(`${STOP_GUARD_LABEL} 够格未开 2 张 stage=work bash=false`);
+    expect(out?.additionalContext).toContain(holdPath(repo.repoRoot, 'guarded-flow'));
+    const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8');
+    expect(log).toContain('STOP_GUARD_CONTINUE stage=work');
+  });
+
+  it('a shell task in flight does not exempt — the guard is told and decides', async () => {
+    const repo = guardedRepo();
+    const out = await handleStop(input(repo.repoRoot, {
+      background_tasks: [ourWatcher(repo.repoRoot, 'guarded-flow'), { id: 'd', type: 'shell', command: 'pnpm dev' }],
+    }));
+    expect(out?.additionalContext).toContain('bash=true');
+  });
+
+  it('a subagent in flight → no guard (it will wake the session)', async () => {
+    const repo = guardedRepo();
+    expect(await handleStop(input(repo.repoRoot, {
+      background_tasks: [ourWatcher(repo.repoRoot, 'guarded-flow'), { id: 'a', type: 'subagent' }],
+    }))).toBeNull();
+  });
+
+  it('a hold → no guard', async () => {
+    const repo = guardedRepo();
+    const p = holdPath(repo.repoRoot, 'guarded-flow');
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'waiting on the developer to click the deep link');
+    expect(await handleStop(input(repo.repoRoot))).toBeNull();
+  });
+
+  it('the turn the developer started → no guard (the watchdog\'s idle rule covers them)', async () => {
+    const repo = guardedRepo();
+    await handleUserPrompt({ hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repo.repoRoot, prompt: '进度到哪了', source: 'user' });
+    expect(await handleStop(input(repo.repoRoot))).toBeNull();
+    // …but the NEXT turn, if nothing started it, is guarded again.
+    const out = await handleStop(input(repo.repoRoot));
+    expect(out?.additionalContext).toContain(STOP_GUARD_LABEL);
+  });
+
+  it('stop_hook_active → no guard (never chains)', async () => {
+    const repo = guardedRepo();
+    expect(await handleStop(input(repo.repoRoot, { stop_hook_active: true }))).toBeNull();
+  });
+
+  it('a gate pending → no guard', async () => {
+    const repo = guardedRepo();
+    writeActiveState(repo.repoRoot, 'guarded-flow', {
+      flow_id: 'guarded-flow-abc', flow_name: 'guarded-flow', requirement: 'x', current_stage: 'review', base_sha: 'abc',
+      last_session_id: OWNER, watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 60_000).toISOString() }),
+    });
+    writeSignal(repo.repoRoot, 'guarded-flow', 'done');
+    expect(await handleStop(input(repo.repoRoot))).toBeNull();
+  });
+
+  it('the guard letting the stop stand (exit 0) → silence', async () => {
+    const repo = guardedRepo();
+    process.env['GUARD_MODE'] = 'pass';
+    try { expect(await handleStop(input(repo.repoRoot))).toBeNull(); } finally { delete process.env['GUARD_MODE']; }
+  });
+
+  it('a broken guard is logged, never turned into a turn', async () => {
+    const repo = guardedRepo();
+    process.env['GUARD_MODE'] = 'crash';
+    try { expect(await handleStop(input(repo.repoRoot))).toBeNull(); } finally { delete process.env['GUARD_MODE']; }
+    const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8');
+    expect(log).toContain('ERROR stop_guard');
+  });
+
+  it('a stage without stop_guard → nothing changes', async () => {
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 60_000).toISOString() }) });
+    expect(await handleStop(stopInput(repo.repoRoot, { background_tasks: [ourWatcher(repo.repoRoot)] }))).toBeNull();
   });
 });

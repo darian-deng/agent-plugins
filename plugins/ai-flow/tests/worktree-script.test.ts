@@ -894,3 +894,104 @@ describe('grill-flow worktree.cjs', () => {
     });
   });
 });
+
+// schedule.cjs 的 rm 三态解析与 missed --json，加 stop-guard.cjs（它复用前者）。
+// 同样只读 tickets.md / state，不碰 git。
+describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) execFileSync('rm', ['-rf', d]);
+    tmpDirs.length = 0;
+  });
+  const SCHED = join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'scripts', 'schedule.cjs');
+  const GUARD = join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'scripts', 'stop-guard.cjs');
+
+  function makeFlow(tickets: string, openTrees: string[] = []): string {
+    const root = mkdtempSync(join(tmpdir(), 'ai-flow-guard-test-'));
+    tmpDirs.push(root);
+    const flowDir = join(root, '.ai-flow', 'grill-flow');
+    mkdirSync(join(flowDir, 'state', 'worktrees'), { recursive: true });
+    mkdirSync(join(root, 'docs', 'grill-flows', 'f1'), { recursive: true });
+    writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
+    writeFileSync(join(root, 'docs', 'grill-flows', 'f1', 'tickets.md'), tickets);
+    for (const t of openTrees) {
+      writeFileSync(join(flowDir, 'state', 'worktrees', `f1-${t}.json`), JSON.stringify({ path: '/x', flow_id: 'f1', branch: `wt/f1-${t}` }));
+    }
+    return flowDir;
+  }
+  function sched(flowDir: string, ...args: string[]): string {
+    const r = spawnSync(process.execPath, [SCHED, '--flow-dir', flowDir, ...args], { cwd: tmpdir(), encoding: 'utf-8' });
+    return (r.stdout ?? '') + (r.stderr ?? '');
+  }
+  function guard(flowDir: string, facts: Record<string, unknown>): { code: number; out: string } {
+    const r = spawnSync(process.execPath, [GUARD], {
+      cwd: join(PLUGIN_ROOT, '.ai-flow', 'grill-flow'),
+      env: { ...process.env, AI_FLOW_FLOW_DIR: flowDir, AI_FLOW_STOP_FACTS: JSON.stringify(facts) },
+      encoding: 'utf-8',
+    });
+    return { code: r.status ?? -1, out: (r.stdout ?? '') + (r.stderr ?? '') };
+  }
+
+  const T = (n: string, done: boolean, touches: string, extra = '') =>
+    `- [${done ? 'x' : ' '}] ${n} x\n  - Blocked by: none\n  - Touches: ${touches}\n${extra}`;
+
+  it('rm：只认子项行首的 `- rm:` 与票行内的标记，记账叙述里提到的字面不算', () => {
+    // 实测 T13：子项叙述「T10 的 `rm:pending` 原话是…」被数成第二个标记，close 报 multi 拒收。
+    const t = T('T1', true, 'src/a/',
+      '  - rm:pending\n  - 📝 上一轮：T10 的 `rm:pending` 原话是「→ rm:pending → close」，照抄。\n  - 备注 rm:done 不是标记\n')
+      + T('T2', true, 'src/b/', '  - `rm:none` — 纯脚本\n')
+      + '- [x] T3 x rm:done — 跑过\n  - Blocked by: none\n  - Touches: src/c/\n'
+      + T('T4', true, 'src/d/', '  - rm:none — 理由\n  - rm:pending\n');
+    const out = sched(makeFlow(t), 'rm');
+    expect(out).toContain('RM-SUMMARY total=4 none=1 pending=1 done=1 missing=0 multi=1');
+    expect(sched(makeFlow(t), 'rm', 'T1')).toContain('RM-STATE T1 pending');
+    expect(sched(makeFlow(t), 'rm', 'T2')).toContain('RM-STATE T2 none');
+    expect(sched(makeFlow(t), 'rm', 'T3')).toContain('RM-STATE T3 done');
+    expect(sched(makeFlow(t), 'rm', 'T4')).toContain('RM-STATE T4 multi');   // 两条子项各一个 —— 这才是该报的 multi
+  });
+
+  it('missed --json：机器可读的够格清单，与人读报告同一算法', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/b/x.ts') + T('T4', false, 'src/c/');
+    const j = JSON.parse(sched(makeFlow(t), 'missed', '--json', 'T2').trim().split('\n').pop()!);
+    // T3 与在飞的 T2 写集相交（目录前缀），T4 够格。
+    expect(j).toEqual({ live: ['T2'], eligible: ['T4'], open: 3, done: 1, total: 4 });
+  });
+
+  it('stop-guard：有够格票 / 有树待收 → exit 3，文案带票号、hold 路径与两个选项', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/c/');
+    const flowDir = makeFlow(t, ['T2']);
+    const r = guard(flowDir, { wrap_up_pct: null, hold_path: join(flowDir, 'state', 'hold'), bash_in_flight: true, bash_tasks: ['pnpm dev'] });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('[ai-flow:stop-guard]');
+    expect(r.out).toContain('开着的树 1（T2）');
+    expect(r.out).toContain('够格未开 1（T3）');
+    expect(r.out).toContain('pnpm dev');
+    expect(r.out).toContain(join(flowDir, 'state', 'hold'));
+    expect(r.out).toMatch(/① \*\*推进\*\*/);
+    expect(r.out).toMatch(/② \*\*确实在等开发者的人手动作\*\*/);
+  });
+
+  it('stop-guard：收尾期无树可收 → exit 0（只收不派）；有树 → 只说收', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/');
+    expect(guard(makeFlow(t), { wrap_up_pct: 61 }).code).toBe(0);
+    const r = guard(makeFlow(t, ['T2']), { wrap_up_pct: 61 });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('只收不派');
+    expect(r.out).not.toContain('够格未开');
+  });
+
+  it('stop-guard：全部已勾 → 提醒写 signal；无一张够格 → 提醒查依赖链，都是 exit 3', () => {
+    const allDone = guard(makeFlow(T('T1', true, 'src/a/')), { wrap_up_pct: null });
+    expect(allDone.code).toBe(3);
+    expect(allDone.out).toContain('写 `done`');
+    const blocked = T('T1', true, 'src/a/') + '- [ ] T2 x\n  - Blocked by: T3\n  - Touches: src/b/\n' + '- [ ] T3 x\n  - Blocked by: T2\n  - Touches: src/c/\n';
+    const r = guard(makeFlow(blocked), { wrap_up_pct: null });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('没有一张够格');
+  });
+
+  it('stop-guard：脚本自身故障（缺 AI_FLOW_FLOW_DIR）→ 非 0 非 3，引擎只记日志', () => {
+    const r = spawnSync(process.execPath, [GUARD], { cwd: tmpdir(), env: { ...process.env, AI_FLOW_FLOW_DIR: '', AI_FLOW_STOP_FACTS: '{}' }, encoding: 'utf-8' });
+    expect(r.status).toBe(1);
+  });
+});

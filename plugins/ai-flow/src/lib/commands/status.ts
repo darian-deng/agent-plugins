@@ -1,4 +1,4 @@
-import { readActiveState, readSignal, isGatePending, nextStage } from '../state.js';
+import { readActiveState, readSignal, isGatePending, nextStage, readHold } from '../state.js';
 import { readWatchdog, resolveWatchdogConfig, MAX_ARM_ASKS } from '../watchdog.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths } from '../flow-config-loader.js';
 import type { CommandResult } from '../types.js';
@@ -58,14 +58,20 @@ export async function handleStatus(repoRoot: string, flowName: string): Promise<
   if (!wdCfg.enabled) {
     lines.push('', 'watchdog: 已关闭（config.watchdog.enabled=false 或 AI_FLOW_WATCHDOG=0）');
   } else if (w.watcher_seen) {
-    lines.push('', `watchdog: 已武装（后台自检进程在跑），静置阈值 ${Math.round(wdCfg.idleMs / 60_000)} 分钟，` +
+    lines.push('', `watchdog: 已武装（本 session 的后台自检进程在跑），静置阈值 ${Math.round(wdCfg.idleMs / 60_000)} 分钟，` +
       `本 stage 已催 ${w.nudges_this_stage}/${wdCfg.cap} 次` +
       (w.last_nudge_at ? `（最近一次 ${w.last_nudge_at}）` : ''));
+    if (w.agents_in_flight) lines.push('in-flight: 有子代理在飞，自检不催');
+    else if (w.bash_in_flight) lines.push(`in-flight: 只有 shell 任务在跑（${w.bash_tasks.join('；') || '未命名'}），静置超过 ${Math.round(wdCfg.idleMs / 60_000) * 6} 分钟照催`);
   } else if (w.arm_asks >= MAX_ARM_ASKS) {
     lines.push('', `watchdog: 未武装 — 已让本 session 起后台自检 ${w.arm_asks} 次都没起成，不再重试。停滞不会被发现。`);
   } else {
     lines.push('', `watchdog: 未武装 — 后台自检还没起来（已提醒 ${w.arm_asks}/${MAX_ARM_ASKS} 次，下次回合结束再提醒）`);
   }
+  // Shown whatever the arming state: a hold is the one thing that keeps BOTH the
+  // watchdog and the Stop guard quiet, so it must be visible even when nothing watches.
+  const hold = readHold(repoRoot, flowName);
+  if (hold !== null) lines.push(`hold: 在等开发者 — ${hold.split('\n')[0]}（开发者下一条输入清除）`);
 
   return { action: 'allow', additionalContext: lines.join('\n') };
 }

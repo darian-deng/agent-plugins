@@ -34,8 +34,8 @@
 
 **Step 0 预检**（三条都要跑；违反了**入场当下没有任何脚本/机器门/退出码会报**）：
 
-- `git branch --show-current` — **在 main/master → 停**，要开发者切需求分支。票分支从**主仓当前分支**派生、`close` 又 `--ff-only` 合回它——在 main 上开工就是逐票 ff 进 main，不可逆且无一处检查。
-- `git status --porcelain` — 含**代码**改动 → **停**问开发者；仅 `docs/grill-flows/` 改动豁免。
+- `git branch --show-current` — **在 main/master → 停（写 hold）**，要开发者切需求分支。票分支从**主仓当前分支**派生、`close` 又 `--ff-only` 合回它——在 main 上开工就是逐票 ff 进 main，不可逆且无一处检查。
+- `git status --porcelain` — 含**代码**改动 → **停（写 hold）**问开发者；仅 `docs/grill-flows/` 改动豁免。
 - `git worktree list` — 有 `wt/<flow_id>-` 分支的条目 → 上一轮残留，照 `reentry.md` 先收口，**别新开**。**除非 tickets.md 已有 `lane:` 标记**——那是在用的长驻车道，不是残留，按「车道模式的重入」接着跑。⚠️ 落点在**仓库同级**的 `<repo 名>.ai-flow-worktrees/`，**只有这条命令看得见**，`git status` 看不到。
 
 **Step 1 起点 commit + mark-base**：`git add` 全部 flow docs（alignment.md + wayfinder-map.md + spec.md + tickets.md）→ `git commit -m "docs: <feature> stage1-2 outputs"` → 用 Write 写 `<FR>/state/mark-base`（内容任意）触发引擎捕获 `base_sha_code`。
@@ -79,7 +79,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> open <flow_id> T<n>
 1. **实施代理**（按 `per-ticket-review.md` 拼）→ 做完实现、改动留工作树不提交、按契约回报。
 2. 回报到手后**按第 4 步那两套判据复核** → 过了在该票那条写 `impl:done`（与 `qc:done` 同一口径，机器门不解析。**续做轮交付后照样写**——它是「剩余已做完」的唯一标记，漏了重入会再派一次实施）→ **再派质量链代理**（按 `quality-chain.md` 拼，`[partial]` 走形态乙），由它走三评审 → 裁 → 地板 → commit。
 
-契约里的「派发时带什么」是完整清单（含 cwd 纪律），这里只补一条：⛔ **票面整段内联，不给 `tickets.md` 路径**（实测被整篇读过 14 次、每轮重新计费，别人的票一次都用不上）。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
+契约里的「派发时带什么」是完整清单（含 cwd 纪律），这里只补一条：⛔ **票面整段内联，不给 `tickets.md` 路径**（实测被整篇读过 14 次）。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
 
 **派子代理的两条硬规则**（理由与失联处置在 `subagent-lifecycle.md`）：
 
@@ -90,15 +90,15 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> open <flow_id> T<n>
 
 **批内并行派发**：本批各票的实施子代理同时派。
 
-⚠️ **派完不要只等通知。通知是一次性的**——读错了就没有第二条纠正（实测空转 1 小时 07 分）。**每隔 15 分钟主动扫一次**——定时用 `Bash` + `run_in_background: true` 跑 `sleep 900`（见 `subagent-lifecycle.md`；⛔ 前台 `sleep` 被宿主拦），一屏看全各票/各车道的 `ahead / dirty / HEAD 后继 / 待补依赖 / 静默时长`：
+**派完可以结束回合**：子代理完成会叫醒你（通知一次性）。⛔ **不挂 `sleep 900` 定时巡检**——实测 69 次定时唤醒 0 次抓到停滞，还让引擎停滞自检把它当后台任务、催的阈值从 5 分钟放宽到 30。只在某棵在飞的树 **>45 分钟无通知**时扫一次：
 
 ```sh
 node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>
 ```
 
-⛔ **「有东西在跑」要么带 `bash_id`、要么不许说**（管的是这句话，**不是结束回合本身**）：同一条消息里给出那个 `run_in_background` 调用的 `bash_id`，否则明说什么都没在跑。实测最严重一次：声称「收口测试跑着」而根本没启动，静默 **335 分钟**。
+⛔ **「有东西在跑」要么带 `bash_id`、要么不许说**：同一条消息里给出那个 `run_in_background` 调用的 `bash_id`，否则明说什么都没在跑。
 
-**一棵声称在飞的树静默 ≥30 分钟 = 那个子代理已经停了** → `subagent-lifecycle.md`。
+**树静默 ≥30 分钟 = 那个子代理已经停了** → `subagent-lifecycle.md`。
 
 ### 4. 裁子代理回报（回合之前）
 
@@ -114,14 +114,14 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>
 机械型 findings 由质量链代理处置，判断型的连证据报上来（`quality-chain.md` 第 2 步）。**必须在回合之前裁**——一旦 `--ff-only` 合进需求分支，安全红线就成了「已合入才停下问」，而 worktree 已拆、改不了：
 
 - 质量 / smell / spec-drift / bug → 派质量链代理**在该票 worktree 里**改，重跑客观地板，⛔ **改完 `git -C <WT> commit --amend` 折回本票那笔**（另提一笔破「一票一 commit」，机器门③⑥ 都抓不到）
-- **人在环落点（本 stage 唯一）**：命中安全红线（见 `per-ticket-review.md`）或需拍板的取舍 → ⛔ 不许直接问，三步（`ask-before-asking.md`）：① 查它那张「疑问 → 查哪节」表，查到照做**不问**；② 查不到仍不问，先出带依据的推荐、派 fresh-context 子代理专攻（⛔ 不许造反驳，「攻不动」要带攻法与取证；无取证的 finding 不合并，平局保留原方案）；③ 攻不下才 `AskUserQuestion`，写清攻不下在哪。⚠️ 判据是「这事必须开发者决策吗」，不是「你多不确定」——属于那几类的别先审一轮再问
-- 需真机 / 鉴权 / 运行时验证 → **不是停点**，记下来，第 5 步打 `rm:pending`，留 stage-4 环节 C 做
+- **人在环落点**：命中安全红线（见 `per-ticket-review.md`）或需拍板的取舍 → ⛔ 不许直接问，三步（`ask-before-asking.md`）：① 查它那张「疑问 → 查哪节」表，查到照做**不问**；② 查不到仍不问，先出带依据的推荐、派 fresh-context 子代理专攻（⛔ 不许造反驳，「攻不动」要带攻法与取证；无取证的 finding 不合并，平局保留原方案）；③ 攻不下才 `AskUserQuestion`，写清攻不下在哪。⚠️ 判据是「这事必须开发者决策吗」，不是「你多不确定」。**停之前用 Write 写 `<FR>/state/hold`**（一行：等谁做什么、为何只能他做）——L1/L2 必停同样先写；没有它引擎判停滞、催你继续
+- 需真机 / 鉴权 / 运行时验证 → **不是停点**：第 5 步打 `rm:pending`。**真机跑出的崩点 = 修复票**，按 `mid-flight-ticket.md` 直接插并派，⛔ 汇报不是回合终点
 
 ### 5. 注释清理 → 逐票回合（串行）
 
 裁完、无未决项后，**先清注释、`--amend` 前必跑那节三条核实命令、票面写 `cm:done` 与真机三态，再 close**（见 `quality-chain.md` 第 3 步）：⛔ 顺序反了补不回来——ff 后 `--amend` 不可用。
 
-**真机三态，每票有且仅有一个**（⛔ 写在 close **之前**：`close` 拒缺标记，而第 6 步记账在 close 之后，放那死锁）：需真机 → `rm:pending` + 往 `## 待真机验证` append `- T<n> — <验什么>`；已验 → `rm:done — <命令与输出>`；否则 → `rm:none — <理由，豁免写谁何时>`。🔴「必选其一」**不是「不许 pending」**：pending 自愿，最省力是不写——实测 215 pending / **0** done，两张 P0 在全绿下漏过。
+**真机三态，每票有且仅有一个**（⛔ 写在 close **之前**：`close` 拒缺标记，而第 6 步记账在 close 之后，放那死锁）：需真机 → `rm:pending` + 往 `## 待真机验证` append `- T<n> — <验什么>`；已验 → `rm:done — <命令与输出>`；否则 → `rm:none — <理由，豁免写谁何时>`。🔴「必选其一」**不是「不许 pending」**：pending 自愿，最省力是不写（实测 215 pending / 0 done）。
 
 ```sh
 node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
@@ -129,7 +129,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 
 它跑一组前置断言 → `git merge --ff-only` → 拆 worktree、保留分支，并报出「哪些兄弟车道过期了」。断言失败时它会说清哪一条、怎么处置，**先照它说的做**；没覆盖的失败形态在 `recovery.md`。
 
-⛔ **`close` 必须单独成一条命令。** 别写成 `<跑测试> && node …close …`——`&&` 只看退出码，而假红（依赖陈旧）/假绿（选择器打空）下退出码不代表结论。你要**先看到**验证输出、自己判断，再单独发 close。ff 不可逆（退回要 reset 主分支）。实测发生过一次：串成一条链，一张地板红的票就这么合进需求分支。
+⛔ **`close` 必须单独成一条命令。** 别写成 `<跑测试> && node …close …`——`&&` 只看退出码，而假红（依赖陈旧）/假绿（选择器打空）下退出码不代表结论。你要**先看到**验证输出、自己判断，再单独发 close。ff 不可逆（退回要 reset 主分支）。
 
 ### 6. 记账（按票）与收口测试（按批）
 
@@ -146,13 +146,13 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 
 ⛔ **车道模式下这份清单还多一步「已知碰撞面登记」，同样必须排在 `qc:done` 之前**；收口测试也不按批、按轮且有硬上限——两条都在 `lane-mode.md`，**漏做不会有任何东西变红**。
 
-**收口测试**：本批全回合完后，**一次**跑该批相关测试 + typecheck（**整仓全量回归的唯一落点**）。理由：前几次回合的结果都被最后一次覆盖，逐票各跑是重复劳动，而归并后这棵树还没人验过。**你自己跑、丢后台，多久都行**。测试红了先读 `recovery.md` 判假红；真要修也在那里（worktree 已拆）。
+**收口测试**：本批全回合完后，**一次**跑该批相关测试 + typecheck（**整仓全量回归的唯一落点**）。理由：归并后这棵树还没人验过。**你自己跑、丢后台，多久都行**。测试红了先读 `recovery.md` 判假红；真要修也在那里（worktree 已拆）。
 
 **推进下一批前自检**：本批每票都有自己那笔 commit + `qc:done` + `[x]`、本 flow 的 worktree 全拆、无未裁决的决策/安全项。（**车道模式下这条不一样**，见 `lane-mode.md`）
 
 ### 连续执行
 
-批与批、票与票之间**都不做「要不要继续」式 check-in**——过了自检直接算下一批。唯一停点是第 4 步的安全/拍板 fork。（落盘、记账、开收 worktree 是必做调度动作，不算 check-in）
+批与批、票与票之间**都不做「要不要继续」式 check-in**。**回合结束前自检：（够格票 > 0 或有树待收）且无在飞 ⇒ 本回合必须推进**（派 / 细化后派 / 派质量链 / close）。⛔ **以「下一轮我…」「我的下一步…」收尾而不派 = 停下**（实测四次 359 分钟），引擎 Stop 守卫会直接续跑。合法停点只有第 4 步安全/拍板 fork、L1/L2、开发者人手动作——**都先写 `<FR>/state/hold`**。豁免：收尾期只收不派、收完写 hold；够格票被冻结令清零 → 写 hold 说明解冻条件。
 
 ## 输出规格
 

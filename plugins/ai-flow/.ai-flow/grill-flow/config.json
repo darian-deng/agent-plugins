@@ -30,7 +30,8 @@
       "docs_paths": ["docs/grill-flows/"],
       "completion": {
         "script": { "command": "node scripts/gate-stage-3.cjs" }
-      }
+      },
+      "stop_guard": "node scripts/stop-guard.cjs"
     },
     {
       "id": "stage-4",

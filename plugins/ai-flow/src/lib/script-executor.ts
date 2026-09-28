@@ -12,6 +12,10 @@ export interface ScriptResult {
    * the gate failed for some OTHER reason, i.e. exactly when they don't matter.
    */
   notes?: string;
+  /** Raw exit status, for callers whose protocol uses more than pass/fail (the Stop guard). */
+  status: number | null;
+  /** stdout + stderr, trimmed, regardless of status. */
+  output: string;
 }
 
 export interface RunScriptOptions {
@@ -49,19 +53,18 @@ export async function runScript(
     shell: true,
   });
 
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
   if (result.signal === 'SIGTERM' || result.error?.message?.includes('ETIMEDOUT') || (result.status === null && result.signal)) {
-    return { ok: false, reason: `Script timed out after ${timeout}ms` };
+    return { ok: false, reason: `Script timed out after ${timeout}ms`, status: null, output };
   }
 
   if (result.error) {
-    return { ok: false, reason: result.error.message };
+    return { ok: false, reason: result.error.message, status: result.status, output };
   }
 
   if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-    return { ok: false, reason: output || `Script exited with code ${result.status ?? 'unknown'}` };
+    return { ok: false, reason: output || `Script exited with code ${result.status ?? 'unknown'}`, status: result.status, output };
   }
 
-  const notes = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-  return { ok: true, reason: '', ...(notes && { notes }) };
+  return { ok: true, reason: '', status: 0, output, ...(output && { notes: output }) };
 }

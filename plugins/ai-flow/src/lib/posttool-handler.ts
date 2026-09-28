@@ -9,6 +9,8 @@ import {
   appendLog,
   signalPath,
   markBasePath,
+  holdPath,
+  readHold,
   readSignal,
   nextStage,
   isForeignCheckout,
@@ -92,6 +94,19 @@ export async function handlePostTool(
     ? String((input.tool_input as Record<string, unknown>)?.['file_path'] ?? '')
     : '';
   const fp = rawFp === '' ? '' : (rawFp.startsWith('/') ? rawFp : join(repoRoot, rawFp));
+
+  // ─── Hold written ────────────────────────────────────────────────────────────
+  // Logged so a stop the engine will now respect is on the record next to the stops
+  // it did not — `flow.log` is where "why did nothing happen for five hours" is read.
+  if (fp !== '' && fp === holdPath(repoRoot, flowName) && input.agent_id === undefined) {
+    const held = readHold(repoRoot, flowName) ?? '';
+    await appendLog(repoRoot, flowName, session_id, `HOLD_SET stage=${state.current_stage} ${(held.split('\n')[0] ?? '').slice(0, 200)}`);
+    return {
+      additionalContext:
+        `[ai-flow] state/hold 已登记，停滞自检与 Stop 守卫不再催。开发者下一条输入会自动清掉它。` +
+        (held.trim() === '' ? `\n⚠️ 内容是空的——写一行：等谁做什么、为什么只能他做、等到之后下一步是什么。` : ''),
+    };
+  }
 
   // ─── base_sha_code capture (mark-base marker) ───────────────────────────────
   // The AI writes the mark-base file right after committing the Stage 1-3 docs.

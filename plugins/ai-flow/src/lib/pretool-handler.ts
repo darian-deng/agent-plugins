@@ -5,6 +5,7 @@ import {
   resolveActiveFlow,
   appendLog,
   signalPath,
+  holdPath,
   activeJsonPath,
   isInsideLinkedWorktree,
   isForeignCheckout,
@@ -338,10 +339,16 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     // Residual gap (accepted): a `cd` into the state dir followed by a bare
     // filename (`cd .../state && echo done > signal`) is not caught here — the
     // Write-tool interception below remains the precise, primary guard.
+    // `state/hold` joins them for the same reason as the signal: it is written via
+    // the Write tool so the main-session-only rule below can see who is writing.
+    // A subagent's `echo … > state/hold` under Bash would otherwise silence the
+    // orchestrator's stall detection for the whole flow, with nothing logged.
     const stateFragments = [
       signalPath(repoRoot, activeFlowName),
+      holdPath(repoRoot, activeFlowName),
       join(repoRoot, flowRel, 'state', 'active.json'),
       join(flowRel, 'state', 'signal'),
+      join(flowRel, 'state', 'hold'),
       join(flowRel, 'state', 'active.json'),
     ];
     const scriptFragments = [
@@ -381,8 +388,8 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       .filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
     if (offending.length > 0) {
       return deny(
-        'Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked — matching is by path fragment, so this covers reads too. ' +
-        'To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. ' +
+        'Bash access to ai-flow control-plane files (signal / hold / active.json / scripts / stages / config.json) is blocked — matching is by path fragment, so this covers reads too. ' +
+        'To READ these files, use the Read tool instead (it can read them). To write the signal or state/hold use the Write tool (hold: main session only); active.json / scripts / stages / config.json are changed by the user manually. ' +
         'RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json.'
       );
     }
@@ -462,7 +469,11 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
       const norm = p.endsWith('/') ? p : p + '/';
       return relForBlock.startsWith(norm) || blockAbs.startsWith(join(repoRoot, norm));
     });
-    if (docsPaths.length > 0 && !isFlowDocs) {
+    // `state/hold` stays writable during wrap-up: a session that is genuinely waiting
+    // on a human must still be able to say so, or the guard it silences would keep
+    // continuing it into a wrap-up it cannot act in.
+    const isHold = blockAbs === holdPath(repoRoot, activeFlowName);
+    if (docsPaths.length > 0 && !isFlowDocs && !isHold) {
       const wrapUpPct = state.context_wrap_up.at_pct;
       return deny(
         `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs `
@@ -532,6 +543,16 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // working", not to the flow's anchor: resolving it against `repoRoot` would point the
   // control-plane test at a file in the OTHER checkout that the write never touches.
   const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
+
+  // ─── Hold: main session only ─────────────────────────────────────────────────
+  // A subagent that decides it is "waiting for the developer" must report that to
+  // the orchestrator, not silence the orchestrator's own stall detection.
+  if (absPath === holdPath(repoRoot, activeFlowName) && input.agent_id !== undefined) {
+    await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED subagent write to hold agent=${input.agent_id}`);
+    return deny(
+      `state/hold 只能由主 session 写。你是子代理：把「在等什么」写进回报交给编排器，不要写这个文件。`
+    );
+  }
 
   // ─── Signal interception ─────────────────────────────────────────────────────
   if (absPath === signalPath(repoRoot, activeFlowName)) {
@@ -612,7 +633,9 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   if (foreign) return null;
   const rel = relative(repoRoot, absPath);
   const stageCfg = getStageConfig(config, state.current_stage);
-  if (stageCfg.write_scope === 'docs_only') {
+  // `state/hold` is flow state, not project content: a docs_only stage that is
+  // waiting on a human must still be able to say so.
+  if (stageCfg.write_scope === 'docs_only' && absPath !== holdPath(repoRoot, activeFlowName)) {
     const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
     // Normalize: ensure trailing slash to prevent "docs/feat-flows-evil" matching "docs/feat-flows"
     const allowed = docsPaths.some((p) => {

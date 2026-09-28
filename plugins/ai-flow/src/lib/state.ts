@@ -707,6 +707,35 @@ export function signalPath(repoRoot: string, flowName: string): string {
 }
 
 /**
+ * `state/hold`: the model's written statement of what it is waiting on a human for.
+ *
+ * The stall watchdog and the Stop guard both need to tell a legitimate hand-back from
+ * a stall, and at a turn's end nothing in the transcript separates the two — "I'll
+ * wait for you" and "next turn I'll open T59" read the same to a hook. This file is
+ * the separation: writing it is a deliberate act the developer can audit, and its
+ * absence means "nothing here needs a human", which the engine then holds the model
+ * to. Written by the main session only (pretool refuses subagents); cleared by the
+ * developer's next prompt and by every stage advance.
+ */
+export function holdPath(repoRoot: string, flowName: string): string {
+  return statePath(repoRoot, flowName, 'hold');
+}
+
+export function readHold(repoRoot: string, flowName: string): string | null {
+  const p = holdPath(repoRoot, flowName);
+  if (!existsSync(p)) return null;
+  try { return readFileSync(p, 'utf-8').trim(); } catch { return null; }
+}
+
+/** Remove `state/hold`. Returns what it said, or null when there was none. */
+export function clearHold(repoRoot: string, flowName: string): string | null {
+  const content = readHold(repoRoot, flowName);
+  if (content === null) return null;
+  try { unlinkSync(holdPath(repoRoot, flowName)); } catch { /* already gone */ }
+  return content;
+}
+
+/**
  * Marker file the AI writes (via the Write tool) to ask the engine to capture
  * `base_sha_code` = current git HEAD. Lets the engine own the active.json write
  * (control-plane-safe) instead of stages poking active.json with relative python.

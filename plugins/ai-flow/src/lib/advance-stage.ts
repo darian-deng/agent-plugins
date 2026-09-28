@@ -9,6 +9,7 @@ import {
   signalPath,
   materializeRenderedPrompt,
   clearRenderedPrompt,
+  clearHold,
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { readWatchdog } from './watchdog.js';
@@ -69,6 +70,9 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
   // prompt belonging to a stage it already left. The stage header inside is the backstop;
   // deleting it is the primary fix.
   clearRenderedPrompt(repoRoot, flowName);
+  // A hold describes a wait inside the stage that just ended; the next stage starts
+  // with nothing pending on a human until it says otherwise.
+  clearHold(repoRoot, flowName);
 
   // Reset first_prompt_handled so Layer 2 re-injects guidance on the first
   // non-command prompt in the newly entered stage (e.g. after approve).

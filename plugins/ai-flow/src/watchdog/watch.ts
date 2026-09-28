@@ -20,7 +20,7 @@
  *                    reaps this process when the session ends.
  */
 import { setTimeout as sleep } from 'timers/promises';
-import { readActiveState, patchActiveState, readSignal, isGatePending, appendLog } from '../lib/state.js';
+import { readActiveState, patchActiveState, readSignal, isGatePending, appendLog, readHold, holdPath } from '../lib/state.js';
 import { loadFlowConfig } from '../lib/flow-config-loader.js';
 import {
   readWatchdog,
@@ -32,6 +32,8 @@ import {
   WATCHER_MAX_LIFETIME_MS,
   withinDedupeWindow,
   watcherCommand,
+  ownerChangedText,
+  watcherOwnership,
   type WatchdogState,
 } from '../lib/watchdog.js';
 
@@ -61,9 +63,24 @@ for (;;) {
   // BEFORE the lifetime exit below, which is the one exit that speaks without having
   // found a stall: firing it here would wake a session hours later to announce the
   // expiry of a watcher for a flow that ended twenty minutes in.
-  if (!state) continue;
-  if (flowId && state.flow_id !== flowId) continue;
-  if (sessionId && state.last_session_id !== null && state.last_session_id !== sessionId) continue;
+  const ownership = watcherOwnership(state, flowId, sessionId);
+  if (ownership === 'foreign-flow' || !state) continue;
+  // The flow has a new owner. Until 0.81.0 this was a silent `continue`, on the theory
+  // that a watcher outliving its session should not wake the one that replaced it.
+  // But `/clear` keeps the host process — and every background task in it — so the
+  // replacement session INHERITS this process, `Stop` counted it as armed, and the
+  // flow ran for six days and ten sessions without a single nudge (0.80.x, measured).
+  // Exiting is a wake, so it is made worth one: the text carries the arming command
+  // for the new owner, which `Stop` would otherwise spend the next turn end asking
+  // for. Nine of nine measured `/clear`s were followed by a developer prompt within
+  // 65 seconds, so the wake usually lands inside a turn already running.
+  if (ownership === 'owner-changed') {
+    await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {});
+    process.stdout.write(
+      ownerChangedText(flowName, watcherCommand(repoRoot, flowName, state.flow_id, state.last_session_id ?? '')) + '\n'
+    );
+    break;
+  }
 
   if (Date.now() - startedAt > WATCHER_MAX_LIFETIME_MS) {
     // Said out loud rather than done silently, because a watcher that vanished without
@@ -89,8 +106,10 @@ for (;;) {
     now: Date.now(),
     lastStopAt: Number.isNaN(lastStopAt) ? null : lastStopAt,
     lastActivityAt: Number.isNaN(lastActivityAt) ? null : lastActivityAt,
-    background: w.background,
+    agentsInFlight: w.agents_in_flight,
+    bashInFlight: w.bash_in_flight,
     gatePending: isGatePending(readSignal(repoRoot, flowName), config, state.current_stage),
+    holdPresent: readHold(repoRoot, flowName) !== null,
     nudgesThisStage: w.nudges_this_stage,
     config: resolveWatchdogConfig(config.watchdog),
   });
@@ -134,6 +153,8 @@ for (;;) {
       remaining: verdict.remaining,
       wrapUpPct: state.context_wrap_up.at_pct,
       rearmCommand: watcherCommand(repoRoot, flowName, state.flow_id, sessionId),
+      holdPath: holdPath(repoRoot, flowName),
+      bashTasks: w.bash_tasks,
     }) + '\n'
   );
   break;

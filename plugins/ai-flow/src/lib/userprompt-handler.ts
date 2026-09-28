@@ -10,7 +10,7 @@ import { handleAbort } from './commands/abort.js';
 import { handleResume } from './commands/resume.js';
 import { handleStatus } from './commands/status.js';
 import { handleHelp } from './commands/help.js';
-import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout } from './state.js';
+import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout, appendLog, clearHold } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 import { readWatchdog, isLegacyCronTick, WATCHDOG_LABEL } from './watchdog.js';
 
@@ -104,16 +104,32 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
   // from "the session stopped and nobody came back", and the developer's presence is
   // what the nudge budget exists for — so spending it starts over from zero.
   if (active && !isNonOwner && !foreign) {
+    // `source` is absent on older clients and `user` on the interactive composer; the
+    // other values are wakeups nobody typed. Background-task completions never reach
+    // this hook at all (measured: 113 notifications, one UserPromptSubmit), so a
+    // developer-presence test on this hook is sound where it fires.
+    const developerTyped = input.source === undefined || input.source === 'user';
+    const nowIso = new Date().toISOString();
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
       watchdog: {
         ...readWatchdog(cur),
-        last_activity_at: new Date().toISOString(),
+        last_activity_at: nowIso,
+        ...(developerTyped && { last_user_prompt_at: nowIso }),
         // Unconditionally, not "if the entry-time read saw any spent": a watcher can
         // claim a nudge between this hook reading the state and taking the lock, and
         // that one would survive the developer's arrival.
         nudges_this_stage: 0,
       },
     }));
+    // The developer is back, so whatever the model was holding for is theirs to
+    // answer now; the file's job (keep the watchdog and the Stop guard quiet while a
+    // human is genuinely needed) is done the moment a human speaks.
+    if (developerTyped) {
+      const held = clearHold(active.repoRoot, active.flowName);
+      if (held !== null) {
+        await appendLog(active.repoRoot, active.flowName, session_id, `HOLD_CLEARED ${(held.split('\n')[0] ?? '').slice(0, 200)}`);
+      }
+    }
   }
   // ──────────────────────────────────────────────────────────────────────────────
 

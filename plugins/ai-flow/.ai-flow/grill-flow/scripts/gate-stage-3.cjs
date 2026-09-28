@@ -149,6 +149,28 @@ if (strayHandoffs.length > 0) {
 const text = readFileSync(tickets, 'utf-8');
 const lines = text.split('\n');
 
+// ⓪附' 交接段只许一份，且只许叫 `## 🔴 重入交接`。与上面的 handoff*.md 同一条理由、同一档
+// 阻断、同样不占编号。上面那条拦的是第二份**文件**；这条拦的是第二份**段**——实测一个 flow
+// 在撞 60% 后新建 `## 🔴🔴🔴 下一个 session 最重要的三件事`、下个 session 改名 `## 上一轮交班`，
+// 23.6 KB 纯快照（references/handoff.md 明禁），而 handoff.md 原先的自检 `grep -c '## 🔴 重入交接'`
+// 按标题精确匹配，换个名字就过。所以这里按**语义**认：任何 H2 命中「交接 / 交班 / handoff /
+// 重入 / 下一个 session」都算交接段，恰好一个、且必须是标准标题。
+const H2 = lines.map((l, i) => ({ l, i })).filter(({ l }) => /^##\s/.test(l));
+const HANDOFF_H2 = /交接|交班|handoff|重入|下一个 ?session/i;
+const canonical = H2.filter(({ l }) => /^##\s+🔴\s+重入交接\s*$/.test(l));
+const lookalikes = H2.filter(({ l }) => HANDOFF_H2.test(l) && !/^##\s+🔴\s+重入交接\s*$/.test(l));
+if (canonical.length > 1) {
+  err('tickets.md 里有 ' + canonical.length + ' 个 `## 🔴 重入交接`（第 ' + canonical.map((h) => h.i + 1).join(', ') + ' 行）——交接段只许一份。');
+  process.exit(FAIL);
+}
+if (lookalikes.length > 0) {
+  err('tickets.md 里有契约外的交接段: ' + lookalikes.map((h) => '第 ' + (h.i + 1) + ' 行 `' + h.l.trim() + '`').join('，')
+    + '\n    交接只许住在 `## 🔴 重入交接` 一段（references/handoff.md「只许一份」）。第二段没有任何环节检查它'
+    + '写全了没有，而重入时先读到哪段全看运气。'
+    + '\n    修法：把它里面还没落盘的**算法类**内容并进 `## 🔴 重入交接`（快照类按 handoff.md ④ 直接删），然后删掉这个标题。');
+  process.exit(FAIL);
+}
+
 // ── 解析 ticket 级行 ──
 // ticket 级行 = 顶格 `- [<mark>] T<n>`；缩进的 AC 子项不是 ticket 级行，不参与判定
 //（design §13 架构必修 7）。

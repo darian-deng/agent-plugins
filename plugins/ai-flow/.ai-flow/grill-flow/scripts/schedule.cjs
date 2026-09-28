@@ -180,14 +180,18 @@ const order = [];       // 文件顺序 = 主循环的确定性 tiebreak
 // 和「写了两个」分开报，是 `worktree.cjs close` 那道前置断言能成立的前提——只存一个
 // 状态字段的话，两个互相矛盾的标记（`rm:none` 和 `rm:done` 并排）会被静默压成一个，
 // 而那正是最该拦的形态。
-// 标记可以写在**票行本身**、也可以写在它的缩进子项，两处都扫。
-// `\b` 前缀边界挡掉 `arm:pending`、`confirm:done` 这类词中命中；中文字符不算 `\w`，
-// 所以「本票 rm:pending」这种紧挨中文的写法照样命中。
-const RM_MARK = /\brm:(none|pending|done)\b/g;
-function collectRm(rec, line) {
-  RM_MARK.lastIndex = 0;   // 全局正则的 lastIndex 会跨调用残留，不清就会漏命中
-  let m;
-  while ((m = RM_MARK.exec(line)) !== null) rec.rmHits.push({ state: m[1], text: line.trim() });
+// 标记可以写在**票行本身**、也可以写在它的缩进子项，两处都扫——但只认**标记位**：
+//   子项：行首 `- rm:<state>`（允许反引号包着）；票行：`T<n>` 之后第一个 `rm:<state>`。
+// 原先是全文 `\brm:(none|pending|done)\b` 全局匹配，于是记账叙述里的「→ `rm:pending` → close」
+// 「T10 的 `rm:pending` 原话是…」都被数成第二个标记，`close` 报 `multi` 拒收（实测两张票），
+// 主 session 只好去改叙述文字来讨好正则。每行最多取一个：一行写两个状态本身就是错，但
+// 那应由「两条子项各一个」的形态报出来，而不是叙述里顺带提到的字面。
+// `\b` 前缀边界挡掉 `arm:pending`、`confirm:done` 这类词中命中。
+const RM_SUBITEM = /^\s*-\s*`?rm:(none|pending|done)\b/;
+const RM_INLINE = /\brm:(none|pending|done)\b/;
+function collectRm(rec, line, isTicketLine) {
+  const m = isTicketLine ? RM_INLINE.exec(line) : RM_SUBITEM.exec(line);
+  if (m) rec.rmHits.push({ state: m[1], text: line.trim() });
 }
 
 let cur = null;
@@ -197,13 +201,13 @@ for (const l of lines) {
     cur = m[2];
     tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', rmHits: [] });
     order.push(cur);
-    collectRm(tk.get(cur), l);   // 票行内的标记（约定允许写在这里）
+    collectRm(tk.get(cur), l, true);   // 票行内的标记（约定允许写在这里）
     continue;
   }
   if (cur === null) continue;
   if (/^#{1,6}\s/.test(l)) { cur = null; continue; }
   if (!/^\s+\S/.test(l)) continue;
-  collectRm(tk.get(cur), l);     // 缩进子项里的标记
+  collectRm(tk.get(cur), l, false);  // 缩进子项里的标记（只认行首 `- rm:`）
   const mb = /(?:^|\s)Blocked by:\s*(.+)$/.exec(l);
   if (mb) tk.get(cur).blocked = (mb[1].match(/T\d+/g) || []);
   const mt = /(?:^|\s)Touches:\s*(.+)$/.exec(l);
@@ -235,6 +239,10 @@ function overlap(a, b) {
 // 判断——那是主 session 的决定；脚本抢着替它决定，只会把一个可核对的事实换成一条不可核对
 // 的指令，而它判错时没有任何人能发现。
 if (SUB === 'missed') {
+  // `--json`：给脚本（stop-guard.cjs）用的机器可读形态，人读的报告在下面。
+  const jsonIdx = process.argv.indexOf('--json');
+  const asJson = jsonIdx !== -1;
+  if (asJson) process.argv.splice(jsonIdx, 1);
   const args = process.argv.slice(3);
   const ignored = args.filter((a) => !/^T\d+$/.test(a));
   const given = args.filter((a) => /^T\d+$/.test(a));
@@ -266,6 +274,11 @@ if (SUB === 'missed') {
     eligible.push(t);
   }
 
+  if (asJson) {
+    const open = order.filter((t) => !done.has(t));
+    say(JSON.stringify({ live: [...live], eligible, open: open.length, done: done.size, total: order.length }));
+    process.exit(0);
+  }
   if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（missed 后面只认 T<n> 形态的票号）`);
   if (unknown.length > 0) {
     say(`⚠  这些在飞票号在 tickets.md 里找不到：${unknown.join(' ')}`);

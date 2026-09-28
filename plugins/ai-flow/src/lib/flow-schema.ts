@@ -32,6 +32,17 @@ const StageConfigSchema = z.object({
   docs_paths: z.array(z.string()).optional(),
   completion: CompletionSchema,
   task_gates: z.array(z.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: z.string().min(1).optional(),
 }).refine(
   (s) => s.write_scope !== 'docs_only' || (s.docs_paths != null && s.docs_paths.length > 0),
   {

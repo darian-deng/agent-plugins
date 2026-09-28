@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { PLUGIN_ROOT } from './flow-paths.js';
+import type { BackgroundTaskEntry } from './types.js';
 
 /**
  * Stall watchdog: the engine's answer to a session that stopped when it should
@@ -156,8 +157,30 @@ export interface WatchdogState {
    * NOT suppressed. The claim is invisible to the engine; the absence is not.
    */
   background: boolean;
-  /** Whether the watcher was present in `background_tasks` at the last turn end. */
+  /**
+   * `background`, split by what will actually wake the session. A subagent or a
+   * workflow ends and wakes it; a shell task may be a 15-minute timer (ends) or a dev
+   * server (never ends). The watcher treats the two differently — see `decideStall`.
+   */
+  agents_in_flight: boolean;
+  bash_in_flight: boolean;
+  /** The shell tasks behind `bash_in_flight`, so a nudge can name what it is ignoring. */
+  bash_tasks: string[];
+  /**
+   * Whether the watcher THIS session started was present in `background_tasks` at
+   * the last turn end. Own watcher, not any watcher: a watcher from a previous
+   * session survives `/clear` (the host process does), and counting it here is what
+   * kept ten consecutive sessions of one flow from ever being asked to arm — while
+   * that inherited process, bound to a session id that was no longer the owner,
+   * looped silently for days without a single nudge.
+   */
   watcher_seen: boolean;
+  /**
+   * When the developer last typed (UserPromptSubmit with `source` user/absent), ISO.
+   * Compared with `last_stop_at` it tells whether the turn that just ended was one
+   * the developer started — the Stop guard leaves those alone.
+   */
+  last_user_prompt_at: string | null;
   /** How many times this session has been told to start the watcher. Caps at MAX_ARM_ASKS. */
   arm_asks: number;
   /** Nudges spent on the CURRENT stage. Reset by a developer prompt and by stage advance. */
@@ -194,7 +217,11 @@ export function emptyWatchdog(): WatchdogState {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null,
@@ -236,11 +263,30 @@ export interface StallFacts {
   now: number;
   lastStopAt: number | null;
   lastActivityAt: number | null;
-  background: boolean;
+  /** A subagent / workflow / MCP task is running: it WILL end and wake the session. */
+  agentsInFlight: boolean;
+  /** A non-watcher shell task is running: a timer that will end, or a server that never will. */
+  bashInFlight: boolean;
   gatePending: boolean;
+  /** `state/hold` exists: the model wrote down what it is waiting for. */
+  holdPresent: boolean;
   nudgesThisStage: number;
   config: WatchdogConfig;
 }
+
+/**
+ * How much longer than `idleMs` a session may sit while a shell task is in flight
+ * before it counts as stalled anyway.
+ *
+ * "A background task will wake you" was an absolute suppressor, and one flow proved
+ * it wrong for hours at a time: the task was a `pnpm dev` instance kept alive for a
+ * real-machine check, which never exits, so nothing ever woke the session — 212
+ * minutes once, 344 another time. Six times the threshold (30 minutes at the default)
+ * clears every self-imposed timer the flows use (15-minute `sleep`s) and every
+ * verification run, so the only thing left in flight at that point is something that
+ * was never going to end.
+ */
+export const BASH_IDLE_MULTIPLIER = 6;
 
 export type StallVerdict =
   /** Keep sleeping. `note` is for the log and for `<flow> status`; nobody is woken. */
@@ -274,10 +320,21 @@ export function decideStall(f: StallFacts): StallVerdict {
     return { stalled: false, note: '正在干活（最后一个事件不是「停下」）' };
   }
   if (f.gatePending) return { stalled: false, note: '在等开发者 approve，停下来是对的' };
-  if (f.background) return { stalled: false, note: '有后台任务在跑，等它把你叫醒' };
+  // The model wrote down what it is waiting for. That is the one legitimate stop the
+  // engine cannot see through, so it is the one it asks to be told about — and being
+  // told is the whole point: a hold is a file the developer can read, not a sentence
+  // that scrolled past. Cleared by the developer's next prompt.
+  if (f.holdPresent) return { stalled: false, note: '有 state/hold，在等开发者的人手动作' };
+  if (f.agentsInFlight) return { stalled: false, note: '有子代理在飞，等它把你叫醒' };
   const idleMs = f.now - f.lastStopAt;
-  if (idleMs < f.config.idleMs) {
-    return { stalled: false, note: `刚停下 ${Math.round(idleMs / 1000)} 秒` };
+  const threshold = f.bashInFlight ? f.config.idleMs * BASH_IDLE_MULTIPLIER : f.config.idleMs;
+  if (idleMs < threshold) {
+    return {
+      stalled: false,
+      note: f.bashInFlight
+        ? `有后台 shell 任务在跑，静置 ${Math.round(idleMs / 1000)} 秒（阈值放宽到 ${Math.round(threshold / 60_000)} 分钟）`
+        : `刚停下 ${Math.round(idleMs / 1000)} 秒`,
+    };
   }
   if (f.nudgesThisStage >= f.config.cap) {
     return { stalled: false, note: `本 stage 已催满 ${f.nudgesThisStage}/${f.config.cap} 次` };
@@ -323,6 +380,60 @@ export function isWatcherTask(command: string | undefined, flowId?: string): boo
   return flowId ? c.includes(`--flow-id "${flowId}"`) : true;
 }
 
+/**
+ * True when a `background_tasks` entry is the watcher THIS session started for THIS
+ * flow instance — the only one whose presence means "armed".
+ *
+ * The flow-id test above is not enough. `/clear` keeps the host process, and with it
+ * every background task, so the next session inherits its predecessor's watcher. That
+ * process is bound to the old session id: `watch.ts` sees an owner it does not
+ * recognise and stays silent. Counted as armed, it kept `Stop` from ever asking the
+ * new session to start its own — measured on one flow as ten sessions and six days
+ * without a nudge, with the inherited process still alive at the end of it.
+ */
+export function isOwnWatcher(command: string | undefined, flowId: string, sessionId: string): boolean {
+  return isWatcherTask(command, flowId) && (command ?? '').includes(`--session "${sessionId}"`);
+}
+
+/**
+ * Task types the host has been observed to report, in both spellings seen so far
+ * (`types.ts` documents `shell | subagent | …`; the 2.1.28x binary emits
+ * `local_bash | local_agent | …`). Anything else — monitors, dreams, auto-mode scans,
+ * whatever the host adds next — is NOT counted as work in flight: those are the
+ * host's own housekeeping, may run for the whole session, and counting one would
+ * silence the watchdog for as long as it lives. The failure to prefer is a nudge
+ * that finds the session busy (one turn); the failure to avoid is the one this file
+ * exists to end.
+ */
+const AGENT_TASK_TYPES = new Set([
+  'subagent', 'local_agent', 'agent', 'workflow', 'local_workflow',
+  'mcp_task', 'teammate', 'in_process_teammate', 'remote_agent',
+]);
+const BASH_TASK_TYPES = new Set(['shell', 'local_bash', 'bash']);
+
+export interface InFlight {
+  agents: boolean;
+  bash: boolean;
+  /** Descriptions (or commands) of the shell tasks counted, for the nudge to name. */
+  bashTasks: string[];
+}
+
+/** Sort the session's background tasks into what will wake it and what may not. */
+export function classifyInFlight(tasks: BackgroundTaskEntry[]): InFlight {
+  const out: InFlight = { agents: false, bash: false, bashTasks: [] };
+  for (const t of tasks) {
+    const type = t.type ?? (t.command !== undefined ? 'shell' : 'subagent');
+    if (BASH_TASK_TYPES.has(type)) {
+      if (isWatcherTask(t.command)) continue;
+      out.bash = true;
+      out.bashTasks.push((t.description || t.command || t.id || 'shell task').slice(0, 120));
+    } else if (AGENT_TASK_TYPES.has(type)) {
+      out.agents = true;
+    }
+  }
+  return out;
+}
+
 /** Injected by `Stop` when `background_tasks` shows no watcher running. */
 export function armInstruction(
   repoRoot: string,
@@ -354,19 +465,34 @@ export function nudgeText(opts: {
    * hook to notice and ask instead would spend a whole extra turn on it, every time.
    */
   rearmCommand: string;
+  /** Absolute path of `state/hold` — the one file that makes a stop legitimate. */
+  holdPath: string;
+  /** Shell tasks still listed as running when the last turn ended (may be servers). */
+  bashTasks?: string[];
 }): string {
   const mins = Math.round(opts.idleMs / 60_000);
+  const bash = opts.bashTasks ?? [];
+  // The previous wording offered "waiting for the developer → say so and stop" as
+  // the first of two options. Observed taken verbatim on the first nudge a flow ever
+  // received, and it is exactly the stop the developer had been asking the flow not
+  // to make. So the nudge no longer asks the model to judge whether stopping was
+  // right; it names the two actions available and makes the legitimate stop a file.
   const lines = [
     `${WATCHDOG_LABEL} 引擎的停滞自检把你叫醒了（不是开发者说的话）。`,
     ``,
-    `机械事实：流程 '${opts.flowName}' 停在 stage '${opts.stageId}'，已静置约 ${mins} 分钟；`,
-    `没有后台任务在跑，也没有待批的 gate —— 没有任何东西会在将来把你叫醒。`,
+    `机械事实：流程 '${opts.flowName}' 停在 stage '${opts.stageId}'，已静置约 ${mins} 分钟；`
+      + `没有子代理在飞，没有待批的 gate，也没有 state/hold。`,
+    ...(bash.length > 0
+      ? [`后台还挂着 ${bash.length} 个 shell 任务（${bash.join('；')}）——静置这么久它们还没结束，`
+        + `就当它们不会把你叫醒（常驻进程如 dev server）。`]
+      : []),
     ``,
-    `先判断这次停下来是否合理，二选一：`,
-    `· **在等开发者**（问题已经摆给他了、卡在必须他拍板或他去真机验证的点上、或者他刚明确叫停）`,
-    `  → 回一行说清在等什么，然后结束回合。不要重复解释，不要重新开工。`,
-    `· **其它情况**（插曲已经讨论完/改完，只是没回到 flow）`,
-    `  → 不要向开发者复述计划，直接接着 stage '${opts.stageId}' 往下做。`,
+    `二选一，都在本回合做完：`,
+    `· **还有能推进的工作**（够格的票、待派的质量链、待收的树、待跑的收口测试）→ 直接做，`
+      + `不复述计划，不预告「下一轮」——写「下一轮我…」然后停下，就是这次被叫醒的原因。`,
+    `· **确实在等开发者的人手动作**（安全红线拍板、只有他能做的操作、他明确叫停）`
+      + `→ 用 Write 写 \`${opts.holdPath}\`，一行：等谁做什么、为什么只能他做、等到之后下一步是什么。`
+      + `有这个文件自检就不再催；开发者下一条输入会把它清掉。⛔ 只在正文里说「在等你」不算。`,
     ``,
     `本 stage 还剩 ${opts.remaining} 次自检（开发者一说话就清零）。`,
     ``,
@@ -382,4 +508,42 @@ export function nudgeText(opts: {
     );
   }
   return lines.join('\n');
+}
+
+/**
+ * Whose flow this watcher is looking at. The loop in `watch.ts` acts on the verdict;
+ * the decision lives here so it can be tested without a 20-second poll.
+ *
+ *  - `ours`          → run the stall test.
+ *  - `foreign-flow`  → a different flow instance (or none): stay silent, do not exit —
+ *                      an exit wakes the session to say nothing.
+ *  - `owner-changed` → same flow, new session: exit, and hand the new owner its own
+ *                      arming command. A null owner is NOT a change (`<flow> resume`
+ *                      leaves it null on purpose and the same session keeps driving).
+ */
+export function watcherOwnership(
+  state: { flow_id: string; last_session_id: string | null } | null,
+  flowId: string,
+  sessionId: string
+): 'ours' | 'foreign-flow' | 'owner-changed' {
+  if (!state) return 'foreign-flow';
+  if (flowId && state.flow_id !== flowId) return 'foreign-flow';
+  if (sessionId && state.last_session_id !== null && state.last_session_id !== sessionId) return 'owner-changed';
+  return 'ours';
+}
+
+/**
+ * What an inherited watcher prints when it discovers the flow has a new owner. Its
+ * exit wakes the process, so the text has to be worth a turn: it hands the new
+ * session the arming command, which is what `Stop` would otherwise spend the next
+ * turn end asking for.
+ */
+export function ownerChangedText(flowName: string, rearmCommand: string): string {
+  return [
+    `${WATCHDOG_LABEL} 上一个 session 起的停滞自检发现流程 '${flowName}' 已换了 session，自行退出（不是开发者说的话）。`,
+    `本 session 还没有自己的自检进程。现在用 Bash 起一个（\`run_in_background: true\`，不要前台跑、不要等它、不要向开发者汇报），`,
+    `起完接着做手上的活：`,
+    ``,
+    `    ${rearmCommand}`,
+  ].join('\n');
 }

@@ -603,4 +603,23 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(r.stderr).toContain('多个票号');
     expect(r.stderr).toContain('T1 T2');
   });
+
+  it('交接段只许一份、只许叫 `## 🔴 重入交接`：换个名字的第二段照样拦', () => {
+    // 实测：撞 60% 后新建 `## 🔴🔴🔴 下一个 session 最重要的三件事`，下个 session 改名
+    // `## 上一轮交班`，23.6 KB 纯快照；handoff.md 的自检按精确标题 grep，一直打印 1。
+    const { repo, flowDir, base } = makeRepo();
+    commit(repo, 'a.txt', 'feat(T1): one');
+    commit(repo, 'b.txt', 'feat(T2): two');
+    writeState(flowDir, base);
+    const good = '## 🔴 重入交接\n\n- ① …\n\n## 票\n\n- [x] T1 — impl one\n  - qc:done\n- [x] T2 — impl two\n  - qc:done\n\n## 待真机验证\n\n- T1 — 看窗口\n';
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'), good);
+    expect(runGate(flowDir).code).toBe(0);
+
+    for (const bad of ['## 上一轮交班（09-27）', '## 🔴🔴🔴 下一个 session 最重要的三件事', '## Handoff notes', '## 🔴 重入交接']) {
+      writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'), good + `\n${bad}\n\n- 快照…\n`);
+      const r = runGate(flowDir);
+      expect(r.code, bad).toBe(1);
+      expect(r.stderr, bad).toMatch(/交接段/);
+    }
+  });
 });
