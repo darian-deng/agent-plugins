@@ -4443,6 +4443,18 @@ function nudgeText(opts) {
   }
   return lines.join("\n");
 }
+var MACHINE_PROMPT_ENVELOPE = new RegExp(
+  "^(?:" + [
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+    "Activity was observed in the bound conversation",
+    "<agent-message\\b",
+    "<task-notification>",
+    "\\[Subagent hand-back\\]",
+    "\\[ai-flow:watchdog\\]",
+    "\\[ai-flow:stop-guard\\]"
+  ].join("|") + ")"
+);
 function watcherOwnership(state, flowId2, sessionId2) {
   if (!state) return "foreign-flow";
   if (flowId2 && state.flow_id !== flowId2) return "foreign-flow";

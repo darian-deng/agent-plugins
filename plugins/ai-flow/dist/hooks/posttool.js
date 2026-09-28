@@ -4675,6 +4675,18 @@ function emptyWatchdog() {
 function readWatchdog(state) {
   return { ...emptyWatchdog(), ...state?.watchdog ?? {} };
 }
+var MACHINE_PROMPT_ENVELOPE = new RegExp(
+  "^(?:" + [
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+    "Activity was observed in the bound conversation",
+    "<agent-message\\b",
+    "<task-notification>",
+    "\\[Subagent hand-back\\]",
+    "\\[ai-flow:watchdog\\]",
+    "\\[ai-flow:stop-guard\\]"
+  ].join("|") + ")"
+);
 
 // src/lib/prompt-render.ts
 var INLINE_INJECTION_BUDGET = 1e4;

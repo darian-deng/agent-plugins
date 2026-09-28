@@ -4654,6 +4654,18 @@ function armInstruction(repoRoot, flowName, flowId, sessionId) {
     `\u26D4 \u4E0D\u8981\u524D\u53F0\u8DD1\uFF0C\u4E0D\u8981\u7B49\u5B83\uFF0C\u4E0D\u8981\u5411\u5F00\u53D1\u8005\u6C47\u62A5\u8FD9\u4EF6\u4E8B\u3002\u8D77\u5B8C\u63A5\u7740\u505A\u4F60\u624B\u4E0A\u7684\u6D3B\u3002`
   ].join("\n");
 }
+var MACHINE_PROMPT_ENVELOPE = new RegExp(
+  "^(?:" + [
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+    "Activity was observed in the bound conversation",
+    "<agent-message\\b",
+    "<task-notification>",
+    "\\[Subagent hand-back\\]",
+    "\\[ai-flow:watchdog\\]",
+    "\\[ai-flow:stop-guard\\]"
+  ].join("|") + ")"
+);
 
 // src/lib/stop-handler.ts
 var STOP_GUARD_CONTINUE_EXIT = 3;

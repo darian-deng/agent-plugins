@@ -5060,6 +5060,22 @@ function resolveWatchdogConfig(cfg, env = process.env) {
     cap: DEFAULT_NUDGE_CAP
   };
 }
+function isDeveloperPrompt(prompt, source) {
+  if (source !== void 0) return source === "user";
+  return !MACHINE_PROMPT_ENVELOPE.test(prompt.trimStart());
+}
+var MACHINE_PROMPT_ENVELOPE = new RegExp(
+  "^(?:" + [
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+    "Activity was observed in the bound conversation",
+    "<agent-message\\b",
+    "<task-notification>",
+    "\\[Subagent hand-back\\]",
+    "\\[ai-flow:watchdog\\]",
+    "\\[ai-flow:stop-guard\\]"
+  ].join("|") + ")"
+);
 
 // src/lib/advance-stage.ts
 async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
@@ -5571,17 +5587,17 @@ async function handleUserPrompt(input2) {
     ].join("\n"));
   }
   if (active && !isNonOwner && !foreign) {
-    const developerTyped = input2.source === void 0 || input2.source === "user";
+    const developerTyped = isDeveloperPrompt(prompt, input2.source);
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
       watchdog: {
         ...readWatchdog(cur),
         last_activity_at: nowIso,
         ...developerTyped && { last_user_prompt_at: nowIso },
-        // Unconditionally, not "if the entry-time read saw any spent": a watcher can
-        // claim a nudge between this hook reading the state and taking the lock, and
-        // that one would survive the developer's arrival.
-        nudges_this_stage: 0
+        // Unconditionally on a developer prompt, not "if the entry-time read saw any
+        // spent": a watcher can claim a nudge between this hook reading the state and
+        // taking the lock, and that one would survive the developer's arrival.
+        ...developerTyped && { nudges_this_stage: 0 }
       }
     }));
     if (developerTyped) {

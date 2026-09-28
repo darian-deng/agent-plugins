@@ -4514,6 +4514,18 @@ function truncateError(e, max = 120) {
 var WATCHER_MARKER = "ai-flow-watchdog-watch";
 var WATCHER_MAX_LIFETIME_MS = 12 * 60 * 60 * 1e3;
 var ACTIVITY_STALE_MS = 15 * 6e4;
+var MACHINE_PROMPT_ENVELOPE = new RegExp(
+  "^(?:" + [
+    "Another Claude session sent a message",
+    "A peer session sent a message",
+    "Activity was observed in the bound conversation",
+    "<agent-message\\b",
+    "<task-notification>",
+    "\\[Subagent hand-back\\]",
+    "\\[ai-flow:watchdog\\]",
+    "\\[ai-flow:stop-guard\\]"
+  ].join("|") + ")"
+);
 
 // src/lib/pretool-handler.ts
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
