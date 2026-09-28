@@ -375,6 +375,27 @@ function nextStage(config, currentStageId) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function holdPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "hold");
+}
+function readHold(repoRoot, flowName) {
+  const p = holdPath(repoRoot, flowName);
+  if (!existsSync2(p)) return null;
+  try {
+    return readFileSync2(p, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+function clearHold(repoRoot, flowName) {
+  const content = readHold(repoRoot, flowName);
+  if (content === null) return null;
+  try {
+    unlinkSync2(holdPath(repoRoot, flowName));
+  } catch {
+  }
+  return content;
+}
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
@@ -434,7 +455,11 @@ function emptyWatchdog() {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
@@ -4529,7 +4554,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4742,6 +4778,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     };
   }
   clearRenderedPrompt(repoRoot, flowName);
+  clearHold(repoRoot, flowName);
   const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
     current_stage: next,
     first_prompt_handled: false,

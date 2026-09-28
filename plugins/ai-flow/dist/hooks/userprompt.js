@@ -4085,7 +4085,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4678,6 +4689,27 @@ function nextStage(config, currentStageId) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function holdPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "hold");
+}
+function readHold(repoRoot, flowName) {
+  const p = holdPath(repoRoot, flowName);
+  if (!existsSync4(p)) return null;
+  try {
+    return readFileSync3(p, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+function clearHold(repoRoot, flowName) {
+  const content = readHold(repoRoot, flowName);
+  if (content === null) return null;
+  try {
+    unlinkSync2(holdPath(repoRoot, flowName));
+  } catch {
+  }
+  return content;
+}
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
@@ -4734,18 +4766,17 @@ async function runScript(command, cwd, opts) {
     maxBuffer: 1024 * 1024,
     shell: true
   });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
   if (result.signal === "SIGTERM" || result.error?.message?.includes("ETIMEDOUT") || result.status === null && result.signal) {
-    return { ok: false, reason: `Script timed out after ${timeout}ms` };
+    return { ok: false, reason: `Script timed out after ${timeout}ms`, status: null, output };
   }
   if (result.error) {
-    return { ok: false, reason: result.error.message };
+    return { ok: false, reason: result.error.message, status: result.status, output };
   }
   if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}` };
+    return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}`, status: result.status, output };
   }
-  const notes = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-  return { ok: true, reason: "", ...notes && { notes } };
+  return { ok: true, reason: "", status: 0, output, ...output && { notes: output } };
 }
 
 // src/lib/context.ts
@@ -5008,7 +5039,11 @@ function emptyWatchdog() {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
@@ -5050,6 +5085,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     };
   }
   clearRenderedPrompt(repoRoot, flowName);
+  clearHold(repoRoot, flowName);
   const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
     current_stage: next,
     first_prompt_handled: false,
@@ -5418,12 +5454,16 @@ async function handleStatus(repoRoot, flowName) {
   if (!wdCfg.enabled) {
     lines.push("", "watchdog: \u5DF2\u5173\u95ED\uFF08config.watchdog.enabled=false \u6216 AI_FLOW_WATCHDOG=0\uFF09");
   } else if (w.watcher_seen) {
-    lines.push("", `watchdog: \u5DF2\u6B66\u88C5\uFF08\u540E\u53F0\u81EA\u68C0\u8FDB\u7A0B\u5728\u8DD1\uFF09\uFF0C\u9759\u7F6E\u9608\u503C ${Math.round(wdCfg.idleMs / 6e4)} \u5206\u949F\uFF0C\u672C stage \u5DF2\u50AC ${w.nudges_this_stage}/${wdCfg.cap} \u6B21` + (w.last_nudge_at ? `\uFF08\u6700\u8FD1\u4E00\u6B21 ${w.last_nudge_at}\uFF09` : ""));
+    lines.push("", `watchdog: \u5DF2\u6B66\u88C5\uFF08\u672C session \u7684\u540E\u53F0\u81EA\u68C0\u8FDB\u7A0B\u5728\u8DD1\uFF09\uFF0C\u9759\u7F6E\u9608\u503C ${Math.round(wdCfg.idleMs / 6e4)} \u5206\u949F\uFF0C\u672C stage \u5DF2\u50AC ${w.nudges_this_stage}/${wdCfg.cap} \u6B21` + (w.last_nudge_at ? `\uFF08\u6700\u8FD1\u4E00\u6B21 ${w.last_nudge_at}\uFF09` : ""));
+    if (w.agents_in_flight) lines.push("in-flight: \u6709\u5B50\u4EE3\u7406\u5728\u98DE\uFF0C\u81EA\u68C0\u4E0D\u50AC");
+    else if (w.bash_in_flight) lines.push(`in-flight: \u53EA\u6709 shell \u4EFB\u52A1\u5728\u8DD1\uFF08${w.bash_tasks.join("\uFF1B") || "\u672A\u547D\u540D"}\uFF09\uFF0C\u9759\u7F6E\u8D85\u8FC7 ${Math.round(wdCfg.idleMs / 6e4) * 6} \u5206\u949F\u7167\u50AC`);
   } else if (w.arm_asks >= MAX_ARM_ASKS) {
     lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u5DF2\u8BA9\u672C session \u8D77\u540E\u53F0\u81EA\u68C0 ${w.arm_asks} \u6B21\u90FD\u6CA1\u8D77\u6210\uFF0C\u4E0D\u518D\u91CD\u8BD5\u3002\u505C\u6EDE\u4E0D\u4F1A\u88AB\u53D1\u73B0\u3002`);
   } else {
     lines.push("", `watchdog: \u672A\u6B66\u88C5 \u2014 \u540E\u53F0\u81EA\u68C0\u8FD8\u6CA1\u8D77\u6765\uFF08\u5DF2\u63D0\u9192 ${w.arm_asks}/${MAX_ARM_ASKS} \u6B21\uFF0C\u4E0B\u6B21\u56DE\u5408\u7ED3\u675F\u518D\u63D0\u9192\uFF09`);
   }
+  const hold = readHold(repoRoot, flowName);
+  if (hold !== null) lines.push(`hold: \u5728\u7B49\u5F00\u53D1\u8005 \u2014 ${hold.split("\n")[0]}\uFF08\u5F00\u53D1\u8005\u4E0B\u4E00\u6761\u8F93\u5165\u6E05\u9664\uFF09`);
   return { action: "allow", additionalContext: lines.join("\n") };
 }
 
@@ -5531,16 +5571,25 @@ async function handleUserPrompt(input2) {
     ].join("\n"));
   }
   if (active && !isNonOwner && !foreign) {
+    const developerTyped = input2.source === void 0 || input2.source === "user";
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     await patchActiveState(active.repoRoot, active.flowName, (cur) => ({
       watchdog: {
         ...readWatchdog(cur),
-        last_activity_at: (/* @__PURE__ */ new Date()).toISOString(),
+        last_activity_at: nowIso,
+        ...developerTyped && { last_user_prompt_at: nowIso },
         // Unconditionally, not "if the entry-time read saw any spent": a watcher can
         // claim a nudge between this hook reading the state and taking the lock, and
         // that one would survive the developer's arrival.
         nudges_this_stage: 0
       }
     }));
+    if (developerTyped) {
+      const held = clearHold(active.repoRoot, active.flowName);
+      if (held !== null) {
+        await appendLog(active.repoRoot, active.flowName, session_id, `HOLD_CLEARED ${(held.split("\n")[0] ?? "").slice(0, 200)}`);
+      }
+    }
   }
   const knownFlows = await discoverFlows(repoRoot);
   const parsed = parseFlowCommand(prompt.trim(), knownFlows);

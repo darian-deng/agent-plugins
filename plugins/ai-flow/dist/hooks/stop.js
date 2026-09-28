@@ -277,12 +277,50 @@ async function resolveActiveFlow(cwd, sessionId) {
   }
   return hasActiveFlow(cwd);
 }
+function readSignal(repoRoot, flowName) {
+  const path = statePath(repoRoot, flowName, "signal");
+  if (!existsSync2(path)) return null;
+  try {
+    return readFileSync2(path, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+function isGatePending(signal, config, currentStageId) {
+  if (!signal) return false;
+  const stage = config.stages.find((s) => s.id === currentStageId);
+  if (!stage) return false;
+  if (!stage.completion.gate) return false;
+  if (signal === "done") return true;
+  const expected = nextStage(config, currentStageId);
+  if (expected !== null) {
+    return signal === expected;
+  }
+  return signal === "flow-complete";
+}
 async function appendLog(repoRoot, flowName, sessionId, message) {
   const logPath = statePath(repoRoot, flowName, "flow.log");
   mkdirSync2(dirname(logPath), { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   appendFileSync(logPath, `${timestamp} [${flowName}] [session=${sessionId}] ${message}
 `);
+}
+function nextStage(config, currentStageId) {
+  const idx = config.stages.findIndex((s) => s.id === currentStageId);
+  if (idx === -1 || idx === config.stages.length - 1) return null;
+  return config.stages[idx + 1].id;
+}
+function holdPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "hold");
+}
+function readHold(repoRoot, flowName) {
+  const p = holdPath(repoRoot, flowName);
+  if (!existsSync2(p)) return null;
+  try {
+    return readFileSync2(p, "utf-8").trim();
+  } catch {
+    return null;
+  }
 }
 
 // src/lib/flow-config-loader.ts
@@ -4359,7 +4397,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4425,6 +4474,9 @@ function isBuiltinFlow(flowName) {
 function flowDefDir(repoRoot, flowName) {
   return isBuiltinFlow(flowName) ? join3(PLUGIN_FLOWS_DIR, flowName) : join3(repoRoot, ".ai-flow", flowName);
 }
+function flowAnchorDir(repoRoot, flowName) {
+  return join3(repoRoot, ".ai-flow", flowName);
+}
 
 // src/lib/flow-config-loader.ts
 var FlowNotFoundError = class extends Error {
@@ -4481,11 +4533,41 @@ async function loadFlowConfig(repoRoot, flowName) {
   }
   return result.data;
 }
+function getStageConfig(config, stageId) {
+  const stage = config.stages.find((s) => s.id === stageId);
+  if (!stage) throw new Error(`Stage '${stageId}' not found in flow '${config.name}'`);
+  return stage;
+}
 
 // src/lib/format.ts
 function truncateError(e, max = 120) {
   const s = String(e).replace(/\n/g, " ");
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
+}
+
+// src/lib/script-executor.ts
+import { spawnSync } from "child_process";
+async function runScript(command, cwd, opts) {
+  const timeout = opts?.timeout_ms ?? 3e4;
+  const result = spawnSync(command, {
+    cwd,
+    ...opts?.env && { env: { ...process.env, ...opts.env } },
+    timeout,
+    encoding: "utf-8",
+    maxBuffer: 1024 * 1024,
+    shell: true
+  });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  if (result.signal === "SIGTERM" || result.error?.message?.includes("ETIMEDOUT") || result.status === null && result.signal) {
+    return { ok: false, reason: `Script timed out after ${timeout}ms`, status: null, output };
+  }
+  if (result.error) {
+    return { ok: false, reason: result.error.message, status: result.status, output };
+  }
+  if (result.status !== 0) {
+    return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}`, status: result.status, output };
+  }
+  return { ok: true, reason: "", status: 0, output, ...output && { notes: output } };
 }
 
 // src/lib/watchdog.ts
@@ -4502,7 +4584,11 @@ function emptyWatchdog() {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
@@ -4528,6 +4614,35 @@ function isWatcherTask(command, flowId) {
   if (!c.includes(WATCHER_MARKER)) return false;
   return flowId ? c.includes(`--flow-id "${flowId}"`) : true;
 }
+function isOwnWatcher(command, flowId, sessionId) {
+  return isWatcherTask(command, flowId) && (command ?? "").includes(`--session "${sessionId}"`);
+}
+var AGENT_TASK_TYPES = /* @__PURE__ */ new Set([
+  "subagent",
+  "local_agent",
+  "agent",
+  "workflow",
+  "local_workflow",
+  "mcp_task",
+  "teammate",
+  "in_process_teammate",
+  "remote_agent"
+]);
+var BASH_TASK_TYPES = /* @__PURE__ */ new Set(["shell", "local_bash", "bash"]);
+function classifyInFlight(tasks) {
+  const out = { agents: false, bash: false, bashTasks: [] };
+  for (const t of tasks) {
+    const type = t.type ?? (t.command !== void 0 ? "shell" : "subagent");
+    if (BASH_TASK_TYPES.has(type)) {
+      if (isWatcherTask(t.command)) continue;
+      out.bash = true;
+      out.bashTasks.push((t.description || t.command || t.id || "shell task").slice(0, 120));
+    } else if (AGENT_TASK_TYPES.has(type)) {
+      out.agents = true;
+    }
+  }
+  return out;
+}
 function armInstruction(repoRoot, flowName, flowId, sessionId) {
   return [
     `${WATCHDOG_LABEL} \u73B0\u5728\u7528 Bash \u8D77\u4E00\u4E2A\u540E\u53F0\u505C\u6EDE\u81EA\u68C0\uFF08\`run_in_background: true\`\uFF09\uFF0C\u547D\u4EE4\u7167\u6284\uFF1A`,
@@ -4541,6 +4656,8 @@ function armInstruction(repoRoot, flowName, flowId, sessionId) {
 }
 
 // src/lib/stop-handler.ts
+var STOP_GUARD_CONTINUE_EXIT = 3;
+var STOP_GUARD_LABEL = "[ai-flow:stop-guard]";
 async function handleStop(input2) {
   const { cwd, session_id } = input2;
   if (input2.agent_id !== void 0) return null;
@@ -4553,13 +4670,25 @@ async function handleStop(input2) {
     const config = await loadFlowConfig(repoRoot, flowName).catch(() => null);
     const wd = resolveWatchdogConfig(config?.watchdog);
     const tasks = input2.background_tasks ?? [];
-    const watcherSeen = tasks.some((t) => isWatcherTask(t.command, state.flow_id));
-    const background = tasks.some((t) => !isWatcherTask(t.command)) || (input2.session_crons ?? []).length > 0;
+    const watcherSeen = tasks.some((t) => isOwnWatcher(t.command, state.flow_id, session_id));
+    const inFlight = classifyInFlight(tasks);
+    const crons = (input2.session_crons ?? []).length > 0;
+    const agentsInFlight = inFlight.agents || crons;
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     let willAsk = false;
+    let developerTurn = false;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
-      const next = { ...w, last_stop_at: nowIso, background, watcher_seen: watcherSeen };
+      developerTurn = w.last_user_prompt_at !== null && (w.last_stop_at === null || Date.parse(w.last_user_prompt_at) > Date.parse(w.last_stop_at));
+      const next = {
+        ...w,
+        last_stop_at: nowIso,
+        background: agentsInFlight || inFlight.bash,
+        agents_in_flight: agentsInFlight,
+        bash_in_flight: inFlight.bash,
+        bash_tasks: inFlight.bashTasks,
+        watcher_seen: watcherSeen
+      };
       if (watcherSeen) next.arm_asks = 0;
       willAsk = wd.enabled && // The host sets this on a turn that only happened because a Stop hook asked
       // for it. Bailing here is what makes a chain impossible: at most one extra
@@ -4568,14 +4697,47 @@ async function handleStop(input2) {
       if (willAsk) next.arm_asks = w.arm_asks + 1;
       return { watchdog: next };
     });
-    if (!written || !willAsk) return null;
-    await appendLog(
-      repoRoot,
-      flowName,
-      session_id,
-      `WATCHDOG_ARM_ASK attempt=${readWatchdog(written).arm_asks}/${MAX_ARM_ASKS} stage=${state.current_stage}`
-    );
-    return { additionalContext: armInstruction(repoRoot, flowName, state.flow_id, session_id) };
+    if (!written) return null;
+    const out = [];
+    if (willAsk) {
+      await appendLog(
+        repoRoot,
+        flowName,
+        session_id,
+        `WATCHDOG_ARM_ASK attempt=${readWatchdog(written).arm_asks}/${MAX_ARM_ASKS} stage=${state.current_stage}`
+      );
+      out.push(armInstruction(repoRoot, flowName, state.flow_id, session_id));
+    }
+    const guard = config && getStageConfig(config, state.current_stage).stop_guard;
+    if (guard && wd.enabled && !input2.stop_hook_active && !agentsInFlight && !developerTurn && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
+      const facts = {
+        flow_id: state.flow_id,
+        stage: state.current_stage,
+        session_id,
+        bash_in_flight: inFlight.bash,
+        bash_tasks: inFlight.bashTasks,
+        hold_path: holdPath(repoRoot, flowName),
+        wrap_up_pct: state.context_wrap_up.at_pct,
+        last_assistant_message: (input2.last_assistant_message ?? "").slice(-4e3)
+      };
+      const res = await runScript(guard, flowDefDir(repoRoot, flowName), {
+        timeout_ms: 2e4,
+        env: {
+          AI_FLOW_FLOW_DIR: flowAnchorDir(repoRoot, flowName),
+          AI_FLOW_PROJECT_ROOT: repoRoot,
+          AI_FLOW_STOP_FACTS: JSON.stringify(facts)
+        }
+      });
+      if (res.status === STOP_GUARD_CONTINUE_EXIT) {
+        const text = res.output.trim();
+        await appendLog(repoRoot, flowName, session_id, `STOP_GUARD_CONTINUE stage=${state.current_stage}`);
+        out.push(text.startsWith(STOP_GUARD_LABEL) ? text : `${STOP_GUARD_LABEL} ${text}`);
+      } else if (!res.ok) {
+        await appendLog(repoRoot, flowName, session_id, `ERROR stop_guard: ${truncateError(res.reason)}`);
+      }
+    }
+    if (out.length === 0) return null;
+    return { additionalContext: out.join("\n\n") };
   } catch (e) {
     try {
       await appendLog(repoRoot, flowName, session_id, `ERROR stop: ${truncateError(e)}`);

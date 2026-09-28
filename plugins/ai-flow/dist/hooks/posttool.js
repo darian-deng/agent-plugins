@@ -313,6 +313,27 @@ function nextStage(config, currentStageId) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function holdPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "hold");
+}
+function readHold(repoRoot, flowName) {
+  const p = holdPath(repoRoot, flowName);
+  if (!existsSync2(p)) return null;
+  try {
+    return readFileSync2(p, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+function clearHold(repoRoot, flowName) {
+  const content = readHold(repoRoot, flowName);
+  if (content === null) return null;
+  try {
+    unlinkSync2(holdPath(repoRoot, flowName));
+  } catch {
+  }
+  return content;
+}
 function markBasePath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "mark-base");
 }
@@ -4481,7 +4502,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4630,7 +4662,11 @@ function emptyWatchdog() {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
@@ -4722,6 +4758,7 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
     };
   }
   clearRenderedPrompt(repoRoot, flowName);
+  clearHold(repoRoot, flowName);
   const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
     current_stage: next,
     first_prompt_handled: false,
@@ -4781,6 +4818,14 @@ async function handlePostTool(input2) {
     }
     const rawFp = WRITE_TOOLS.has(tool_name) ? String(input2.tool_input?.["file_path"] ?? "") : "";
     const fp = rawFp === "" ? "" : rawFp.startsWith("/") ? rawFp : join6(repoRoot, rawFp);
+    if (fp !== "" && fp === holdPath(repoRoot, flowName) && input2.agent_id === void 0) {
+      const held = readHold(repoRoot, flowName) ?? "";
+      await appendLog(repoRoot, flowName, session_id, `HOLD_SET stage=${state.current_stage} ${(held.split("\n")[0] ?? "").slice(0, 200)}`);
+      return {
+        additionalContext: `[ai-flow] state/hold \u5DF2\u767B\u8BB0\uFF0C\u505C\u6EDE\u81EA\u68C0\u4E0E Stop \u5B88\u536B\u4E0D\u518D\u50AC\u3002\u5F00\u53D1\u8005\u4E0B\u4E00\u6761\u8F93\u5165\u4F1A\u81EA\u52A8\u6E05\u6389\u5B83\u3002` + (held.trim() === "" ? `
+\u26A0\uFE0F \u5185\u5BB9\u662F\u7A7A\u7684\u2014\u2014\u5199\u4E00\u884C\uFF1A\u7B49\u8C01\u505A\u4EC0\u4E48\u3001\u4E3A\u4EC0\u4E48\u53EA\u80FD\u4ED6\u505A\u3001\u7B49\u5230\u4E4B\u540E\u4E0B\u4E00\u6B65\u662F\u4EC0\u4E48\u3002` : "")
+      };
+    }
     const markBase = markBasePath(repoRoot, flowName);
     if (fp === markBase) {
       try {

@@ -126,6 +126,18 @@ function nextStage(config, currentStageId) {
   if (idx === -1 || idx === config.stages.length - 1) return null;
   return config.stages[idx + 1].id;
 }
+function holdPath(repoRoot2, flowName2) {
+  return statePath(repoRoot2, flowName2, "hold");
+}
+function readHold(repoRoot2, flowName2) {
+  const p = holdPath(repoRoot2, flowName2);
+  if (!existsSync(p)) return null;
+  try {
+    return readFileSync(p, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
 
 // src/lib/flow-config-loader.ts
 import { existsSync as existsSync3, readdirSync as readdirSync2, readFileSync as readFileSync2 } from "fs";
@@ -4201,7 +4213,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4344,7 +4367,11 @@ function emptyWatchdog() {
     last_stop_at: null,
     last_activity_at: null,
     background: false,
+    agents_in_flight: false,
+    bash_in_flight: false,
+    bash_tasks: [],
     watcher_seen: false,
+    last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null
@@ -4361,6 +4388,7 @@ function resolveWatchdogConfig(cfg, env = process.env) {
     cap: DEFAULT_NUDGE_CAP
   };
 }
+var BASH_IDLE_MULTIPLIER = 6;
 function decideStall(f) {
   if (!f.config.enabled) return { stalled: false, note: "watchdog \u5DF2\u5173\u95ED" };
   if (f.lastStopAt === null) return { stalled: false, note: "\u672C session \u8FD8\u6CA1\u7ED3\u675F\u8FC7\u56DE\u5408" };
@@ -4368,10 +4396,15 @@ function decideStall(f) {
     return { stalled: false, note: "\u6B63\u5728\u5E72\u6D3B\uFF08\u6700\u540E\u4E00\u4E2A\u4E8B\u4EF6\u4E0D\u662F\u300C\u505C\u4E0B\u300D\uFF09" };
   }
   if (f.gatePending) return { stalled: false, note: "\u5728\u7B49\u5F00\u53D1\u8005 approve\uFF0C\u505C\u4E0B\u6765\u662F\u5BF9\u7684" };
-  if (f.background) return { stalled: false, note: "\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u7B49\u5B83\u628A\u4F60\u53EB\u9192" };
+  if (f.holdPresent) return { stalled: false, note: "\u6709 state/hold\uFF0C\u5728\u7B49\u5F00\u53D1\u8005\u7684\u4EBA\u624B\u52A8\u4F5C" };
+  if (f.agentsInFlight) return { stalled: false, note: "\u6709\u5B50\u4EE3\u7406\u5728\u98DE\uFF0C\u7B49\u5B83\u628A\u4F60\u53EB\u9192" };
   const idleMs = f.now - f.lastStopAt;
-  if (idleMs < f.config.idleMs) {
-    return { stalled: false, note: `\u521A\u505C\u4E0B ${Math.round(idleMs / 1e3)} \u79D2` };
+  const threshold = f.bashInFlight ? f.config.idleMs * BASH_IDLE_MULTIPLIER : f.config.idleMs;
+  if (idleMs < threshold) {
+    return {
+      stalled: false,
+      note: f.bashInFlight ? `\u6709\u540E\u53F0 shell \u4EFB\u52A1\u5728\u8DD1\uFF0C\u9759\u7F6E ${Math.round(idleMs / 1e3)} \u79D2\uFF08\u9608\u503C\u653E\u5BBD\u5230 ${Math.round(threshold / 6e4)} \u5206\u949F\uFF09` : `\u521A\u505C\u4E0B ${Math.round(idleMs / 1e3)} \u79D2`
+    };
   }
   if (f.nudgesThisStage >= f.config.cap) {
     return { stalled: false, note: `\u672C stage \u5DF2\u50AC\u6EE1 ${f.nudgesThisStage}/${f.config.cap} \u6B21` };
@@ -4384,17 +4417,16 @@ function watcherCommand(repoRoot2, flowName2, flowId2, sessionId2) {
 }
 function nudgeText(opts) {
   const mins = Math.round(opts.idleMs / 6e4);
+  const bash = opts.bashTasks ?? [];
   const lines = [
     `${WATCHDOG_LABEL} \u5F15\u64CE\u7684\u505C\u6EDE\u81EA\u68C0\u628A\u4F60\u53EB\u9192\u4E86\uFF08\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD\uFF09\u3002`,
     ``,
-    `\u673A\u68B0\u4E8B\u5B9E\uFF1A\u6D41\u7A0B '${opts.flowName}' \u505C\u5728 stage '${opts.stageId}'\uFF0C\u5DF2\u9759\u7F6E\u7EA6 ${mins} \u5206\u949F\uFF1B`,
-    `\u6CA1\u6709\u540E\u53F0\u4EFB\u52A1\u5728\u8DD1\uFF0C\u4E5F\u6CA1\u6709\u5F85\u6279\u7684 gate \u2014\u2014 \u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u4F1A\u5728\u5C06\u6765\u628A\u4F60\u53EB\u9192\u3002`,
+    `\u673A\u68B0\u4E8B\u5B9E\uFF1A\u6D41\u7A0B '${opts.flowName}' \u505C\u5728 stage '${opts.stageId}'\uFF0C\u5DF2\u9759\u7F6E\u7EA6 ${mins} \u5206\u949F\uFF1B\u6CA1\u6709\u5B50\u4EE3\u7406\u5728\u98DE\uFF0C\u6CA1\u6709\u5F85\u6279\u7684 gate\uFF0C\u4E5F\u6CA1\u6709 state/hold\u3002`,
+    ...bash.length > 0 ? [`\u540E\u53F0\u8FD8\u6302\u7740 ${bash.length} \u4E2A shell \u4EFB\u52A1\uFF08${bash.join("\uFF1B")}\uFF09\u2014\u2014\u9759\u7F6E\u8FD9\u4E48\u4E45\u5B83\u4EEC\u8FD8\u6CA1\u7ED3\u675F\uFF0C\u5C31\u5F53\u5B83\u4EEC\u4E0D\u4F1A\u628A\u4F60\u53EB\u9192\uFF08\u5E38\u9A7B\u8FDB\u7A0B\u5982 dev server\uFF09\u3002`] : [],
     ``,
-    `\u5148\u5224\u65AD\u8FD9\u6B21\u505C\u4E0B\u6765\u662F\u5426\u5408\u7406\uFF0C\u4E8C\u9009\u4E00\uFF1A`,
-    `\xB7 **\u5728\u7B49\u5F00\u53D1\u8005**\uFF08\u95EE\u9898\u5DF2\u7ECF\u6446\u7ED9\u4ED6\u4E86\u3001\u5361\u5728\u5FC5\u987B\u4ED6\u62CD\u677F\u6216\u4ED6\u53BB\u771F\u673A\u9A8C\u8BC1\u7684\u70B9\u4E0A\u3001\u6216\u8005\u4ED6\u521A\u660E\u786E\u53EB\u505C\uFF09`,
-    `  \u2192 \u56DE\u4E00\u884C\u8BF4\u6E05\u5728\u7B49\u4EC0\u4E48\uFF0C\u7136\u540E\u7ED3\u675F\u56DE\u5408\u3002\u4E0D\u8981\u91CD\u590D\u89E3\u91CA\uFF0C\u4E0D\u8981\u91CD\u65B0\u5F00\u5DE5\u3002`,
-    `\xB7 **\u5176\u5B83\u60C5\u51B5**\uFF08\u63D2\u66F2\u5DF2\u7ECF\u8BA8\u8BBA\u5B8C/\u6539\u5B8C\uFF0C\u53EA\u662F\u6CA1\u56DE\u5230 flow\uFF09`,
-    `  \u2192 \u4E0D\u8981\u5411\u5F00\u53D1\u8005\u590D\u8FF0\u8BA1\u5212\uFF0C\u76F4\u63A5\u63A5\u7740 stage '${opts.stageId}' \u5F80\u4E0B\u505A\u3002`,
+    `\u4E8C\u9009\u4E00\uFF0C\u90FD\u5728\u672C\u56DE\u5408\u505A\u5B8C\uFF1A`,
+    `\xB7 **\u8FD8\u6709\u80FD\u63A8\u8FDB\u7684\u5DE5\u4F5C**\uFF08\u591F\u683C\u7684\u7968\u3001\u5F85\u6D3E\u7684\u8D28\u91CF\u94FE\u3001\u5F85\u6536\u7684\u6811\u3001\u5F85\u8DD1\u7684\u6536\u53E3\u6D4B\u8BD5\uFF09\u2192 \u76F4\u63A5\u505A\uFF0C\u4E0D\u590D\u8FF0\u8BA1\u5212\uFF0C\u4E0D\u9884\u544A\u300C\u4E0B\u4E00\u8F6E\u300D\u2014\u2014\u5199\u300C\u4E0B\u4E00\u8F6E\u6211\u2026\u300D\u7136\u540E\u505C\u4E0B\uFF0C\u5C31\u662F\u8FD9\u6B21\u88AB\u53EB\u9192\u7684\u539F\u56E0\u3002`,
+    `\xB7 **\u786E\u5B9E\u5728\u7B49\u5F00\u53D1\u8005\u7684\u4EBA\u624B\u52A8\u4F5C**\uFF08\u5B89\u5168\u7EA2\u7EBF\u62CD\u677F\u3001\u53EA\u6709\u4ED6\u80FD\u505A\u7684\u64CD\u4F5C\u3001\u4ED6\u660E\u786E\u53EB\u505C\uFF09\u2192 \u7528 Write \u5199 \`${opts.holdPath}\`\uFF0C\u4E00\u884C\uFF1A\u7B49\u8C01\u505A\u4EC0\u4E48\u3001\u4E3A\u4EC0\u4E48\u53EA\u80FD\u4ED6\u505A\u3001\u7B49\u5230\u4E4B\u540E\u4E0B\u4E00\u6B65\u662F\u4EC0\u4E48\u3002\u6709\u8FD9\u4E2A\u6587\u4EF6\u81EA\u68C0\u5C31\u4E0D\u518D\u50AC\uFF1B\u5F00\u53D1\u8005\u4E0B\u4E00\u6761\u8F93\u5165\u4F1A\u628A\u5B83\u6E05\u6389\u3002\u26D4 \u53EA\u5728\u6B63\u6587\u91CC\u8BF4\u300C\u5728\u7B49\u4F60\u300D\u4E0D\u7B97\u3002`,
     ``,
     `\u672C stage \u8FD8\u5269 ${opts.remaining} \u6B21\u81EA\u68C0\uFF08\u5F00\u53D1\u8005\u4E00\u8BF4\u8BDD\u5C31\u6E05\u96F6\uFF09\u3002`,
     ``,
@@ -4410,6 +4442,21 @@ function nudgeText(opts) {
     );
   }
   return lines.join("\n");
+}
+function watcherOwnership(state, flowId2, sessionId2) {
+  if (!state) return "foreign-flow";
+  if (flowId2 && state.flow_id !== flowId2) return "foreign-flow";
+  if (sessionId2 && state.last_session_id !== null && state.last_session_id !== sessionId2) return "owner-changed";
+  return "ours";
+}
+function ownerChangedText(flowName2, rearmCommand) {
+  return [
+    `${WATCHDOG_LABEL} \u4E0A\u4E00\u4E2A session \u8D77\u7684\u505C\u6EDE\u81EA\u68C0\u53D1\u73B0\u6D41\u7A0B '${flowName2}' \u5DF2\u6362\u4E86 session\uFF0C\u81EA\u884C\u9000\u51FA\uFF08\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD\uFF09\u3002`,
+    `\u672C session \u8FD8\u6CA1\u6709\u81EA\u5DF1\u7684\u81EA\u68C0\u8FDB\u7A0B\u3002\u73B0\u5728\u7528 Bash \u8D77\u4E00\u4E2A\uFF08\`run_in_background: true\`\uFF0C\u4E0D\u8981\u524D\u53F0\u8DD1\u3001\u4E0D\u8981\u7B49\u5B83\u3001\u4E0D\u8981\u5411\u5F00\u53D1\u8005\u6C47\u62A5\uFF09\uFF0C`,
+    `\u8D77\u5B8C\u63A5\u7740\u505A\u624B\u4E0A\u7684\u6D3B\uFF1A`,
+    ``,
+    `    ${rearmCommand}`
+  ].join("\n");
 }
 
 // src/watchdog/watch.ts
@@ -4429,9 +4476,16 @@ var startedAt = Date.now();
 for (; ; ) {
   await sleep(WATCHER_POLL_MS);
   const state = await readActiveState(repoRoot, flowName).catch(() => null);
-  if (!state) continue;
-  if (flowId && state.flow_id !== flowId) continue;
-  if (sessionId && state.last_session_id !== null && state.last_session_id !== sessionId) continue;
+  const ownership = watcherOwnership(state, flowId, sessionId);
+  if (ownership === "foreign-flow" || !state) continue;
+  if (ownership === "owner-changed") {
+    await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {
+    });
+    process.stdout.write(
+      ownerChangedText(flowName, watcherCommand(repoRoot, flowName, state.flow_id, state.last_session_id ?? "")) + "\n"
+    );
+    break;
+  }
   if (Date.now() - startedAt > WATCHER_MAX_LIFETIME_MS) {
     process.stdout.write(
       `${WATCHDOG_LABEL} \u505C\u6EDE\u81EA\u68C0\u5DF2\u8FD0\u884C\u6EE1 12 \u5C0F\u65F6\uFF0C\u81EA\u884C\u9000\u51FA\u3002'${flowName}' \u4ECD\u5728\u8FDB\u884C\uFF0C\u7528 Bash \u91CD\u65B0\u8D77\u4E00\u4E2A\uFF08\`run_in_background: true\`\uFF09\uFF1A
@@ -4449,8 +4503,10 @@ for (; ; ) {
     now: Date.now(),
     lastStopAt: Number.isNaN(lastStopAt) ? null : lastStopAt,
     lastActivityAt: Number.isNaN(lastActivityAt) ? null : lastActivityAt,
-    background: w.background,
+    agentsInFlight: w.agents_in_flight,
+    bashInFlight: w.bash_in_flight,
     gatePending: isGatePending(readSignal(repoRoot, flowName), config, state.current_stage),
+    holdPresent: readHold(repoRoot, flowName) !== null,
     nudgesThisStage: w.nudges_this_stage,
     config: resolveWatchdogConfig(config.watchdog)
   });
@@ -4485,7 +4541,9 @@ for (; ; ) {
       idleMs: verdict.idleMs,
       remaining: verdict.remaining,
       wrapUpPct: state.context_wrap_up.at_pct,
-      rearmCommand: watcherCommand(repoRoot, flowName, state.flow_id, sessionId)
+      rearmCommand: watcherCommand(repoRoot, flowName, state.flow_id, sessionId),
+      holdPath: holdPath(repoRoot, flowName),
+      bashTasks: w.bash_tasks
     }) + "\n"
   );
   break;

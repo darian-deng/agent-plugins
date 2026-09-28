@@ -240,6 +240,9 @@ async function appendLog(repoRoot, flowName, sessionId, message) {
 function signalPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "signal");
 }
+function holdPath(repoRoot, flowName) {
+  return statePath(repoRoot, flowName, "hold");
+}
 function activeJsonPath(repoRoot, flowName) {
   return statePath(repoRoot, flowName, "active.json");
 }
@@ -4318,7 +4321,18 @@ var StageConfigSchema = external_exports.object({
    */
   docs_paths: external_exports.array(external_exports.string()).optional(),
   completion: CompletionSchema,
-  task_gates: external_exports.array(external_exports.string()).optional()
+  task_gates: external_exports.array(external_exports.string()).optional(),
+  /**
+   * A command (run with cwd = the flow's definition dir, like `completion.script`)
+   * the engine invokes at the end of a turn that nothing mechanical explains: no
+   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
+   * developer started. The engine passes what it alone can see in
+   * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
+   * the script answers with exit 3 + stdout to continue the turn ("these tickets
+   * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
+   * other exit is logged and ignored — a broken guard must never manufacture turns.
+   */
+  stop_guard: external_exports.string().min(1).optional()
 }).refine(
   (s) => s.write_scope !== "docs_only" || s.docs_paths != null && s.docs_paths.length > 0,
   {
@@ -4477,18 +4491,17 @@ async function runScript(command, cwd, opts) {
     maxBuffer: 1024 * 1024,
     shell: true
   });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
   if (result.signal === "SIGTERM" || result.error?.message?.includes("ETIMEDOUT") || result.status === null && result.signal) {
-    return { ok: false, reason: `Script timed out after ${timeout}ms` };
+    return { ok: false, reason: `Script timed out after ${timeout}ms`, status: null, output };
   }
   if (result.error) {
-    return { ok: false, reason: result.error.message };
+    return { ok: false, reason: result.error.message, status: result.status, output };
   }
   if (result.status !== 0) {
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}` };
+    return { ok: false, reason: output || `Script exited with code ${result.status ?? "unknown"}`, status: result.status, output };
   }
-  const notes = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-  return { ok: true, reason: "", ...notes && { notes } };
+  return { ok: true, reason: "", status: 0, output, ...output && { notes: output } };
 }
 
 // src/lib/format.ts
@@ -4602,8 +4615,10 @@ async function handlePreTool(input2) {
       const flowRel = join5(".ai-flow", activeFlowName);
       const stateFragments = [
         signalPath(repoRoot, activeFlowName),
+        holdPath(repoRoot, activeFlowName),
         join5(repoRoot, flowRel, "state", "active.json"),
         join5(flowRel, "state", "signal"),
+        join5(flowRel, "state", "hold"),
         join5(flowRel, "state", "active.json")
       ];
       const scriptFragments = [
@@ -4621,7 +4636,7 @@ async function handlePreTool(input2) {
       const offending = command.split(/&&|\|\||[;|\n]/).map((s) => s.trim()).filter((seg) => cpFragments.some((f) => seg.includes(f))).filter((seg) => !isFlowScriptExecution(seg, exemptFragments, stateFragments));
       if (offending.length > 0) {
         return deny(
-          "Bash access to ai-flow control-plane files (signal / active.json / scripts / stages / config.json) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal use the Write tool; active.json / scripts / stages / config.json are changed by the user manually. RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json."
+          "Bash access to ai-flow control-plane files (signal / hold / active.json / scripts / stages / config.json) is blocked \u2014 matching is by path fragment, so this covers reads too. To READ these files, use the Read tool instead (it can read them). To write the signal or state/hold use the Write tool (hold: main session only); active.json / scripts / stages / config.json are changed by the user manually. RUNNING a flow script is allowed: `node <flow>/scripts/<name>.cjs [args]`, optionally preceded by `do`/`then`/`else` or `VAR=value` assignments. What stays denied is a segment that also names the signal or active.json."
         );
       }
       return null;
@@ -4636,7 +4651,8 @@ async function handlePreTool(input2) {
         const norm = p.endsWith("/") ? p : p + "/";
         return relForBlock.startsWith(norm) || blockAbs.startsWith(join5(repoRoot, norm));
       });
-      if (docsPaths.length > 0 && !isFlowDocs) {
+      const isHold = blockAbs === holdPath(repoRoot, activeFlowName);
+      if (docsPaths.length > 0 && !isFlowDocs && !isHold) {
         const wrapUpPct = state.context_wrap_up.at_pct;
         return deny(
           `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ")}) are still allowed so you can land a handoff.
@@ -4676,6 +4692,12 @@ Neither is "the right one" by default \u2014 pick by what the file IS. Code and 
       );
     }
     const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
+    if (absPath === holdPath(repoRoot, activeFlowName) && input2.agent_id !== void 0) {
+      await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED subagent write to hold agent=${input2.agent_id}`);
+      return deny(
+        `state/hold \u53EA\u80FD\u7531\u4E3B session \u5199\u3002\u4F60\u662F\u5B50\u4EE3\u7406\uFF1A\u628A\u300C\u5728\u7B49\u4EC0\u4E48\u300D\u5199\u8FDB\u56DE\u62A5\u4EA4\u7ED9\u7F16\u6392\u5668\uFF0C\u4E0D\u8981\u5199\u8FD9\u4E2A\u6587\u4EF6\u3002`
+      );
+    }
     if (absPath === signalPath(repoRoot, activeFlowName)) {
       await appendLog(repoRoot, activeFlowName, session_id, `SIGNAL_INTERCEPT stage=${state.current_stage} tool=${tool_name}`);
       const stageCfg2 = getStageConfig(config, state.current_stage);
@@ -4735,7 +4757,7 @@ signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${si
     if (foreign) return null;
     const rel = relative2(repoRoot, absPath);
     const stageCfg = getStageConfig(config, state.current_stage);
-    if (stageCfg.write_scope === "docs_only") {
+    if (stageCfg.write_scope === "docs_only" && absPath !== holdPath(repoRoot, activeFlowName)) {
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
       const allowed = docsPaths.some((p) => {
         const norm = p.endsWith("/") ? p : p + "/";
