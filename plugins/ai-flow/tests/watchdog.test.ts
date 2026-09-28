@@ -16,6 +16,7 @@ import {
   isOwnWatcher,
   classifyInFlight,
   watcherOwnership,
+  isDeveloperPrompt,
   ownerChangedText,
   BASH_IDLE_MULTIPLIER,
   WATCHER_MARKER,
@@ -650,6 +651,45 @@ describe('state/hold', () => {
     const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'test-flow', 'state', 'flow.log'), 'utf-8');
     expect(log).toContain('HOLD_CLEARED 等开发者在已登录浏览器里点深链');
     expect(readWatchdog(readActiveState(repo.repoRoot, 'test-flow')).last_user_prompt_at).not.toBeNull();
+  });
+
+  it('a subagent hand-back or peer message (no `source` on 2.1.283) does not clear it, stamp the developer, or return the budget', async () => {
+    // Measured live: a hand-back stamped last_user_prompt_at 14 s after arriving. The
+    // host documents `source: "system"` for these but does not send the field.
+    const repo = makeRepo();
+    seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog({ nudges_this_stage: 2 }) });
+    writeHold(repo.repoRoot);
+    for (const prompt of [
+      'Another Claude session sent a message:\n<agent-message from="a2b4491b6e2ddbc0b">\n[Subagent hand-back] …',
+      '<task-notification>\n<task-id>a2b4</task-id>\n<status>completed</status>\n</task-notification>',
+      '[Subagent hand-back] The text below is the final report…',
+      'Another Claude session sent a message while you were working:\n<agent-message from="x">hi</agent-message>',
+    ]) {
+      await handleUserPrompt(promptInput(repo.repoRoot, { prompt }));
+      expect(readHold(repo.repoRoot, 'test-flow'), prompt.slice(0, 30)).not.toBeNull();
+      const w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+      expect(w.last_user_prompt_at, prompt.slice(0, 30)).toBeNull();
+      expect(w.nudges_this_stage, prompt.slice(0, 30)).toBe(2);
+      expect(w.last_activity_at).not.toBeNull();   // it IS a turn starting, so activity is stamped
+    }
+    // …and the developer's own words, with or without `source`, do all three.
+    await handleUserPrompt(promptInput(repo.repoRoot, { prompt: '继续' }));
+    expect(readHold(repo.repoRoot, 'test-flow')).toBeNull();
+    const w = readWatchdog(readActiveState(repo.repoRoot, 'test-flow'));
+    expect(w.last_user_prompt_at).not.toBeNull();
+    expect(w.nudges_this_stage).toBe(0);
+  });
+
+  it('isDeveloperPrompt: `source` wins when present, the envelope decides otherwise', () => {
+    expect(isDeveloperPrompt('anything', 'user')).toBe(true);
+    expect(isDeveloperPrompt('继续', 'system')).toBe(false);
+    expect(isDeveloperPrompt('继续', 'schedule_wakeup')).toBe(false);
+    expect(isDeveloperPrompt('继续')).toBe(true);
+    expect(isDeveloperPrompt('  Another Claude session sent a message: x')).toBe(false);
+    expect(isDeveloperPrompt('<task-notification>')).toBe(false);
+    expect(isDeveloperPrompt('[ai-flow:watchdog] 引擎的停滞自检把你叫醒了')).toBe(false);
+    // Mentioning the envelope mid-sentence is still the developer.
+    expect(isDeveloperPrompt('为什么 Another Claude session sent a message 这种通知这么多')).toBe(true);
   });
 
   it('a wakeup nobody typed does not clear it', async () => {

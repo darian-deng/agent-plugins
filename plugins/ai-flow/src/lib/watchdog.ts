@@ -511,6 +511,43 @@ export function nudgeText(opts: {
 }
 
 /**
+ * Whether a UserPromptSubmit came from the developer, as opposed to a machine-injected
+ * turn (a subagent's hand-back, a peer session's message, a task notification, a
+ * scheduled wakeup).
+ *
+ * The host's schema documents a `source` field for exactly this (`user` = composer,
+ * `system` = peer/channel messages, task notifications, auto-continuation, …) — and
+ * 2.1.283 does not send it: the hook input is built with `...!1` where `source` would
+ * go. Measured on a live flow: a subagent hand-back stamped `last_user_prompt_at`
+ * within 14 seconds of arriving, with no developer at the keyboard. Read as "the
+ * developer typed", that would clear a hold the developer never saw and exempt the
+ * Stop guard on precisely the turns it exists for (the ones a hand-back starts).
+ *
+ * So `source` is trusted when present, and when absent the envelope text decides:
+ * every machine-injected prompt the host produces is wrapped in a fixed, recognisable
+ * frame (`Another Claude session sent a message`, `<agent-message from=…>`,
+ * `<task-notification>`, …). A developer would have to type one of those frames
+ * verbatim to be mistaken for a machine, and the cost of that mistake is one missed
+ * hold-clear — which their next ordinary prompt performs.
+ */
+export function isDeveloperPrompt(prompt: string, source?: string): boolean {
+  if (source !== undefined) return source === 'user';
+  return !MACHINE_PROMPT_ENVELOPE.test(prompt.trimStart());
+}
+const MACHINE_PROMPT_ENVELOPE = new RegExp(
+  '^(?:' + [
+    'Another Claude session sent a message',
+    'A peer session sent a message',
+    'Activity was observed in the bound conversation',
+    '<agent-message\\b',
+    '<task-notification>',
+    '\\[Subagent hand-back\\]',
+    '\\[ai-flow:watchdog\\]',
+    '\\[ai-flow:stop-guard\\]',
+  ].join('|') + ')'
+);
+
+/**
  * Whose flow this watcher is looking at. The loop in `watch.ts` acts on the verdict;
  * the decision lives here so it can be tested without a 20-second poll.
  *
