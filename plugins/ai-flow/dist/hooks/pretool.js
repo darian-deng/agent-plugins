@@ -98,6 +98,17 @@ function realPath(p) {
     return resolve(p);
   }
 }
+function realPathLoose(p) {
+  let dir = resolve(p);
+  const rest = [];
+  while (!existsSync2(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return resolve(p);
+    rest.unshift(basename(dir));
+    dir = up;
+  }
+  return join2(realPath(dir), ...rest);
+}
 async function anchorFlow(dir) {
   const aiFlowDir = join2(dir, ".ai-flow");
   if (!existsSync2(aiFlowDir)) return null;
@@ -190,11 +201,33 @@ function isRegisteredWorktree(anchorDir, absPath) {
 }
 function isForeignCheckout(active, cwd) {
   if (!active.viaSibling) return false;
-  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
-  const self = realPath(cwd) + "/";
-  if (self.includes(".ai-flow-worktrees/")) return false;
-  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
-  return true;
+  return !isTicketTreePath(active, cwd);
+}
+function isTicketTreePath(active, absPath) {
+  if (isRegisteredWorktree(active.repoRoot, absPath)) return true;
+  const self = realPath(absPath) + "/";
+  if (self.includes(".ai-flow-worktrees/")) return true;
+  return self.includes("/.worktrees/" + active.state.flow_id + "-");
+}
+function ticketTreeAnchor(active, absPath) {
+  if (!isTicketTreePath(active, absPath)) return null;
+  let dir = dirname(absPath);
+  while (!existsSync2(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  const git = (cwd, arg) => {
+    try {
+      return execFileSync("git", ["-C", cwd, "rev-parse", arg], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+  };
+  const top = git(dir, "--show-toplevel");
+  const prefix = git(active.repoRoot, "--show-prefix");
+  if (top === null || prefix === null) return null;
+  return join2(top, prefix);
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
@@ -4530,6 +4563,33 @@ var MACHINE_PROMPT_ENVELOPE = new RegExp(
 // src/lib/pretool-handler.ts
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Glob", "Grep", "LS"]);
+function docsPathOf(docsPaths, absPath, root) {
+  const rel = relative2(root, absPath);
+  return docsPaths.find((p) => {
+    const norm = p.endsWith("/") ? p : p + "/";
+    return rel.startsWith(norm) || absPath.startsWith(join5(root, norm));
+  });
+}
+function subagentAsyncRefusal(toolName, toolInput) {
+  const tail = "\u4F60\u662F\u5B50\u4EE3\u7406\uFF0C\u7ED3\u675F\u56DE\u5408\u5C31\u7B49\u4E8E\u88AB\u7EC8\u6B62\uFF0C\u4E22\u51FA\u53BB\u7684\u4E1C\u897F\u5B8C\u6210\u65F6\u53EB\u4E0D\u9192\u4F60\u3002";
+  const command = toolName === "Bash" ? String(toolInput["command"] ?? "") : "";
+  if (command.includes(WATCHER_MARKER) && command.includes("--flow-id")) {
+    return `\u505C\u6EDE\u81EA\u68C0\u53EA\u5F52\u4E3B session\uFF0C\u5B50\u4EE3\u7406\u524D\u53F0\u540E\u53F0\u90FD\u522B\u8D77\u5B83\u3002\u628A\u8FD9\u6761\u4ECE\u4F60\u7684\u6B65\u9AA4\u91CC\u53BB\u6389\uFF0C\u7167\u5E38\u505A\u5B8C\u624B\u4E0A\u7684\u6D3B\u3002`;
+  }
+  if (toolName === "Bash" && (toolInput["run_in_background"] === true || toolInput["run_in_background"] === "true")) {
+    return `${tail}
+\u6539\u6210\u524D\u53F0\u8DD1\u5E76\u7ED9\u8FD9\u6761\u547D\u4EE4\u8BBE\u8D85\u65F6\uFF1B\u8DD1\u4E0D\u5B8C\u5C31\u5207\u5C0F\u8303\u56F4\u3002\u786E\u5B9E\u7B49\u4E0D\u5230\u5C31\u628A\u72B6\u6001\u62A5\u6210\u300C\u53D7\u963B\u300D\uFF0C\u5199\u6E05\u5361\u5728\u54EA\u4E00\u6B65\u3001\u5DE5\u4F5C\u6811\u91CC\u6709\u4EC0\u4E48\u3001\u4ECE\u54EA\u7EE7\u7EED\u2014\u2014\u6574\u4ED3\u5168\u91CF\u8FD9\u7C7B\u957F\u547D\u4EE4\u5F52\u4E3B session\u3002`;
+  }
+  if (toolName === "Agent" || toolName === "Task") {
+    return `${tail}
+\u6D3E\u51FA\u53BB\u7684\u4EE3\u7406\u5B8C\u6210\u65F6\u5524\u9192\u7684\u662F\u4F60\u7684\u7236\u7EA7\uFF0C\u4E0D\u662F\u4F60\uFF0C\u4F60\u53EA\u80FD\u7A7A\u8F6C\u7B49\u5B83\u3002\u628A\u8FD9\u4EF6\u4E8B\u81EA\u5DF1\u987A\u5E8F\u505A\u5B8C\uFF1B\u505A\u4E0D\u5B8C\u5C31\u5728\u56DE\u62A5\u91CC\u4EA4\u7ED9\u4E3B session \u6D3E\u3002\u8C03\u7528\u7684 skill \u8981\u6C42\u4F60\u5F80\u4E0B\u6D3E\u5B50\u4EE3\u7406\u65F6\u540C\u6837\u5982\u6B64\uFF1A\u4E00\u4E2A\u4EBA\u626E\u6F14\u5B83\u7684\u5168\u90E8\u89D2\u8272\u3001\u987A\u5E8F\u8D70\u5B8C\u3002`;
+  }
+  if (toolName === "Monitor") {
+    return `${tail}
+Monitor \u8981\u9760\u7ED3\u675F\u56DE\u5408\u6765\u7B49\u901A\u77E5\uFF0C\u800C\u4F60\u4E00\u7ED3\u675F\u56DE\u5408\u5C31\u6CA1\u4E86\u3002\u76F4\u63A5\u524D\u53F0\u8DD1\u90A3\u6761\u547D\u4EE4\u5E76\u8BBE\u8D85\u65F6\u3002`;
+  }
+  return null;
+}
 function deny(reason, systemMessage) {
   return { permissionDecision: "deny", permissionDecisionReason: reason, ...systemMessage && { systemMessage } };
 }
@@ -4592,6 +4652,13 @@ async function handlePreTool(input2) {
   const { flowName: activeFlowName, state, repoRoot } = active;
   const foreign = isForeignCheckout(active, cwd);
   try {
+    if (!foreign && input2.agent_id !== void 0 && state.last_session_id === session_id) {
+      const refusal = subagentAsyncRefusal(tool_name, tool_input);
+      if (refusal) {
+        await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_ASYNC_BLOCKED tool=${tool_name} agent=${input2.agent_id}`);
+        return deny(refusal);
+      }
+    }
     const bashCommand = tool_name === "Bash" ? String(tool_input["command"] ?? "") : "";
     if (bashCommand.includes(WATCHER_MARKER) && bashCommand.includes("--flow-id") && tool_input["run_in_background"] !== true) {
       return deny(
@@ -4658,11 +4725,7 @@ async function handlePreTool(input2) {
       const stageCfgForBlock = getStageConfig(config, state.current_stage);
       const docsPaths = resolveDocsPaths(stageCfgForBlock.docs_paths ?? [], state.flow_id);
       const blockAbs = resolvePath(repoRoot, String(tool_input["file_path"] ?? tool_input["notebook_path"] ?? ""));
-      const relForBlock = relative2(repoRoot, blockAbs);
-      const isFlowDocs = docsPaths.some((p) => {
-        const norm = p.endsWith("/") ? p : p + "/";
-        return relForBlock.startsWith(norm) || blockAbs.startsWith(join5(repoRoot, norm));
-      });
+      const isFlowDocs = docsPathOf(docsPaths, blockAbs, repoRoot) !== void 0;
       const isHold = blockAbs === holdPath(repoRoot, activeFlowName);
       if (docsPaths.length > 0 && !isFlowDocs && !isHold) {
         const wrapUpPct = state.context_wrap_up.at_pct;
@@ -4704,6 +4767,19 @@ Neither is "the right one" by default \u2014 pick by what the file IS. Code and 
       );
     }
     const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
+    const treeDocs = input2.agent_id !== void 0 ? [...new Set(config.stages.flatMap((st) => resolveDocsPaths(st.docs_paths ?? [], state.flow_id)))] : [];
+    const normAbs = absPath.replace(/\\/g, "/");
+    const treeAnchor = treeDocs.some((p) => normAbs.includes("/" + (p.endsWith("/") ? p : p + "/"))) ? ticketTreeAnchor(active, absPath) : null;
+    if (treeAnchor !== null) {
+      const hit = docsPathOf(treeDocs, realPathLoose(absPath), treeAnchor);
+      if (hit) {
+        await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_TREE_DOCS_BLOCKED agent=${input2.agent_id} path=${absPath}`);
+        return deny(
+          `\u8FD9\u662F\u7968\u6811\u91CC\u7684 flow \u6587\u6863\uFF08${hit}\uFF09\u3002flow \u6587\u6863\u53EA\u6D3B\u5728\u4E3B\u68C0\u51FA\u91CC\u3001\u7531\u4E3B session \u8BB0\u8D26\uFF1B\u5728\u7968\u6811\u91CC\u6539\u5B83\u5E76\u968F\u672C\u7968\u63D0\u4EA4\uFF0C\u4F1A\u8BA9\u4E4B\u540E\u6BCF\u4E00\u6B21\u56DE\u5408\uFF08--ff-only\uFF09\u90FD\u88AB git \u62D2\u7EDD\u3002
+\u8981\u8BB0\u7684\u4E1C\u897F\uFF08\u8FDB\u5EA6\u3001\u5019\u9009\u3001\u7591\u95EE\uFF09\u5199\u8FDB\u4F60\u7684\u56DE\u62A5\uFF0C\u4EA4\u7ED9\u4E3B session\u3002`
+        );
+      }
+    }
     if (absPath === holdPath(repoRoot, activeFlowName) && input2.agent_id !== void 0) {
       await appendLog(repoRoot, activeFlowName, session_id, `BLOCKED subagent write to hold agent=${input2.agent_id}`);
       return deny(
@@ -4767,14 +4843,10 @@ signal \u53EA\u80FD\u7531\u4E3B session \u5199\u4E3B\u4ED3\u90A3\u4EFD\uFF1A${si
         );
     }
     if (foreign) return null;
-    const rel = relative2(repoRoot, absPath);
     const stageCfg = getStageConfig(config, state.current_stage);
     if (stageCfg.write_scope === "docs_only" && absPath !== holdPath(repoRoot, activeFlowName)) {
       const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
-      const allowed = docsPaths.some((p) => {
-        const norm = p.endsWith("/") ? p : p + "/";
-        return rel.startsWith(norm) || absPath.startsWith(join5(repoRoot, norm));
-      });
+      const allowed = docsPathOf(docsPaths, absPath, repoRoot) !== void 0;
       if (!allowed) {
         await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
         return deny(

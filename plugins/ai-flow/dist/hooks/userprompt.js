@@ -4613,11 +4613,13 @@ function isRegisteredWorktree(anchorDir, absPath) {
 }
 function isForeignCheckout(active, cwd) {
   if (!active.viaSibling) return false;
-  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
-  const self = realPath(cwd) + "/";
-  if (self.includes(".ai-flow-worktrees/")) return false;
-  if (self.includes("/.worktrees/" + active.state.flow_id + "-")) return false;
-  return true;
+  return !isTicketTreePath(active, cwd);
+}
+function isTicketTreePath(active, absPath) {
+  if (isRegisteredWorktree(active.repoRoot, absPath)) return true;
+  const self = realPath(absPath) + "/";
+  if (self.includes(".ai-flow-worktrees/")) return true;
+  return self.includes("/.worktrees/" + active.state.flow_id + "-");
 }
 async function hasActiveFlow(cwd) {
   let dir = cwd;
