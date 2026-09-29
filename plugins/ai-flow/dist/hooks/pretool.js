@@ -10,6 +10,7 @@ import { readFileSync as readFileSync4 } from "fs";
 
 // src/lib/pretool-handler.ts
 import { join as join5, relative as relative2, resolve as resolve3 } from "path";
+import { existsSync as existsSync5 } from "fs";
 
 // src/lib/state.ts
 import {
@@ -26,6 +27,7 @@ import {
   statSync,
   realpathSync
 } from "fs";
+import { randomBytes } from "crypto";
 import { execFileSync } from "child_process";
 import { join as join2, dirname, basename, resolve, relative } from "path";
 
@@ -58,8 +60,18 @@ function lookupSession(sessionId) {
 }
 
 // src/lib/state.ts
+var PROMPT_READ_MAX_DENIES = 3;
+var PROMPT_READ_DENY_WINDOW_MS = 1e4;
+function promptReadLockBinds(state, sessionId, agentId) {
+  const lock = state.prompt_read_pending;
+  if (!lock || agentId !== void 0 || lock.session_id !== sessionId) return false;
+  return (state.last_session_id ?? sessionId) === sessionId;
+}
 function statePath(repoRoot, flowName, file) {
   return join2(repoRoot, ".ai-flow", flowName, "state", file);
+}
+function stateDir(repoRoot, flowName) {
+  return join2(repoRoot, ".ai-flow", flowName, "state");
 }
 function normalizeActiveState(parsed) {
   const { context_warning: legacy, context_blocked: legacyLatched, ...rest } = parsed;
@@ -75,6 +87,52 @@ async function readActiveState(repoRoot, flowName) {
     return normalizeActiveState(JSON.parse(readFileSync2(path, "utf-8")));
   } catch {
     return null;
+  }
+}
+async function writeActiveState(repoRoot, flowName, state) {
+  const dir = stateDir(repoRoot, flowName);
+  mkdirSync2(dir, { recursive: true });
+  const tmp = statePath(repoRoot, flowName, `active.json.${randomBytes(4).toString("hex")}.tmp`);
+  writeFileSync2(tmp, JSON.stringify(state, null, 2));
+  renameSync2(tmp, statePath(repoRoot, flowName, "active.json"));
+}
+var LOCK_STALE_MS = 1e4;
+var LOCK_POLL_MS = 8;
+var LOCK_MAX_WAIT_MS = 1e3;
+async function acquireStateLock(repoRoot, flowName) {
+  const lockPath = statePath(repoRoot, flowName, "active.json.lock");
+  mkdirSync2(stateDir(repoRoot, flowName), { recursive: true });
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      closeSync(openSync(lockPath, "wx"));
+      return () => {
+        try {
+          unlinkSync2(lockPath);
+        } catch {
+        }
+      };
+    } catch {
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync2(lockPath);
+      } catch {
+      }
+    }
+    if (Date.now() >= deadline) return () => {
+    };
+    await new Promise((r) => setTimeout(r, LOCK_POLL_MS));
+  }
+}
+async function patchActiveState(repoRoot, flowName, patch) {
+  const release = await acquireStateLock(repoRoot, flowName);
+  try {
+    const current = await readActiveState(repoRoot, flowName);
+    if (!current) return null;
+    const merged = { ...current, ...typeof patch === "function" ? patch(current) : patch };
+    await writeActiveState(repoRoot, flowName, merged);
+    return merged;
+  } finally {
+    release();
   }
 }
 function isInsideLinkedWorktree(dir) {
@@ -108,6 +166,9 @@ function realPathLoose(p) {
     dir = up;
   }
   return join2(realPath(dir), ...rest);
+}
+async function clearPromptReadLock(repoRoot, flowName) {
+  await patchActiveState(repoRoot, flowName, (cur) => cur.prompt_read_pending ? { prompt_read_pending: null } : {});
 }
 async function anchorFlow(dir) {
   const aiFlowDir = join2(dir, ".ai-flow");
@@ -4657,6 +4718,32 @@ async function handlePreTool(input2) {
       if (refusal) {
         await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_ASYNC_BLOCKED tool=${tool_name} agent=${input2.agent_id}`);
         return deny(refusal);
+      }
+    }
+    if (!foreign && promptReadLockBinds(state, session_id, input2.agent_id)) {
+      const lock = state.prompt_read_pending;
+      const why = lock.stage !== state.current_stage ? "stage" : !existsSync5(lock.path) ? "missing" : lock.denies >= PROMPT_READ_MAX_DENIES ? "denies" : null;
+      if (why) {
+        await clearPromptReadLock(repoRoot, activeFlowName);
+        await appendLog(repoRoot, activeFlowName, session_id, `PROMPT_READ_LOCK_DROPPED reason=${why} path=${lock.path}`);
+      } else {
+        const readsIt = tool_name === "Read" && realPathLoose(resolve3(cwd, String(tool_input["file_path"] ?? ""))) === realPathLoose(lock.path);
+        if (!readsIt) {
+          const now = Date.now();
+          await patchActiveState(repoRoot, activeFlowName, (cur) => {
+            const l = cur.prompt_read_pending;
+            if (!l) return {};
+            if (l.last_deny_at !== void 0 && now - l.last_deny_at < PROMPT_READ_DENY_WINDOW_MS) return {};
+            return { prompt_read_pending: { ...l, denies: l.denies + 1, last_deny_at: now } };
+          });
+          await appendLog(repoRoot, activeFlowName, session_id, `PROMPT_READ_LOCK_DENY tool=${tool_name}`);
+          return deny(
+            `\u672C stage \u7684\u63D0\u793A\u8BCD\u8D85\u8FC7\u4E86\u5185\u8054\u4E0A\u9650\uFF0C\u662F\u4EE5\u6587\u4EF6\u4EA4\u7ED9\u4F60\u7684\uFF0C\u4F60\u8FD8\u6CA1\u8BFB\u5B8C\u5B83\u3002
+\u5148\u7528 Read \u5DE5\u5177**\u6574\u7BC7**\u8BFB\u8FD9\u4E2A\u6587\u4EF6\uFF08\u26D4 \u4E0D\u5E26 offset / limit\uFF0C\u4E5F\u522B\u7528 Bash cat / head\uFF09\uFF1A
+${lock.path}
+\u8BFB\u5B8C\u4E4B\u524D\u5176\u5B83\u5DE5\u5177\u8C03\u7528\u90FD\u4F1A\u88AB\u62D2\u2014\u2014\u4F60\u624B\u4E0A\u8FD8\u6CA1\u6709\u8FD9\u4E2A stage \u7684\u89C4\u5219\uFF0C\u73B0\u5728\u505A\u7684\u4EFB\u4F55\u4E8B\u90FD\u662F\u51ED\u731C\u3002`
+          );
+        }
       }
     }
     const bashCommand = tool_name === "Bash" ? String(tool_input["command"] ?? "") : "";

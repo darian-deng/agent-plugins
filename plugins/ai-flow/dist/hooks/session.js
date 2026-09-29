@@ -6,10 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/hooks/session.ts
-import { readFileSync as readFileSync7 } from "fs";
+import { readFileSync as readFileSync8 } from "fs";
 
 // src/lib/session-handler.ts
-import { readFileSync as readFileSync6, existsSync as existsSync7 } from "fs";
+import { readFileSync as readFileSync7, existsSync as existsSync7 } from "fs";
 
 // src/lib/state.ts
 import {
@@ -194,6 +194,12 @@ function realPath(p) {
   } catch {
     return resolve(p);
   }
+}
+async function armPromptReadLock(repoRoot, flowName, path, stage, sessionId) {
+  await patchActiveState(repoRoot, flowName, { prompt_read_pending: { path, stage, session_id: sessionId, denies: 0 } });
+}
+async function clearPromptReadLock(repoRoot, flowName) {
+  await patchActiveState(repoRoot, flowName, (cur) => cur.prompt_read_pending ? { prompt_read_pending: null } : {});
 }
 async function anchorFlow(dir) {
   const aiFlowDir = join2(dir, ".ai-flow");
@@ -4708,27 +4714,37 @@ function contextWindowForModel(model) {
 }
 
 // src/lib/advance-stage.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4, unlinkSync as unlinkSync3 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5, unlinkSync as unlinkSync3 } from "fs";
 
 // src/lib/prompt-render.ts
 var INLINE_INJECTION_BUDGET = 1e4;
-function injectableStagePrompt(rendered, promptPath, overhead, materialize) {
-  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+var READ_SAFE_CHARS = 15e3;
+var READ_MAX_LINES = 2e3;
+var READ_MAX_LINE_CHARS = 2e3;
+function readableInOneRead(text) {
+  const lines = text.split("\n");
+  return text.length <= READ_SAFE_CHARS && lines.length < READ_MAX_LINES && lines.every((l) => l.length < READ_MAX_LINE_CHARS);
+}
+function stagePromptInjection(rendered, promptPath, overhead, materialize) {
+  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return { text: rendered, pointedTo: null, readableWhole: true };
   const readyPath = materialize?.(rendered) ?? null;
   const target = readyPath ?? promptPath;
-  return `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
+  const readableWhole = readableInOneRead(rendered);
+  return { pointedTo: target, readableWhole, text: `\u26D4 \u672C stage \u7684\u63D0\u793A\u8BCD\u662F ${rendered.length} \u5B57\u7B26\uFF0C\u8D85\u8FC7\u5BBF\u4E3B\u6CE8\u5165\u80FD\u5185\u8054\u643A\u5E26\u7684\u4E0A\u9650\uFF08${INLINE_INJECTION_BUDGET} \u5B57\u7B26\uFF09\uFF0C**\u56E0\u6B64\u5B83\u6CA1\u6709\u968F\u8FD9\u6B21\u6CE8\u5165\u9001\u5230\u4F60\u624B\u4E0A**\u3002
 
 **\u73B0\u5728\u7ACB\u523B\u7528 Read \u5DE5\u5177\u8BFB\u5B8C\u6574\u63D0\u793A\u8BCD\uFF0C\u8BFB\u5B8C\u518D\u5F00\u59CB\u4EFB\u4F55\u52A8\u4F5C\uFF1A**
 ${target}
 
-` + (readyPath ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002Gate \u534F\u8BAE\u4E0D\u5728\u526F\u672C\u91CC\uFF0C\u5B83\u968F\u672C\u6B21\u6CE8\u5165\u53E6\u7ED9\u3002\uFF09
+` + (readableWhole ? "" : `\uFF08\u5B83\u8D85\u8FC7\u4E00\u6B21 Read \u80FD\u6574\u7BC7\u8FD4\u56DE\u7684\u957F\u5EA6\uFF1A\u7528 offset / limit \u5206\u6BB5\u8BFB\uFF0C\u76F4\u5230\u8BFB\u5230\u6700\u540E\u4E00\u884C\u3002\uFF09
+
+`) + (readyPath ? `\uFF08\u8FD9\u662F\u5F15\u64CE\u4E3A\u4F60\u843D\u76D8\u7684**\u6E32\u67D3\u540E**\u526F\u672C\uFF1A\u8DEF\u5F84\u5360\u4F4D\u7B26\u5DF2\u5C55\u5F00\u3001\u5199\u76D8\u6587\u6863\u957F\u5EA6\u7EAA\u5F8B\u5DF2\u5728\u5185\u3002Gate \u534F\u8BAE\u4E0D\u5728\u526F\u672C\u91CC\uFF0C\u5B83\u968F\u672C\u6B21\u6CE8\u5165\u53E6\u7ED9\u3002\uFF09
 
 ` : `\u26A0\uFE0F \u843D\u76D8\u6E32\u67D3\u526F\u672C\u5931\u8D25\uFF0C\u4E0A\u9762\u7ED9\u7684\u662F**\u6A21\u677F\u539F\u6587**\uFF1A\u91CC\u9762\u7684 \`{{flow_root}}\` / \`{{project_root}}\` **\u6CA1\u6709\u88AB\u5C55\u5F00**\uFF0C\u7528\u672C\u6B21\u6CE8\u5165\u9876\u90E8 \`[ai-flow:paths]\` \u5757\u91CC\u7684\u771F\u5B9E\u8DEF\u5F84\u4EE3\u5165\uFF0C\u26D4 \u522B\u7167\u5B57\u9762\u5199\u2014\u2014sh \u4F1A\u62A5\u9519\uFF0C\u4F46 Write \u4E0D\u4F1A\uFF0C\u5B83\u4F1A\u5EFA\u51FA\u4E00\u4E2A\u5B57\u9762\u540D\u7684\u76EE\u5F55\u3001\u6587\u4EF6\u843D\u5728\u90A3\u91CC\u7B49\u4E8E\u6CA1\u5199\u3002
 
 `) + `\u26A0\uFE0F \u4E0D\u8981\u51ED\u8FD9\u6BB5\u8BDD\u63A8\u6D4B\u6D41\u7A0B\u8BE5\u600E\u4E48\u8D70\u2014\u2014\u4F60\u624B\u4E0A\u73B0\u5728\u6CA1\u6709\u6D41\u7A0B\uFF0C\u53EA\u6709\u8FD9\u6761\u6307\u8DEF\u3002\uFF08\u5BBF\u4E3B\u53EF\u80FD\u53E6\u5916\u7ED9\u4F60\u4E00\u6BB5\u9884\u89C8\u548C\u4E00\u4E2A \`tool-results/\u2026\` \u8DEF\u5F84\uFF0C\u90A3\u662F\u5B83\u81EA\u5DF1\u843D\u76D8\u7684\u526F\u672C\uFF1B\u8BFB\u4E0A\u9762\u90A3\u4E2A\u8DEF\u5F84\u3002\uFF09` + // The materialized copy already carries this note (it is part of `rendered`). Only the
   // degraded template-pointer path needs it appended, or an oversize stage loses the
   // length discipline entirely.
-  (readyPath ? "" : "\n" + writtenDocLengthNote());
+  (readyPath ? "" : "\n" + writtenDocLengthNote()) };
 }
 function assembledOverhead(assemble) {
   return assemble("").length;
@@ -4768,6 +4784,30 @@ function gateProtocolNote() {
   ].join("\n");
 }
 
+// src/lib/stage-injection.ts
+import { readFileSync as readFileSync4 } from "fs";
+async function injectStagePrompt(o) {
+  const inj = stagePromptInjection(
+    o.rendered,
+    o.promptPath,
+    o.overhead,
+    (text) => materializeRenderedPrompt(o.repoRoot, o.flowName, o.stageId, text)
+  );
+  let lockable = false;
+  if (inj.pointedTo) {
+    try {
+      lockable = readableInOneRead(readFileSync4(inj.pointedTo, "utf-8"));
+    } catch {
+    }
+  }
+  if (lockable) {
+    await armPromptReadLock(o.repoRoot, o.flowName, inj.pointedTo, o.stageId, o.sessionId);
+  } else {
+    await clearPromptReadLock(o.repoRoot, o.flowName);
+  }
+  return inj.text;
+}
+
 // src/lib/advance-stage.ts
 async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const state = await readActiveState(repoRoot, flowName);
@@ -4796,6 +4836,9 @@ async function advanceStage(repoRoot, flowName, sessionId, callerOverhead = 0) {
   const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
     current_stage: next,
     first_prompt_handled: false,
+    // Unconditionally: a lock armed for the stage just left points at the copy deleted
+    // above. The injection below re-arms one if the next stage is oversize too.
+    prompt_read_pending: null,
     // The nudge budget is per stage: entering one is fresh evidence the session is
     // moving, and the stage that spent its budget is over.
     watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 }
@@ -4819,12 +4862,15 @@ ${body}
   let promptContent = "";
   if (existsSync5(promptPath)) {
     try {
-      promptContent = injectableStagePrompt(
-        renderPrompt(readFileSync4(promptPath, "utf-8"), repoRoot, flowName),
+      promptContent = await injectStagePrompt({
+        repoRoot,
+        flowName,
+        stageId: next,
+        sessionId,
+        rendered: renderPrompt(readFileSync5(promptPath, "utf-8"), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead,
-        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
-      );
+        overhead: assembledOverhead(assemble) + gateNote.length + callerOverhead
+      });
     } catch {
     }
   }
@@ -4833,7 +4879,7 @@ ${body}
 }
 
 // src/lib/legacy-cleanup.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5, writeFileSync as writeFileSync3, rmSync } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync3, rmSync } from "fs";
 import { join as join5 } from "path";
 var LEGACY_ENTRIES = [
   "stages",
@@ -4846,7 +4892,7 @@ var LEGACY_ENTRIES = [
 ];
 function readJsonObject(path) {
   try {
-    const v = JSON.parse(readFileSync5(path, "utf-8"));
+    const v = JSON.parse(readFileSync6(path, "utf-8"));
     if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
     return v;
   } catch {
@@ -5003,7 +5049,7 @@ async function handleSessionStart(input2) {
       let renderedForRead = null;
       let templateReadable = true;
       try {
-        renderedForRead = renderPrompt(readFileSync6(templatePath, "utf-8"), repoRoot, flowName);
+        renderedForRead = renderPrompt(readFileSync7(templatePath, "utf-8"), repoRoot, flowName);
       } catch {
         templateReadable = false;
       }
@@ -5059,12 +5105,15 @@ async function handleSessionStart(input2) {
     let promptContent = "";
     if (existsSync7(promptPath)) {
       try {
-        promptContent = injectableStagePrompt(
-          renderPrompt(readFileSync6(promptPath, "utf-8"), repoRoot, flowName),
+        promptContent = await injectStagePrompt({
+          repoRoot,
+          flowName,
+          stageId: state.current_stage,
+          sessionId: session_id,
+          rendered: renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName),
           promptPath,
-          assembledOverhead(assemble) + gateNote.length,
-          (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
-        );
+          overhead: assembledOverhead(assemble) + gateNote.length
+        });
       } catch {
       }
     }
@@ -5089,7 +5138,7 @@ async function handleSessionStart(input2) {
 // src/hooks/session.ts
 var raw = (() => {
   try {
-    return readFileSync7(0, "utf-8");
+    return readFileSync8(0, "utf-8");
   } catch {
     return "{}";
   }
