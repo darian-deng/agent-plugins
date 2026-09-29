@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlin
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, execSync, spawnSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
@@ -527,6 +527,41 @@ describe('grill-flow worktree.cjs', () => {
       // 而不是让后面某一步碰巧兜住。
       expect(r.stderr).toContain('无法检查票分支上有没有 merge commit');
     });
+  });
+
+  describe('票分支提交了 flow 文档', () => {
+    // 主树整个 stage-3 都留着记账改动；票分支再改同一批文件，--ff-only 会被 git 拒，
+    // 而且之后每一票都撞。谁写的、用什么工具写的都一样，所以在回合这一步查。
+    for (const anchorRel of ['', 'apps/desk']) {
+      it(`锚点 '${anchorRel || '<git 根>'}'：票分支改了 docs/grill-flows/ → 拒绝回合、不 ff，并点名文件`, () => {
+        const { repo, anchor, lanes } = makeRepo({ anchorRel, anchorLock: true });
+        // stage-3 起点那笔：flow 文档已提交进需求分支。
+        mkdirSync(join(anchor, 'docs', 'grill-flows', 'f1'), { recursive: true });
+        writeFileSync(join(anchor, 'docs', 'grill-flows', 'f1', 'spec.md'), 'spec\n');
+        git(repo, 'add', '-A');
+        git(repo, 'commit', '-q', '-m', 'docs: stage1-2 outputs');
+        expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+        const wtAnchor = join(lanes, 'f1-R1', anchorRel);
+        writeFileSync(join(wtAnchor, 'src', 'one.txt'), 'one\n');
+        // 两种形态各一份：改了已有的（checkout 恢复）+ 新建的（只能 git rm）。
+        writeFileSync(join(wtAnchor, 'docs', 'grill-flows', 'f1', 'spec.md'), 'spec edited in tree\n');
+        writeFileSync(join(wtAnchor, 'docs', 'grill-flows', 'f1', 'candidates.md'), '- T1 x\n');
+        git(wtAnchor, 'add', '-A');
+        git(wtAnchor, 'commit', '-q', '-m', 'feat(T1): one');
+        const before = git(repo, 'rev-parse', 'HEAD').trim();
+        const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+        expect(r.code).not.toBe(0);
+        expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(before);
+        expect(r.stderr).toContain('改动了 flow 文档');
+        expect(r.stderr).toContain('docs/grill-flows/f1/candidates.md');
+        // 报错里给的修法要真能用：照抄它的命令跑一遍，之后应当回合成功。
+        const cmds = [...r.stderr.matchAll(/`(git -C [^`]+)`/g)].map((m) => m[1]!);
+        expect(cmds.length).toBeGreaterThan(0);
+        for (const c of cmds) execSync(c, { stdio: 'pipe' });
+        expect(run(anchor, 'close', 'f1', 'R1', '--keep').code).toBe(0);
+        expect(git(repo, 'show', '--name-only', '--format=', 'HEAD').trim()).toBe(join(anchorRel, 'src', 'one.txt'));
+      });
+    }
   });
 
   describe('非 ASCII 记账文件名', () => {

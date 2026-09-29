@@ -10,6 +10,7 @@ import { bindSession, unbindSession } from '../src/lib/session-registry.js';
 import { PLUGIN_FLOWS_DIR } from '../src/lib/flow-paths.js';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, GATED_CONFIG, SCRIPTED_CONFIG, BLOCKING_CONFIG, NO_ESCAPE_CONFIG } from './fixtures/helpers.js';
 import type { PreToolInput } from '../src/lib/types.js';
+import { WATCHER_MARKER } from '../src/lib/watchdog.js';
 
 let cleanups: Array<() => void> = [];
 
@@ -1342,5 +1343,140 @@ describe('handlePreTool — 跨检出（flow 的锚点在另一个检出）', ()
       tool_input: { command: `echo done > "${join(a, '.ai-flow', 'test-flow', 'state', 'signal')}"` },
     });
     expect(out?.permissionDecision).toBe('deny');
+  });
+});
+
+describe('handlePreTool — 子代理不能等：丢后台 / 派孙代理 / Monitor 一律拒', () => {
+  // 只拦 flow 所属 session 的子代理；夹具默认 last_session_id: null，这里显式认领。
+  function activateFlow(repoRoot: string) {
+    writeActiveState(repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test',
+      current_stage: 'work', base_sha: 'abc', last_session_id: 'sess-1',
+    });
+  }
+  function subInput(repoRoot: string, tool: string, toolInput: Record<string, unknown>, cwd = repoRoot): PreToolInput {
+    return { ...makeInput(repoRoot, tool, toolInput), cwd, agent_id: 'sub-1' };
+  }
+
+  it('子代理 Bash run_in_background:true → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: 'npm test', run_in_background: true }));
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/前台/);
+  });
+
+  it('参数被传成字符串 "true" 也拦（实测出现过字符串形态）', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: 'npm test', run_in_background: 'true' }));
+    expect(out?.permissionDecision).toBe('deny');
+  });
+
+  it('子代理前台 Bash 不受影响', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: 'npm test' }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('子代理 Agent / Task / Monitor → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    for (const tool of ['Agent', 'Task', 'Monitor']) {
+      const out = await handlePreTool(subInput(repo.repoRoot, tool, { prompt: 'x' }));
+      expect(out?.permissionDecision, tool).toBe('deny');
+    }
+  });
+
+  it('主 session（无 agent_id）丢后台、派子代理照常', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    expect((await handlePreTool(makeInput(repo.repoRoot, 'Bash', { command: 'npm test', run_in_background: true })))?.permissionDecision ?? 'allow').toBe('allow');
+    expect((await handlePreTool(makeInput(repo.repoRoot, 'Agent', { prompt: 'x' })))?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('同一检出里另一个 session 的子代理不拦（flow 不归它）', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const out = await handlePreTool({ ...subInput(repo.repoRoot, 'Bash', { command: 'npm run dev', run_in_background: true }), session_id: 'sess-other' });
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('flow 无人认领（last_session_id: null）时也不拦', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', { flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test', current_stage: 'work', base_sha: 'abc' });
+    const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: 'npm test', run_in_background: true }));
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('子代理起停滞自检：前台后台都拒，且说「只归主 session」，不和后台规则互相踢皮球', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    for (const bg of [true, false]) {
+      const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: `node x/${WATCHER_MARKER}.js --flow-id f1`, run_in_background: bg }));
+      expect(out?.permissionDecision).toBe('deny');
+      expect(out?.permissionDecisionReason).toContain('只归主 session');
+    }
+  });
+
+  it('没有 active flow 时不介入', async () => {
+    const repo = makeRepo();
+    const out = await handlePreTool(subInput(repo.repoRoot, 'Bash', { command: 'npm test', run_in_background: true }));
+    expect(out).toBeNull();
+  });
+
+  it('开发者自己的另一棵检出（foreign）里不拦：那里起 dev server 是正当用法', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const own = join(dirname(repo.repoRoot), `own-${Date.now()}`);
+    execSync(`git worktree add -q "${own}" -b own-line 2>/dev/null`, { cwd: repo.repoRoot });
+    cleanups.push(() => { try { execSync(`rm -rf "${own}"`); } catch { /* gone */ } });
+    const out = await handlePreTool({ ...subInput(repo.repoRoot, 'Bash', { command: 'npm run dev', run_in_background: true }, own) });  // 所属 session 本身：只剩 foreign 这一条能放行
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+});
+
+describe('handlePreTool — 票树里的 flow 文档：子代理不许写', () => {
+  function ticketTree(repoRoot: string): string {
+    const wt = join(dirname(repoRoot), `${basenameOf(repoRoot)}.ai-flow-worktrees`, 'test-flow-abc-T1');
+    execSync(`git worktree add -q "${wt}" -b wt/test-flow-abc-T1 2>/dev/null`, { cwd: repoRoot });
+    cleanups.push(() => { try { execSync(`rm -rf "${dirname(wt)}"`); } catch { /* gone */ } });
+    return wt;
+  }
+  function basenameOf(p: string): string { return p.split('/').filter(Boolean).pop()!; }
+  const docRel = join('docs', 'test-flow', 'test-flow-abc', 'tickets.md');
+
+  it('子代理在票树里写 docs_paths 下的文件 → DENY', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const wt = ticketTree(repo.repoRoot);
+    const out = await handlePreTool({ ...makeInput(repo.repoRoot, 'Write', { file_path: join(wt, docRel), content: 'x' }), cwd: wt, agent_id: 'sub-1' });
+    expect(out?.permissionDecision).toBe('deny');
+    expect(out?.permissionDecisionReason).toMatch(/--ff-only/);
+  });
+
+  it('子代理在票树里写代码照常', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const wt = ticketTree(repo.repoRoot);
+    const out = await handlePreTool({ ...makeInput(repo.repoRoot, 'Write', { file_path: join(wt, 'src', 'a.ts'), content: 'x' }), cwd: wt, agent_id: 'sub-1' });
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('票树里嵌套的同名目录（不在锚点下）不算 flow 文档', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const wt = ticketTree(repo.repoRoot);
+    const nested = join(wt, 'tests', 'fixtures', docRel);
+    const out = await handlePreTool({ ...makeInput(repo.repoRoot, 'Write', { file_path: nested, content: 'x' }), cwd: wt, agent_id: 'sub-1' });
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
+  });
+
+  it('子代理写主检出里的 flow 文档不受这条影响', async () => {
+    const repo = makeRepo();
+    activateFlow(repo.repoRoot);
+    const out = await handlePreTool({ ...makeInput(repo.repoRoot, 'Write', { file_path: join(repo.repoRoot, docRel), content: 'x' }), agent_id: 'sub-1' });
+    expect(out?.permissionDecision ?? 'allow').toBe('allow');
   });
 });

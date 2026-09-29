@@ -75,10 +75,11 @@ flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `
 
 ### 安全保障
 
-ai-flow 通过两项机械保证确保 AI 无法绕过流程控制：
+ai-flow 通过三项机械保证确保 AI 无法绕过流程控制：
 
 - **Signal 是唯一出口**：AI 完成阶段的唯一方式是写入 signal 文件。写入前 engine 运行 Script Validator，通过后才推进；若配置了 Gate，token 只通过系统通知传给用户，AI 不可见、无法自行通过。
 - **控制平面只读**：PreToolUse hook 阻止 AI 修改 `config.json`、`stages/`、`scripts/` 以及运行时状态文件，确保流程定义和引擎状态只能由 engine 自身变更。
+- **子代理不能「等」**：flow 在跑时，flow 所属 session 的子代理的 `run_in_background` Bash、`Agent` / `Task` 派发、`Monitor` 一律被拒——子代理结束回合即终止，丢出去的东西完成时叫不醒它。开发者自己的另一棵检出、同一检出里的其他 session 都不拦。子代理也不许用 Write / Edit 改票树里的 flow 文档（会让之后每次 `--ff-only` 回合被 git 拒绝）。
 
 ### 环境要求
 
@@ -230,7 +231,7 @@ once whether stopping was the right move.
 
 ### Security
 
-ai-flow provides two mechanical guarantees that prevent AI from bypassing
+ai-flow provides three mechanical guarantees that prevent AI from bypassing
 workflow controls:
 
 - **Signal is the only exit**: The only way AI completes a stage is by writing
@@ -240,6 +241,12 @@ workflow controls:
 - **Control plane is read-only**: The PreToolUse hook blocks AI from modifying
   `config.json`, `stages/`, `scripts/`, and runtime state files, ensuring the
   workflow definition and engine state can only be changed by the engine itself.
+- **Subagents cannot wait**: while a flow is active, a backgrounded
+  Bash, `Agent` / `Task` dispatch or `Monitor` from the owning session's subagents
+  is refused — a subagent is gone
+  once it ends its turn, and nothing it started can wake it. Not applied in the
+  developer's own unrelated checkout or to other sessions in the same checkout. Subagents also may not Write / Edit the
+  flow's docs inside a ticket worktree (that breaks every later `--ff-only` close).
 
 ### Requirements
 

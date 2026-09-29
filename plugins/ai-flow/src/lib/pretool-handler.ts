@@ -9,6 +9,8 @@ import {
   activeJsonPath,
   isInsideLinkedWorktree,
   isForeignCheckout,
+  ticketTreeAnchor,
+  realPathLoose,
   realPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
@@ -19,6 +21,49 @@ import { WATCHER_MARKER } from './watchdog.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
+
+/** The entry of `docsPaths` that `absPath` falls under, anchored at `root`. */
+function docsPathOf(docsPaths: string[], absPath: string, root: string): string | undefined {
+  const rel = relative(root, absPath);
+  // Trailing slash so "docs/feat-flows-evil" does not match "docs/feat-flows".
+  return docsPaths.find((p) => {
+    const norm = p.endsWith('/') ? p : p + '/';
+    return rel.startsWith(norm) || absPath.startsWith(join(root, norm));
+  });
+}
+
+/**
+ * Why a subagent may not start this call, or null. A subagent has no suspended state:
+ * once it ends its turn it is gone, and nothing it started in the background can wake
+ * it. Backgrounding a command, waiting on a Monitor, or dispatching a grandchild agent
+ * all leave it nothing to do but end the turn — the host then reports it `completed`
+ * with "waiting for X" as its last words. Measured in grill-flow: 8+ times, the longest
+ * idle 1h07m; 157 of 311 grandchild dispatches in one run left 422 idle turns behind.
+ * Every flow's contract already forbids all three; this is the part that does not
+ * depend on the subagent having read it.
+ */
+function subagentAsyncRefusal(toolName: string, toolInput: Record<string, unknown>): string | null {
+  const tail = '你是子代理，结束回合就等于被终止，丢出去的东西完成时叫不醒你。';
+  // Checked before the background test: the watcher rule further down demands the
+  // background, this one forbids it, and a subagent bounced between the two has no
+  // way out. The watcher is the main session's; say so instead.
+  const command = toolName === 'Bash' ? String(toolInput['command'] ?? '') : '';
+  if (command.includes(WATCHER_MARKER) && command.includes('--flow-id')) {
+    return `停滞自检只归主 session，子代理前台后台都别起它。把这条从你的步骤里去掉，照常做完手上的活。`;
+  }
+  if (toolName === 'Bash' && (toolInput['run_in_background'] === true || toolInput['run_in_background'] === 'true')) {
+    return `${tail}\n改成前台跑并给这条命令设超时；跑不完就切小范围。确实等不到就把状态报成「受阻」，` +
+      `写清卡在哪一步、工作树里有什么、从哪继续——整仓全量这类长命令归主 session。`;
+  }
+  if (toolName === 'Agent' || toolName === 'Task') {
+    return `${tail}\n派出去的代理完成时唤醒的是你的父级，不是你，你只能空转等它。把这件事自己顺序做完；` +
+      `做不完就在回报里交给主 session 派。调用的 skill 要求你往下派子代理时同样如此：一个人扮演它的全部角色、顺序走完。`;
+  }
+  if (toolName === 'Monitor') {
+    return `${tail}\nMonitor 要靠结束回合来等通知，而你一结束回合就没了。直接前台跑那条命令并设超时。`;
+  }
+  return null;
+}
 
 export interface PreToolResult {
   permissionDecision: 'allow' | 'deny' | 'ask';
@@ -240,6 +285,19 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   const foreign = isForeignCheckout(active, cwd);
 
   try {
+
+  // ─── Subagents cannot wait ───────────────────────────────────────────────────
+  // Only for the owning session's subagents. A foreign checkout (the developer's own
+  // tree) or another session in this checkout is work the flow never asked about —
+  // a subagent there starting a dev server in the background and probing it is
+  // ordinary. Before `loadFlowConfig`, like the Bash fence: it reads no config.
+  if (!foreign && input.agent_id !== undefined && state.last_session_id === session_id) {
+    const refusal = subagentAsyncRefusal(tool_name, tool_input);
+    if (refusal) {
+      await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_ASYNC_BLOCKED tool=${tool_name} agent=${input.agent_id}`);
+      return deny(refusal);
+    }
+  }
 
   // ─── The stall watcher must be backgrounded ──────────────────────────────────
   // It is a loop that runs until it finds a stall, i.e. potentially for hours. Run in
@@ -464,11 +522,7 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     // Resolve the target here rather than reusing the one computed further down —
     // this check has to run before the write-tool path handling begins.
     const blockAbs = resolvePath(repoRoot, String(tool_input['file_path'] ?? tool_input['notebook_path'] ?? ''));
-    const relForBlock = relative(repoRoot, blockAbs);
-    const isFlowDocs = docsPaths.some((p) => {
-      const norm = p.endsWith('/') ? p : p + '/';
-      return relForBlock.startsWith(norm) || blockAbs.startsWith(join(repoRoot, norm));
-    });
+    const isFlowDocs = docsPathOf(docsPaths, blockAbs, repoRoot) !== undefined;
     // `state/hold` stays writable during wrap-up: a session that is genuinely waiting
     // on a human must still be able to say so, or the guard it silences would keep
     // continuing it into a wrap-up it cannot act in.
@@ -543,6 +597,36 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // working", not to the flow's anchor: resolving it against `repoRoot` would point the
   // control-plane test at a file in the OTHER checkout that the write never touches.
   const absPath = resolvePath(foreign ? cwd : repoRoot, fp);
+
+  // ─── Flow docs inside a ticket tree: nobody writes them there ────────────────
+  // The flow's docs live in the main checkout, which keeps them uncommitted all through
+  // stage-3. A copy committed on a ticket branch makes every later `--ff-only` close
+  // collide with that dirty file and git refuses the merge — for every ticket after it.
+  // The contract tells subagents not to; this makes it true for the Write tools.
+  // Bash (`cat >`, `sed -i`) is not parsed here, same as the wrap-up block above.
+  // `worktree.cjs close` refuses a ticket branch that commits these files whoever wrote
+  // them; this is the earlier, cheaper warning to the writer.
+  const treeDocs = input.agent_id !== undefined
+    ? [...new Set(config.stages.flatMap((st) => resolveDocsPaths(st.docs_paths ?? [], state.flow_id)))]
+    : [];
+  // String pre-filter first: the anchored test costs a registry scan and two git calls,
+  // and nearly every subagent write is code that cannot match.
+  const normAbs = absPath.replace(/\\/g, '/');
+  const treeAnchor = treeDocs.some((p) => normAbs.includes('/' + (p.endsWith('/') ? p : p + '/')))
+    ? ticketTreeAnchor(active, absPath)
+    : null;
+  if (treeAnchor !== null) {
+    // git prints real paths; the tool passes whatever spelling the agent used.
+    const hit = docsPathOf(treeDocs, realPathLoose(absPath), treeAnchor);
+    if (hit) {
+      await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_TREE_DOCS_BLOCKED agent=${input.agent_id} path=${absPath}`);
+      return deny(
+        `这是票树里的 flow 文档（${hit}）。flow 文档只活在主检出里、由主 session 记账；` +
+        `在票树里改它并随本票提交，会让之后每一次回合（--ff-only）都被 git 拒绝。\n` +
+        `要记的东西（进度、候选、疑问）写进你的回报，交给主 session。`
+      );
+    }
+  }
 
   // ─── Hold: main session only ─────────────────────────────────────────────────
   // A subagent that decides it is "waiting for the developer" must report that to
@@ -631,17 +715,12 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // Past every control-plane fence, and the remaining checks are all relative to the
   // flow's own working copy — see the `foreign` note at the top of this function.
   if (foreign) return null;
-  const rel = relative(repoRoot, absPath);
   const stageCfg = getStageConfig(config, state.current_stage);
   // `state/hold` is flow state, not project content: a docs_only stage that is
   // waiting on a human must still be able to say so.
   if (stageCfg.write_scope === 'docs_only' && absPath !== holdPath(repoRoot, activeFlowName)) {
     const docsPaths = resolveDocsPaths(stageCfg.docs_paths ?? [], state.flow_id);
-    // Normalize: ensure trailing slash to prevent "docs/feat-flows-evil" matching "docs/feat-flows"
-    const allowed = docsPaths.some((p) => {
-      const norm = p.endsWith('/') ? p : p + '/';
-      return rel.startsWith(norm) || absPath.startsWith(join(repoRoot, norm));
-    });
+    const allowed = docsPathOf(docsPaths, absPath, repoRoot) !== undefined;
     if (!allowed) {
       await appendLog(repoRoot, activeFlowName, session_id, `SCOPE_VIOLATION stage=${state.current_stage} path=${fp}`);
       return deny(

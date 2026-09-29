@@ -298,6 +298,22 @@ export function realPath(p: string): string {
   }
 }
 
+/**
+ * `realPath` for a path that may not exist yet: resolves the nearest existing ancestor
+ * and re-appends the rest. Needed to compare a Write target against a path git printed.
+ */
+export function realPathLoose(p: string): string {
+  let dir = resolve(p);
+  const rest: string[] = [];
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return resolve(p);
+    rest.unshift(basename(dir));
+    dir = up;
+  }
+  return join(realPath(dir), ...rest);
+}
+
 /** The active flow declared at exactly this anchor, or null. */
 async function anchorFlow(
   dir: string
@@ -540,21 +556,54 @@ function isRegisteredWorktree(anchorDir: string, absPath: string): boolean {
  */
 export function isForeignCheckout(active: ResolvedFlow, cwd: string): boolean {
   if (!active.viaSibling) return false;
+  return !isTicketTreePath(active, cwd);
+}
+
+/**
+ * True when `absPath` lies inside one of the flow's ticket worktrees. Same evidence,
+ * same lopsidedness as `isForeignCheckout` above, which is this test applied to `cwd`.
+ */
+export function isTicketTreePath(active: ResolvedFlow, absPath: string): boolean {
   // The flow said so itself — see `WORKTREE_REGISTRY_DIR`. Checked first and trusted
   // absolutely, because it is the only evidence here that does not depend on a naming
   // convention: a tree opened at a path no convention covers is invisible to everything
   // below, and reads as "the developer's own checkout" with the flow's protections off.
-  if (isRegisteredWorktree(active.repoRoot, cwd)) return false;
-  const self = realPath(cwd) + '/';
+  if (isRegisteredWorktree(active.repoRoot, absPath)) return true;
+  const self = realPath(absPath) + '/';
   // `<repo 名>.ai-flow-worktrees/`, not `/.ai-flow-worktrees/`: `worktree.cjs` puts ticket
   // trees in a SIBLING of the repo root named after it (`<repo>.ai-flow-worktrees/<flow_id>-<name>`),
   // so the segment never starts with a dot. Requiring one matched no real ticket tree at
   // all — every one of them read as "foreign", which is the direction this test is
   // deliberately lopsided AGAINST: it drops the ownership mutex, the context wrap-up and
   // write_scope inside a tree the flow is actively driving.
-  if (self.includes('.ai-flow-worktrees/')) return false;
-  if (self.includes('/.worktrees/' + active.state.flow_id + '-')) return false;
-  return true;
+  if (self.includes('.ai-flow-worktrees/')) return true;
+  return self.includes('/.worktrees/' + active.state.flow_id + '-');
+}
+
+/**
+ * The flow anchor's counterpart inside the ticket tree that holds `absPath` — i.e.
+ * where `docs_paths` resolve inside that tree — or null when `absPath` is not in a
+ * ticket tree or git cannot say. Two git calls, so callers should run a cheap
+ * string pre-filter first.
+ */
+export function ticketTreeAnchor(active: ResolvedFlow, absPath: string): string | null {
+  if (!isTicketTreePath(active, absPath)) return null;
+  // The target may not exist yet (a Write creating it); git needs a real directory.
+  let dir = dirname(absPath);
+  while (!existsSync(dir)) {
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  const git = (cwd: string, arg: string): string | null => {
+    try {
+      return execFileSync('git', ['-C', cwd, 'rev-parse', arg], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch { return null; }
+  };
+  const top = git(dir, '--show-toplevel');
+  const prefix = git(active.repoRoot, '--show-prefix');
+  if (top === null || prefix === null) return null;
+  return join(top, prefix);
 }
 
 export async function hasActiveFlow(cwd: string): Promise<ResolvedFlow | null> {

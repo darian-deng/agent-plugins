@@ -841,6 +841,34 @@ if (cmd === 'close') {
       + `确实无需改动 → 这张票本身该撤掉，别用空提交充数。`);
   }
 
+  // 票分支不许提交 flow 文档。主树在整个 stage-3 都留着这些文件的未提交记账改动，
+  // 票分支一旦改了其中任何一个，`--ff-only` 就会因「本地改动会被覆盖」拒绝——而且不只
+  // 这一票：记账随每票推进，之后每一次回合都撞同一个文件。引擎只拦得住子代理的
+  // Write / Edit，`cat >`、`sed -i` 和主 session 自己写都会漏过去，所以在出事的这一步查。
+  const docsPrefix = (prefix ? prefix + '/' : '') + 'docs/grill-flows/';
+  const touched = gitQuiet(['diff', '--name-only', `HEAD...${branch}`]);
+  if (!touched.ok) die('无法列出本票分支改动的文件，拒绝回合:\n' + touched.out);
+  const docsHits = touched.out.split('\n').filter((f) => f.startsWith(docsPrefix));
+  if (docsHits.length > 0) {
+    const fork = gitQuiet(['merge-base', 'HEAD', branch]);
+    const forkRef = fork.ok ? fork.out : '<分叉点：git merge-base HEAD ' + branch + '>';
+    // 分叉点上不存在的文件 checkout 不回来（整条命令报 pathspec 错、一个都不恢复），得 git rm。
+    const addedOut = gitQuiet(['diff', '--name-only', '--diff-filter=A', `HEAD...${branch}`]);
+    const added = new Set(addedOut.ok ? addedOut.out.split('\n').filter(Boolean) : []);
+    // `wtPath` 是票树的 git 根，路径照 diff 给的 git 根相对形态原样用。
+    const toRm = docsHits.filter((f) => added.has(f));
+    const toRestore = docsHits.filter((f) => !added.has(f));
+    const fixCmds = [
+      ...(toRestore.length ? [`\`git -C ${wtPath} checkout ${forkRef} -- ${toRestore.join(' ')}\``] : []),
+      ...(toRm.length ? [`\`git -C ${wtPath} rm -q -- ${toRm.join(' ')}\`（本票新建的，分叉点上没有）`] : []),
+    ];
+    die(`${branch} 的提交改动了 flow 文档，拒绝回合：\n`
+      + docsHits.map((f) => '      ' + f).join('\n')
+      + `\n    这些文件只在主树里由主 session 记账、不进票分支；带着它们回合会被 git 拒绝，之后每一票也一样。`
+      + `\n    怎么改：把它们从本票那笔里摘掉——${fixCmds.join('；')}，然后 \`git -C ${wtPath} commit --amend --no-edit\`。`
+      + `里面有要保留的内容（进度、候选），先抄出来，由主 session 写进主树那份。`);
+  }
+
   // ── 真机验证三态：本票必须表态 ──────────────────────────────────────────
   // 本票在 tickets.md 里必须**有且仅有一个** `rm:none` / `rm:pending` / `rm:done`。
   //
