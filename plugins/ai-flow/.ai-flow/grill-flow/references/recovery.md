@@ -100,3 +100,23 @@ GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>
 **这条修法只对「本来就不该是复选框的真机条目」成立。** 如果报的是一张**执行期插进来、被误追加到文件末尾**的真票，照做等于把它从全部完成判定里删掉——它从此不参与「无未勾票」「qc:done」「票↔commit 配对」「写集」四条断言，门立刻全绿。
 
 **先判它是哪一种**：`git log --oneline <base>..HEAD` 里有没有一笔认领这个票号的 commit？tickets.md 上游有没有它的 `delivers:` / `Touches:`？是真票 → **把它移回票列表区**（最后一张票之后、`## 待真机验证` / `## 已知碰撞面` / `## 收口记录` 这些段标题之前），再跑一遍 `node <FD>/scripts/gate-stage-2.cjs --flow-dir <FR>` 确认格式；不是真票 → 才按报错说的改写。
+
+## 六、工具调用被 auto mode 分类器拒绝
+
+拒绝文本形如 `Permission for this action was denied by the Claude Code auto mode classifier. Reason: [<规则名>]`。这是 Claude Code 服务端分类器的判决，**不是本插件的 hook**（插件自己的拦截以 `PreToolUse:… hook error` 开头，按它的文案处置）。
+
+**先看规则名属于哪一类**（`claude auto-mode defaults` 可列出全部规则原文）：
+
+- **对抗型**（`Instruction Poisoning`、`Auto-Mode Bypass`、`Self-Modification`、`Credential Exploration` 等）：⛔ 开发者说「放行 / 继续」**不会**解除它——分类器提示词写明这类规则只在开发者**看到被拦的内容、确认这是误判**之后才放行，「同意继续」永远不算。所以：
+  1. 用 Write 写 `<FR>/state/hold`（一行：等开发者确认一次分类器拦截是否误判）；
+  2. 原样告诉开发者**拦了什么**（命令或改动的要点）与**规则名**，然后问一句：「auto mode 因为 <规则名> 拦了 <动作>——这是误判吗？你确认没问题吗？」；
+  3. 开发者确认后**原样重跑那一条**，不改写。
+- **其它类**（破坏性操作、推主分支、外部写入等）：照拒绝文本说的，向开发者讲清要做什么、为什么，让他决定。
+
+⛔ **不要做的三件事**（实测一次全踩，白白多耗三轮）：
+- **拆开 / 换写法重试**：拆成小段、换解释器、换工具（Bash → Edit）、去掉被拦的那半只跑另一半——拒绝文本明说这些都算「追求同一结果」，照样会拦，而且每拦一次都在加深判决。实测一条只读的 `schedule.cjs missed` 就因为是被拦命令的后半截而被拦，开发者亲手跑完前半截之后，同一条命令原样放行。
+- **让开发者加 allow 规则**：对抗型规则不受 allow 规则影响；而 auto mode 本来就会**忽略**带通配符的解释器规则（`Bash(python3 -:*)`、`Bash(node:*)` 这类——它们等于放行任意代码）。实测开发者照建议加了 `Bash(python3 -:*)`：auto mode 下没有任何效果，切回普通模式后却会放行该项目里任意 python 代码。
+- **建议开发者在项目级设置里配 `autoMode`**：分类器只读用户级 `~/.claude/settings.json`（与托管设置）的 `autoMode.*`，项目级 `.claude/settings*.json` 里的不生效。
+
+**最常见的 `Instruction Poisoning` 触发形态**：往 `spec.md` / `tickets.md`（它们是 /clear 后的指令源，正落在该规则的「agent 会读回的文件」范围里）写入一条授权记录，而记录的范围**超出开发者原话覆盖的范围**——例如开发者只对「T152 做不做」答了「做」，记录却把票面上「须先与开发者逐项对齐」的护栏改成了「已对齐」。规则原文的豁免只覆盖「开发者在自己的消息里说过的授权」。预防见 `stage-3.md` 完成条件第一条与 `ask-before-asking.md` 第 3 步。
+
