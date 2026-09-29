@@ -101,7 +101,7 @@ if (sched.open === 0) {
   lines.push(`没有任何东西会在将来把你叫醒。二选一，都在**本回合**做完：`);
   const todo = [];
   if (openTrees.length) todo.push(`开着的树（${openTrees.join(' ')}）→ 看票面已到哪段：无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账`);
-  if (eligible.length) todo.push(`够格票（${eligible.join(' ')}）→ 先落 \`batch:\` 再开树、派实施（stage-3 第 2–3 步；批宽上限见提示词）`);
+  if (eligible.length) todo.push(`够格票（${eligible.join(' ')}）→ 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步；并发上限见提示词）`);
   lines.push(`① **推进**：${todo.join('；')}。⛔ 写「下一轮我…」「我的下一步是…」然后停，不是推进——就是这类收尾触发了本条。`);
   lines.push(`② **确实在等开发者的人手动作**（安全红线拍板 / L1–L2 确认 / 他明确叫停；⛔ 真机验证不算——打 \`rm:pending\` 留 stage-4）→ 用 Write 写 \`${holdPath}\`，`
     + `一行：等谁做什么、为什么只能他做、等到之后下一步。有这个文件引擎就不再催；他下一条输入会自动清掉。⛔ 只在正文里说「在等你」不算。`);

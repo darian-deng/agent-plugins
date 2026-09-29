@@ -601,6 +601,10 @@ if (cmd === 'open') {
       const inflight = [...new Set([...names, ticket])];
       const lanes = inflight.filter((t) => !/^T\d+$/.test(t));
       const tids = inflight.filter((t) => /^T\d+$/.test(t));
+      // `with:` 由这里机械给出、不让主 session 扫票面凑：老票（升级前开的）没有任何在飞标记，
+      // 凭记忆列最容易漏掉它们，而断言⑦ 以有 `with:` 的一方为准——漏列的那一对就整对不查。
+      const others = tids.filter((t) => t !== ticket);
+      say(`\n票面落这一行（断言⑦ 按它判谁和谁并发）：  - with: ${others.length ? others.join(' ') : 'none'}`);
       if (lanes.length > 0) {
         say(`\n（在飞的 ${lanes.join(' ')} 是车道不是票号，它们的写集没算进下面这段。）`);
       }

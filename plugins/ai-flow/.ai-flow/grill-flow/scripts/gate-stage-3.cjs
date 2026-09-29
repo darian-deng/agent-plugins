@@ -22,7 +22,8 @@
 //       ④ base_sha_code..HEAD **无 merge commit**（历史线性）；
 //       ⑤ 本 flow 落点下无残留 worktree（并行票已全部收口；新旧两个落点都查）；
 //       ⑥ 每个 [x] ticket 那笔 commit 实际改的文件 ⊆ 它声明的 Touches；
-//       ⑦ 同一 batch 内任两票的实际改动文件集不相交。
+//       ⑦ 同时在飞的任两票（`with:` 记录的开工时在飞集合；没有 `with:` 的老票退回按同一 `batch:`）
+//          实际改动文件集不相交——`shares:` 声明过的文件与 `## 生成物` 段登记的文件除外。
 //
 // ④ 为什么是这道门里最 load-bearing 的一条：③ 与 /clear 重入判据都用 `--no-merges`，
 //   所以它们对 merge commit 的内容**完全盲**。实测两个后果，都静默通过：
@@ -185,7 +186,7 @@ if (lookalikes.length > 0) {
 // 会被静默忽略而误放行，必须显式拦下。
 const LOOSE_TICKET_LINE = /^-\s*\[[^\]]*\]\s*T\d/;
 const STRICT_TICKET_LINE = /^- \[([ xX])\] (T\d+)/;
-// [{ num:'T1', line:12, cand:[0,3], touches:null|[glob], batch:null|'B1' }, ...]，按文件顺序
+// [{ num:'T1', line:12, cand:[0,3], touches:null|[glob], batch:null|'B1', with:null|['T2'], shares:[] }, ...]，按文件顺序
 const done = [];
 let undone = 0;
 let inRealMachine = false;   // 光标是否落在 `## 待真机验证` 段内
@@ -233,7 +234,7 @@ for (let i = 0; i < lines.length; i++) {
   }
   seen.set(m[2], i);
   if (m[1] === ' ') undone++;
-  else done.push({ num: m[2], line: i, cand: [], touches: null, batch: null });
+  else done.push({ num: m[2], line: i, cand: [], touches: null, batch: null, with: null, shares: [] });
 }
 
 if (undone > 0) {
@@ -287,6 +288,12 @@ for (let k = 0; k < done.length; k++) {
     }
     const mb = /(?:^|\s)batch:\s*(\S+)/.exec(bl);
     if (mb && done[k].batch === null) done[k].batch = mb[1];
+    // `with:` = 开工那一刻的在飞票（`none` = 开工时没有别的票在飞）。写在行首子项才认，
+    // 免得记账散文里「with: …」的字面被当成字段。
+    const mw = /^\s*-?\s*`?with:`?\s*(.*)$/.exec(bl);
+    if (mw && done[k].with === null) done[k].with = mw[1].match(/T\d+/g) || [];
+    const ms = /^\s*-?\s*`?shares:`?\s*(.*)$/.exec(bl);
+    if (ms) done[k].shares.push(...ms[1].split(/[,\s]+/).map((x) => x.replace(/`/g, '')).filter((x) => x && !/^[—–-]+$/.test(x) && !/^T\d+$/.test(x)));
   }
   if (!found) missingQc.push(done[k].num);
   if (!foundCm) missingCm.push(done[k].num);
@@ -661,47 +668,74 @@ if (touchViolations.length > 0) {
   process.exit(FAIL);
 }
 
-// ── ⑦ 同 batch 内实际写集不相交 ──
-// ⑥ 只验"声明 vs 实际"，验不到"这一批彼此之间是否真的不相交"——批次成员关系
-// 只存在于 `batch:` 字段里。不用声明的 Touches 而用实际文件：声明可以写得很宽。
+// ── ⑦ 同时在飞的两票实际写集不相交 ──
+// ⑥ 只验"声明 vs 实际"，验不到"并行跑的两票彼此之间是否真的不相交"。不用声明的 Touches 而用
+// 实际文件：声明可以写得很宽。
+// 「谁和谁同时在飞」以 `with:`（开工时的在飞集合，主 session 开树时落盘）为准：主循环是滚动
+// 补位，一个 `batch:` 批号会连续挂进先后跑的票——实测一条 150 票的 flow 里同批改同文件的
+// 14 对中 10 对是先后跑的，按批号两两比全是假红；反过来批号不同却并发的一对（改同一份日志、
+// sync 时真撞了冲突）按批号比根本看不见。没有 `with:` 的老票退回按同一 `batch:` 比（向后兼容）。
+// 放行两类共享文件：
+//   - `## 生成物` 段登记的文件（与 schedule.cjs 同一份清单）：合入后重跑生成即复原，快照校验兜底；
+//   - 任一方 `shares:` 声明过的文件：主 session 开树时明知共享、逐案放行的（stage-3 第 1 步）。
+// 未声明的共享仍然红——它说明两票的耦合没人看见过，而那正是「为了并行拆散耦合」的征兆。
+const generated = new Set();
+{
+  let inGen = false;
+  for (const l of lines) {
+    if (/^#{1,6}\s/.test(l)) { inGen = /^##\s/.test(l) && /生成物/.test(l); continue; }
+    if (!inGen) continue;
+    const mg = /^-\s+`?([^`\s]+)`?/.exec(l);
+    if (mg && !mg[1].endsWith('/')) generated.add(mg[1]);
+  }
+}
+const byNum = new Map(done.map((d) => [d.num, d]));
+const pairKeys = new Set();
+const pairs = [];   // [{ a, c, why }]
+const addPair = (a, c, why) => {
+  const key = [a, c].sort().join('|');
+  if (a === c || pairKeys.has(key)) return;
+  pairKeys.add(key);
+  pairs.push({ a, c, why });
+};
+for (const d of done) {
+  if (d.with === null) continue;
+  for (const o of d.with) if (byNum.has(o)) addPair(o, d.num, d.num + ' 的 with:');
+}
 const batches = new Map();
 for (const d of done) {
-  if (!d.batch) continue;                            // 串行票不参与
+  if (!d.batch || d.with !== null) continue;          // 有 with: 的票不再按批号比
   if (!batches.has(d.batch)) batches.set(d.batch, []);
   batches.get(d.batch).push(d.num);
 }
-// 不静默（与⑥ 跳过时同一个原则）：车道模式记的是 `lane:` 不是 `batch:`，于是**全部**票
-// 都不参与⑦，而门照样全绿——实测一次 51 票的 flow 里 `batch:` 只出现 1 次，⑦ 从头到尾
-// 等于没开。stage-3 的文档承认了这条代价并指定了替代保护（tickets.md 末尾那份「已知会撞
-// 的文件」清单交给 stage-4 逐行人查），但门自己不说，读输出的人无从知道保护换成了人工。
-// 按「没参与⑦ 的票数」判，不按 batch 数——`batches.size === 0` 漏掉最常见的形态：
-// 混合跑法下只要有一张票带了 `batch:`，size 就是 1，而单成员 batch 一对都比不出来，
-// ⑦ 对其余 N-1 张仍然等于没开。实测一次 51 票的 flow 里 `batch:` 只出现 1 次。
-const noBatch = done.filter((d) => !d.batch).length;
+for (const [b, nums] of batches) {
+  for (let i = 0; i < nums.length; i++) for (let j = i + 1; j < nums.length; j++) addPair(nums[i], nums[j], 'batch ' + b);
+}
+// 不静默（与⑥ 跳过时同一个原则）：车道模式记的是 `lane:`，既无 `batch:` 也无 `with:`，
+// 于是全部票都不参与⑦，而门照样全绿——实测一次 51 票的 flow 里 `batch:` 只出现 1 次，⑦ 从头到尾
+// 等于没开。按「没参与⑦ 的票数」判，不按批数：混合跑法下单成员批一对都比不出来。
+const noBatch = done.filter((d) => !d.batch && d.with === null).length;
 if (noBatch > 0) {
-  process.stderr.write('⚠  ' + done.length + ' 张已勾票中有 ' + noBatch + ' 张没有 batch: 标记'
+  process.stderr.write('⚠  ' + done.length + ' 张已勾票中有 ' + noBatch + ' 张既没有 with: 也没有 batch: 标记'
     + '（车道模式记的是 lane:），断言⑦ 对它们不生效——这些票之间「改同一文件的不同区段」'
     + '没有任何机器保护，须按 tickets.md 的「已知碰撞面」清单在 stage-4 组装审逐行人工复核\n');
 }
 const overlaps = [];
-for (const [b, nums] of batches) {
-  for (let i = 0; i < nums.length; i++) {
-    for (let j = i + 1; j < nums.length; j++) {
-      const a = new Set(filesOf.get(nums[i]) || []);
-      const shared = (filesOf.get(nums[j]) || []).filter((f) => a.has(f));
-      if (shared.length > 0) overlaps.push({ b, a: nums[i], c: nums[j], shared });
-    }
-  }
+for (const { a, c, why } of pairs) {
+  const allow = new Set([...generated, ...byNum.get(a).shares, ...byNum.get(c).shares]);
+  const fa = new Set(filesOf.get(a) || []);
+  const shared = (filesOf.get(c) || []).filter((f) => fa.has(f) && !allow.has(f));
+  if (shared.length > 0) overlaps.push({ a, c, why, shared });
 }
 if (overlaps.length > 0) {
   for (const o of overlaps) {
-    err('batch ' + o.b + ' 内 ' + o.a + ' 与 ' + o.c + ' 改了相同文件（并行准入条件是写集不相交）:\n'
+    err(o.a + ' 与 ' + o.c + ' 同时在飞（依据：' + o.why + '）却改了相同文件，且这些文件没有被 `shares:` 声明:\n'
       + '      ' + o.shared.join(' ')
-      + '\n    怎么改：这两票本就该串行（给后者加 `Blocked by: ' + o.a + '`）或合并成一票；'
-      + '⛔ 若已经这样跑完了：**不要为了过门而删掉 `batch:` 标记**——`batch:` 是本条检查唯一的触发条件，'
-      + '删掉等于把并行安全的唯一机器依据关掉、门直接变绿。正确做法是给后归并那票补 `Blocked by`、把它移出本批（改成单独一批），'
-      + '并在 stage-4 组装审时重点看这几个文件的交界面，'
-      + '下轮切片时把耦合切进同一票。');
+      + '\n    怎么改（按实情选一条）：'
+      + '\n    - 两票其实是先后跑的（后开那票开工时前一票已合入）→ 在后开那票补 `with:`，写它开工那一刻真正在飞的票（没有就写 `with: none`）；'
+      + '\n    - 确实并发、且当时是有意共享（sync 时已处置交界）→ 在后合入那票补 `shares: ' + o.shared.join(' ') + '`，并在 stage-4 组装审重点看这几个文件；'
+      + '\n    - 两票本就耦合 → 这是切片问题：给后者加 `Blocked by: ' + o.a + '`，下轮切片把耦合切进同一票。'
+      + '\n    ⛔ 不要为了过门删掉 `batch:` / `with:`：它们是本条检查唯一的触发条件，删掉等于把并行安全的机器依据关掉。');
   }
   process.exit(FAIL);
 }

@@ -359,6 +359,86 @@ describe('grill-flow gate-stage-3.cjs — ticket↔commit 配对', () => {
     expect(r.stderr).toContain('batch B1');
   });
 
+  /** T1、T2 各一笔 commit，都改 src/shared.ts（+ 可选各自改 gen.md），票面由调用方给。 */
+  function twoSharedCommits(repo: string, alsoGen = false): void {
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'src', 'shared.ts'), 'v1\n');
+    if (alsoGen) writeFileSync(join(repo, 'gen.md'), 'g1\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'feat(T1): impl one');
+    writeFileSync(join(repo, 'src', 'shared.ts'), 'v1\nv2\n');
+    if (alsoGen) writeFileSync(join(repo, 'gen.md'), 'g1\ng2\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'feat(T2): impl two');
+  }
+  const tix = (repo: string, body: string) =>
+    writeFileSync(join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md'), '# tickets\n\n' + body);
+
+  // 滚动补位：同一批号里先后跑的两票（T2 开工时 T1 已合入 → with: none）不是并发，不该报相交。
+  it('同 batch 但 with: 表明先后跑 → ⑦ 不拦', () => {
+    const { repo, flowDir, base } = makeRepo();
+    twoSharedCommits(repo);
+    tix(repo,
+      '- [x] T1 — impl one\n  Touches: src/\n  batch: B1\n  - with: none\n  - qc:done\n' +
+      '- [x] T2 — impl two\n  Touches: src/\n  batch: B1\n  - with: none\n  - qc:done\n');
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
+  // 批号不同但真并发（with: 点名了对方）→ 旧的按批号比看不见，新的必须抓到。
+  it('不同 batch 但 with: 表明并发、改同一文件 → ⑦ 拦下', () => {
+    const { repo, flowDir, base } = makeRepo();
+    twoSharedCommits(repo);
+    tix(repo,
+      '- [x] T1 — impl one\n  Touches: src/\n  batch: B1\n  - with: none\n  - qc:done\n' +
+      '- [x] T2 — impl two\n  Touches: src/\n  batch: B2\n  - with: T1\n  - qc:done\n');
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('src/shared.ts');
+    expect(r.stderr).toContain('T2 的 with:');
+  });
+
+  // 混编（升级前的老票无 with:、新票有 with:）：以有 with: 的一方为准。它说开工时 T1 不在飞，
+  // 这对就不比——防的是滚动补位下先后跑的票被按批号误报；with: 的正确性由 open 机械打印保证。
+  it('同 batch 混编：新票 with: 未列老票 → 以 with: 为准不比；列了就比', () => {
+    const { repo, flowDir, base } = makeRepo();
+    twoSharedCommits(repo);
+    const body = (w: string) =>
+      '- [x] T1 — impl one\n  Touches: src/\n  batch: B1\n  - qc:done\n' +
+      '- [x] T2 — impl two\n  Touches: src/\n  batch: B1\n  - with: ' + w + '\n  - qc:done\n';
+    tix(repo, body('none'));
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+    tix(repo, body('T1'));
+    expect(runGate(flowDir).code).toBe(1);
+  });
+
+  it('并发改同一文件但已 shares: 声明 → ⑦ 放行', () => {
+    const { repo, flowDir, base } = makeRepo();
+    twoSharedCommits(repo);
+    tix(repo,
+      '- [x] T1 — impl one\n  Touches: src/\n  batch: B1\n  - with: none\n  - qc:done\n' +
+      '- [x] T2 — impl two\n  Touches: src/\n  batch: B1\n  - with: T1\n  - shares: src/shared.ts\n  - qc:done\n');
+    writeState(flowDir, base);
+    expect(runGate(flowDir).code).toBe(0);
+  });
+
+  // 生成物放行只放生成物本身：同时撞了源码文件照样红，报错里不该出现生成物。
+  it('## 生成物 登记的文件不计相交，其余共享文件照报', () => {
+    const { repo, flowDir, base } = makeRepo();
+    twoSharedCommits(repo, true);
+    tix(repo,
+      '- [x] T1 — impl one\n  Touches: src/ gen.md\n  batch: B1\n  - qc:done\n' +
+      '- [x] T2 — impl two\n  Touches: src/ gen.md\n  batch: B1\n  - qc:done\n' +
+      '\n## 生成物\n\n- gen.md — `node gen.js`\n');
+    writeState(flowDir, base);
+    const r = runGate(flowDir);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('src/shared.ts');
+    expect(r.stderr).not.toMatch(/\n\s+.*gen\.md/);
+  });
+
   // 回归锚：Kuhn 匹配只要求每票**至少**一笔，多出来的 commit 留在 owner=-1，而 ⑥⑦ 只看
   // 被配对的那一笔。于是越界改动落在"较老那笔"就能整个逃过 ⑥（落在最新那笔反而会被抓到，
   // 门因此还是不确定的）。要求区间内每笔都归属某一票，把这个逃逸口关掉。

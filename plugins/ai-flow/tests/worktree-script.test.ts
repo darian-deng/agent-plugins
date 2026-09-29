@@ -316,6 +316,18 @@ describe('grill-flow worktree.cjs', () => {
       expect(out).toMatch(/\*\*一票一树\*\*/);
     });
 
+    // ## 生成物 登记的文件不参与相交：两票只共享一个生成物 → 一轮做完。
+    it('## 生成物 段的文件不计写集相交', () => {
+      const t =
+        '- [ ] T1 a\n  - Blocked by: none\n  - Touches: src/a.ts gen.md\n' +
+        '- [ ] T2 b\n  - Blocked by: none\n  - Touches: src/b.ts gen.md\n';
+      const shared = runSched(makeFlow(t));
+      expect(shared).toMatch(/放开上限到 2（等于不限）→ 仍是 2 轮/);
+      const out = runSched(makeFlow(t + '\n## 生成物\n\n- gen.md — `node gen.js`\n'));
+      expect(out).toContain('**一票一树**');
+      expect(out).not.toMatch(/仍是 2 轮/);
+    });
+
     it('Touches: none 的票只能独占一轮', () => {
       const t =
         '- [ ] T1 a\n  - Blocked by: none\n  - Touches: none\n' +
@@ -907,6 +919,17 @@ describe('grill-flow worktree.cjs', () => {
       expect(run(anchor, 'close', 'f1', 'R1', '--no-install').code).toBe(0);
       expect(existsSync(join(lanes, 'f1-R1'))).toBe(false);   // 树真的拆了
       expect(existsSync(entry)).toBe(false);
+    });
+
+    // with: 由 open 机械给出（取自 git worktree list），不靠主 session 凭记忆列在飞票。
+    it('open 票号时打印该落的 with: 行（第一棵 none，第二棵列出第一棵）', () => {
+      const { anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      const r1 = run(anchor, 'open', 'f1', 'T1', '--install', 'true');
+      expect(r1.code).toBe(0);
+      expect(r1.stdout).toContain('- with: none');
+      const r2 = run(anchor, 'open', 'f1', 'T2', '--install', 'true');
+      expect(r2.code).toBe(0);
+      expect(r2.stdout).toContain('- with: T1');
     });
 
     it('close --keep 不销记：树还在，登记就得还在', () => {

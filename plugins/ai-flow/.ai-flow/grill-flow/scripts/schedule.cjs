@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // grill-flow stage-3「执行单位」判定：一票一树还是一组一车道，按轮数算，不靠感觉。
 //
-//   node scripts/schedule.cjs [--cap <n>]      # --cap 默认 3，即主循环的批次上限
+//   node scripts/schedule.cjs [--cap <n>]      # --cap 默认 4，即主循环的并发上限
 //
 // 存在理由：这个选择此前靠三条主观判据（票多不多、组内串不串、装依赖贵不贵），而实测
 // 表明其中两条会把人引向错误答案——
@@ -88,7 +88,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' missed [<在飞票号> …]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' rm [<票号>]\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
-    + '--cap 是并发上限，缺省 3。判据与两种模式的代价见 references/execution-unit.md。\n'
+    + '--cap 是并发上限，缺省 4。判据与两种模式的代价见 references/execution-unit.md。\n'
     + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票。只摆事实，不放行。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
@@ -165,7 +165,7 @@ if (SUB !== null && SUB !== 'missed' && SUB !== 'rm') {
 }
 
 const capIdx = process.argv.indexOf('--cap');
-const cap = capIdx !== -1 ? Number(process.argv[capIdx + 1]) : 3;
+const cap = capIdx !== -1 ? Number(process.argv[capIdx + 1]) : 4;
 if (!Number.isInteger(cap) || cap < 1) die('--cap 要是正整数，收到: ' + process.argv[capIdx + 1]);
 
 // ── 解析（块边界与 gate-stage-3 的 qc:done 判定一致：票行 + 其后的缩进子行）──
@@ -281,12 +281,34 @@ function frozenBy(t) {
   return null;
 }
 
+// ── 生成物（`## 生成物` 段）：不参与写集相交 ─────────────────────────────────────
+// 由脚本从源码生成、合入后重跑生成即可复原的文件（反应表快照、生成的类型清单……）。两票并发
+// 改它不是真冲突：后合入那票 sync 后重跑生成命令、`--amend` 折回即可。实测一条 150 票的 flow
+// 里单个生成物（G5 反应表快照）是卡住并行最多的一个文件，按真实时长模拟放开它
+// 省下的墙钟比其余所有粒度改动加起来还多。
+//   ## 生成物
+//   - scripts/gates/<快照文件> — `<再生成命令>`
+// ⛔ 只登记「有快照校验兜底」的文件（生成物与源码不一致时门禁会红）——没有兜底，「后合入者
+// 忘了重跑」会静默留下一份过期快照。路径写法同 `Touches`（锚点相对，逐文件，不许目录）。
+// 同一份清单 gate-stage-3.cjs 的断言⑦ 也读（两边口径必须一致）。
+const generated = new Set();
+{
+  let inGen = false;
+  for (const l of lines) {
+    if (/^#{1,6}\s/.test(l)) { inGen = /^##\s/.test(l) && /生成物/.test(l); continue; }
+    if (!inGen) continue;
+    const mg = /^-\s+`?([^`\s]+)`?/.exec(l);
+    if (mg && !mg[1].endsWith('/')) generated.add(mg[1]);
+  }
+}
+
 // 写集相交：目录前缀也算相交（`src/a/` 与 `src/a/b.ts` 是同一处）。这里只做前缀比较、
 // 不展开 glob——判断「能不能同批」时把 `src/*.ts` 与 `src/x.ts` 算作相交是收紧方向。
 const norm = (g) => g.replace(/\/+$/, '').replace(/\/\*+$/, '');
 const NONE = /^(none|无|-|—)$/i;
-function overlap(a, b) {
-  if (a.some((x) => NONE.test(x)) || b.some((x) => NONE.test(x))) return true;   // 预估不了 → 只能独占
+function overlap(a0, b0) {
+  if (a0.some((x) => NONE.test(x)) || b0.some((x) => NONE.test(x))) return true;   // 预估不了 → 只能独占
+  const a = a0.filter((x) => !generated.has(x)), b = b0.filter((x) => !generated.has(x));
   for (const x of a) for (const y of b) {
     const nx = norm(x), ny = norm(y);
     if (nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/')) return true;
@@ -386,7 +408,7 @@ if (SUB === 'missed') {
     say('      ⚠️ 「已达批宽上限」是一条合法理由，照写即可 —— 要的是这一批漏没漏槽位有据可查，');
     say('      不是逼你开满。两样都没有 = 漏了槽位，而漏批在事后是查不出来的。');
   }
-  say(`   批宽上限由 stage 提示词定（stage-3 当前是 3），\`missed\` 既不读它也不改它：`
+  say(`   并发上限由 stage 提示词定（stage-3 当前是 4），\`missed\` 既不读它也不改它：`
     + `本命令只回答「还有谁够格」，不回答「该不该开」。`);
   process.exit(0);
 }
