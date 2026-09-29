@@ -5,13 +5,13 @@ import {
   readActiveState,
   writeActiveState,
   appendLog,
-  type ActiveState,
-  materializeRenderedPrompt,
+  type ActiveState,  
 } from '../state.js';
 import { loadFlowConfig, getStageConfig } from '../flow-config-loader.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, assembledOverhead, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE } from '../prompt-render.js';
 import type { CommandResult } from '../types.js';
 import { stagePromptPath } from '../flow-paths.js';
+import { injectStagePrompt } from '../stage-injection.js';
 
 export async function handleResume(
   repoRoot: string,
@@ -136,12 +136,12 @@ export async function handleResume(
   const gateNote = stageCfg.completion.gate ? '\n' + gateProtocolNote() : '';
   let stageContent = '';
   if (existsSync(promptPath)) {
-    stageContent = injectableStagePrompt(
-      renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+    stageContent = await injectStagePrompt({
+      repoRoot, flowName, stageId: currentStage, sessionId: sessionId,
+      rendered: renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
       promptPath,
-      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
-      (text) => materializeRenderedPrompt(repoRoot, flowName, currentStage, text)
-    );
+      overhead: assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
+    });
   }
   stageContent += gateNote;
 

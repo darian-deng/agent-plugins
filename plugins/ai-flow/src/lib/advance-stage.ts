@@ -6,15 +6,15 @@ import {
   nextStage,
   appendLog,
   activeJsonPath,
-  signalPath,
-  materializeRenderedPrompt,
+  signalPath, 
   clearRenderedPrompt,
-  clearHold,
+  clearHold, 
 } from './state.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { readWatchdog } from './watchdog.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
+import { renderPrompt, assembledOverhead, gateProtocolNote } from './prompt-render.js';
 import { stagePromptPath } from './flow-paths.js';
+import { injectStagePrompt } from './stage-injection.js';
 
 export interface AdvanceResult {
   additionalContext: string;
@@ -82,6 +82,9 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
   const advanced = await patchActiveState(repoRoot, flowName, (cur) => ({
     current_stage: next,
     first_prompt_handled: false,
+    // Unconditionally: a lock armed for the stage just left points at the copy deleted
+    // above. The injection below re-arms one if the next stage is oversize too.
+    prompt_read_pending: null,
     // The nudge budget is per stage: entering one is fresh evidence the session is
     // moving, and the stage that spent its budget is over.
     watchdog: { ...readWatchdog(cur), nudges_this_stage: 0 },
@@ -111,13 +114,13 @@ export async function advanceStage(repoRoot: string, flowName: string, sessionId
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
-      // Oversize prompts are NOT injected in truncated form — see `injectableStagePrompt`.
-      promptContent = injectableStagePrompt(
-        renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+      // Oversize prompts are NOT injected in truncated form — see `stagePromptInjection`.
+      promptContent = await injectStagePrompt({
+        repoRoot, flowName, stageId: next, sessionId: sessionId,
+        rendered: renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length + callerOverhead,
-        (text) => materializeRenderedPrompt(repoRoot, flowName, next, text)
-      );
+        overhead: assembledOverhead(assemble) + gateNote.length + callerOverhead,
+      });
     } catch { /* non-fatal */ }
   }
   promptContent += gateNote;

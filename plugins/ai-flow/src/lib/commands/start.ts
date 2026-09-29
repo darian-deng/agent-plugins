@@ -1,15 +1,16 @@
 import { existsSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
 import { loadFlowConfig } from '../flow-config-loader.js';
-import { hasActiveFlow, isForeignCheckout, writeActiveState, appendLog, materializeRenderedPrompt, type ActiveState } from '../state.js';
+import { hasActiveFlow, isForeignCheckout, writeActiveState, appendLog, type ActiveState } from '../state.js';
 import { bindSession } from '../session-registry.js';
-import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, injectableStagePrompt, assembledOverhead, commandOutputPrefix, capInjectedText, REQUIREMENT_SOURCE } from '../prompt-render.js';
+import { renderPrompt, buildAiFlowPreamble, gateProtocolNote, assembledOverhead, commandOutputPrefix, capInjectedText, REQUIREMENT_SOURCE } from '../prompt-render.js';
 import { findPreflightCommand } from '../preflight.js';
 import { runScript } from '../script-executor.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from '../context.js';
 import type { CommandResult } from '../types.js';
 import { flowDefDir, stagePromptPath } from '../flow-paths.js';
 import { pruneLegacyInstall } from '../legacy-cleanup.js';
+import { injectStagePrompt } from '../stage-injection.js';
 
 const BLOCK_START_IF_ABOVE_PCT = 95;
 
@@ -179,12 +180,12 @@ export async function handleStart(
   const gateNote = firstStage.completion.gate ? '\n' + gateProtocolNote() : '';
   let stageContent = '';
   if (existsSync(promptPath)) {
-    stageContent = injectableStagePrompt(
-      renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+    stageContent = await injectStagePrompt({
+      repoRoot, flowName, stageId: firstStage.id, sessionId: sessionId,
+      rendered: renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
       promptPath,
-      assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
-      (text) => materializeRenderedPrompt(repoRoot, flowName, firstStage.id, text)
-    );
+      overhead: assembledOverhead(assemble) + gateNote.length + commandOutputPrefix(flowName).length,
+    });
   }
   stageContent += gateNote;
 

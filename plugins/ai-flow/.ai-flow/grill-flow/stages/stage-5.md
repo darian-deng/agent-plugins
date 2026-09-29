@@ -11,7 +11,7 @@
 
 ## 前置读取
 
-- `{{project_root}}/docs/grill-flows/<flow_id>/` 下 `alignment.md` / `wayfinder-map.md` / `spec.md` / `tickets.md` / `candidates.md`（沉淀候选主来源）/ `review.md`（`<flow_id>` 用 context 注入的实际值）
+- `{{project_root}}/docs/grill-flows/<flow_id>/` 下 `alignment.md` / `wayfinder-map.md` / `spec.md` / `tickets.md` / `candidates.md`（沉淀候选主来源）/ `review.md` / `doc-suspects.md`（若有；⛔ **不是**沉淀候选）（`<flow_id>` 用 context 注入的实际值）
 - `{{flow_def}}/references/adr-scan.md` — 定位既有 ADR 目录（写入口径、冲突/supersede 判断）
 
 ## 入场校验（含 /clear 重入）
@@ -24,15 +24,16 @@ git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || { echo "ERROR: HEAD
 
 校验通过后，沉淀写入都在这笔 feat 之上、**不 commit**；approve 后 `amend` 折回它（见 Signal）。
 
-**/clear 重入**：引擎注入的 stage 已是 gate-pending → 沉淀多半已写入工作树（未提交）。重读 candidates.md 与已写的 context 文件重建沉淀清单，approve 后照 Signal 段 amend 幸存文件（`git add -A` 天然只收工作树现存改动）。
+**/clear 重入**：引擎注入的 stage 已是 gate-pending → 沉淀多半已写入工作树（未提交）。重读 candidates.md、`doc-suspects.md` 与已写的 context 文件重建沉淀清单（含第 2 步的过滤与第 5 步「疑似该改的文档」一节），approve 后照 Signal 段 amend 幸存文件（`git add -A` 天然只收工作树现存改动）。
 > **背景怎么传下去**：`/clear` 之后先按 `{{flow_def}}/references/handoff.md` 取本次需求的目标 / 已拍板决策 / 边界（本段的重入判据只回答「物理上走到哪」，不回答「该知道什么」）；本 stage 走之前也照那份契约把交接写下来。
 
 ## 步骤
 
 1. **收候选**：汇总 candidates.md + 从 alignment（关键决策）/ wayfinder-map（被否方案+依据）/ spec（decisions）/ review（findings 暴露的约定）提取候选。去重。
-2. **逐条走 handle-one-directive**：对每条候选，用 optimize-claude-context 判定归属层——ADR（缘由/否定类架构决策）/ rules / CLAUDE.md（约定/边界），自带跨层冲突检测、ADR 重叠 → 原地更新 / supersede、README 索引维护。
-3. **持久产物自包含**：写进 context 层的知识面向没有本次 session、不翻 docs/grill-flows/ 的未来读者——不得引用 flow 内部临时指代（`T<n>` / 「见上文」等），展开成实质内容。
-4. 汇总一张「沉淀清单」（增 / 改 / supersede 了什么）供 gate 呈现，并告知开发者：**approve 后将 amend 进本次 feat 提交**；`git diff HEAD` 查看本次沉淀写入、`git restore <路径>` 可在 approve 前撤回某条（approve 后该文件不进提交）。
+2. **先过滤「绕路当正解」**：候选若是「为绕开某条门禁 / 文档规定而采用的手法」（镜像、复制类型、搬文件躲计数这类），⛔ 不直接沉淀——先问「是不是那条文档 / 门禁该改」，把它并进第 5 步的「疑似该改的文档」一节交开发者判。开发者在 gate 上判「手法本身就对」→ 那次**不 approve**（「不批 = 就地改再重呈」）：把该条补走第 3 步写入，再重呈；判「文档该改」→ 不沉淀，开发者自己决定另开需求改文档。
+3. **逐条走 handle-one-directive**：对每条候选，用 optimize-claude-context 判定归属层——ADR（缘由/否定类架构决策）/ rules / CLAUDE.md（约定/边界），自带跨层冲突检测、ADR 重叠 → 原地更新 / supersede、README 索引维护。
+4. **持久产物自包含**：写进 context 层的知识面向没有本次 session、不翻 docs/grill-flows/ 的未来读者——不得引用 flow 内部临时指代（`T<n>` / 「见上文」等），展开成实质内容。
+5. 汇总一张「沉淀清单」（增 / 改 / supersede 了什么）供 gate 呈现；**另起一节「疑似该改的文档」**：把 `doc-suspects.md` 的行与第 2 步滤出的候选**按文档条目聚合**（例：「某文档某节 × 4 票」，列每处更短写法），⛔ 不写进 context 层、只呈给开发者判。并告知开发者：**approve 后将 amend 进本次 feat 提交**；`git diff HEAD` 查看本次沉淀写入、`git restore <路径>` 可在 approve 前撤回某条（approve 后该文件不进提交）。
 
 ## 输出规格
 
@@ -40,9 +41,9 @@ git log -1 --format=%B | grep -q "flow-squash: <flow_id>" || { echo "ERROR: HEAD
 
 ## 完成条件
 
-- 所有候选已逐条评估并归置（写入或明确判定不记，理由留痕）。
+- 所有候选已逐条评估并归置（写入 / 明确判定不记且理由留痕 / 因「绕路手法」列入「疑似该改的文档」待开发者判——三者之一）。
 - 跨源冲突已检测处理；ADR 重叠已原地更新 / supersede。
-- 沉淀清单已备好供 gate 呈现。
+- 沉淀清单已备好供 gate 呈现；`doc-suspects.md` 存在时，「疑似该改的文档」一节已按文档条目聚合列出。
 
 ## Signal
 

@@ -12,7 +12,7 @@ import {
   gcRegistry,
   isForeignCheckout,
   type ActiveState,
-  materializeRenderedPrompt,
+  materializeRenderedPrompt, 
 } from './state.js';
 import { bindSession } from './session-registry.js';
 import { emptyWatchdog } from './watchdog.js';
@@ -20,9 +20,10 @@ import { truncateError, flowStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, writtenDocLengthNote } from './prompt-render.js';
+import { renderPrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, writtenDocLengthNote } from './prompt-render.js';
 import { stagePromptPath as stagePromptTemplatePath } from './flow-paths.js';
 import { pruneLegacyInstall } from './legacy-cleanup.js';
+import { injectStagePrompt } from './stage-injection.js';
 
 
 export async function handleSessionStart(
@@ -363,13 +364,13 @@ export async function handleSessionStart(
   let promptContent = '';
   if (existsSync(promptPath)) {
     try {
-      // Oversize prompts are NOT injected in truncated form — see `injectableStagePrompt`.
-      promptContent = injectableStagePrompt(
-        renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
+      // Oversize prompts are NOT injected in truncated form — see `stagePromptInjection`.
+      promptContent = await injectStagePrompt({
+        repoRoot, flowName, stageId: state.current_stage, sessionId: session_id,
+        rendered: renderPrompt(readFileSync(promptPath, 'utf-8'), repoRoot, flowName),
         promptPath,
-        assembledOverhead(assemble) + gateNote.length,
-        (text) => materializeRenderedPrompt(repoRoot, flowName, state.current_stage, text)
-      );
+        overhead: assembledOverhead(assemble) + gateNote.length,
+      });
     } catch { /* non-fatal */ }
   }
   promptContent += gateNote;

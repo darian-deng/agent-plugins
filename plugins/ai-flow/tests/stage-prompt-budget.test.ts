@@ -4,7 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { advanceStage } from '../src/lib/advance-stage.js';
 import { createFlowTestRepo, writeActiveState, BLOCKING_CONFIG } from './fixtures/helpers.js';
-import { renderPrompt, injectableStagePrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
+import { renderPrompt, stagePromptInjection, assembledOverhead, buildAiFlowPreamble, gateProtocolNote, commandOutputPrefix, capInjectedText, INJECTED_BRANCH_CAP, REQUIREMENT_SOURCE, BRANCH_SOURCE, INLINE_INJECTION_BUDGET, READ_SAFE_CHARS, READ_MAX_LINES, READ_MAX_LINE_CHARS } from '../src/lib/prompt-render.js';
 import { renderedPromptPath, materializeRenderedPrompt } from '../src/lib/state.js';
 import { PLUGIN_ROOT } from '../src/lib/flow-paths.js';
 
@@ -13,7 +13,7 @@ const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
 
 /**
  * 一份 stage 提示词渲染后超过宿主的内联上限时，**引擎不会把超长正文交给宿主**：
- * `injectableStagePrompt` 把渲染后的提示词落盘到 `state/current-prompt.md`，改注入一条
+ * `stagePromptInjection` 把渲染后的提示词落盘到 `state/current-prompt.md`，改注入一条
  * 「它没随这次注入送到你手上，现在立刻 Read」的指令（v0.63.0 起）。⇒ 超预算的代价是
  * **一次 Read 往返**，不是静默丢规则。
  *
@@ -27,6 +27,20 @@ const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
  * 这份测试是那条预算的唯一执行方。仓库里早有同类先例：`doc-length-note.test.ts` 给一条
  * 4 行的 note 设了硬预算——而比它大三个数量级的 stage 提示词此前没有任何约束。
  */
+/**
+ * Pages allowed to go over the inline budget. Over it the engine hands the prompt over as a
+ * file and the read lock refuses the main session everything else until it has Read that
+ * file whole — nothing is dropped, it costs one Read round-trip per injection. Listing a page
+ * is a deliberate act (it trades that round-trip for room); a listed page is still held to
+ * what one Read can return whole (`READ_SAFE_CHARS` and the line limits).
+ */
+const READ_FALLBACK_OK = new Set<string>([
+  // The two pages that kept running out of room: the stage-3 dispatch page carries every
+  // red line of the main loop, stage-2 every rule for cutting tickets.
+  'grill-flow/stages/stage-2.md',
+  'grill-flow/stages/stage-3.md',
+]);
+
 const KNOWN_OVERSIZE = new Set<string>([
   // 已知欠账：这些提示词现在就在丢内容，必须逐个拆到预算之内。
   // ⛔ 只许从这张表里删，不许往里加——加一条就是让一份新提示词开始静默丢内容。
@@ -64,7 +78,7 @@ const atInstalledPath = (s: string): string => s.split(PLUGIN_ROOT).join(DEEP_PL
  * ⚠️ 宿主的上限管的是**组装后的整条 `additionalContext`**，不是提示词本身。只量 `renderPrompt()`
  * 会少算几百字符——一份实际会溢出的提示词就这么当成「内联得下」通过，而溢出是静默的。
  *
- * 有**四个**注入点（`grep -rn injectableStagePrompt src`）：`advance-stage` / `session-handler` /
+ * 有**四个**注入点（`grep -rn injectStagePrompt src`）：`advance-stage` / `session-handler` /
  * `commands/start` / `commands/resume`。它们包的东西不一样，所以这里逐个复刻、取**最大**的那个：
  *
  * - `advance` 框架最短，但它的 `[ai-flow:paths]` 前言由**调用方**在外面拼，而 gated stage 全部经
@@ -133,7 +147,23 @@ describe('stage 提示词的内联预算', () => {
     for (const p of prompts) expect(existsSync(p.file), p.id).toBe(true);
   });
 
+  it('READ_FALLBACK_OK 里的每一项都是真实存在的 stage（防拼错成恒绿）', () => {
+    const ids = new Set(prompts.map((p) => p.id));
+    for (const id of READ_FALLBACK_OK) expect(ids.has(id), id).toBe(true);
+  });
+
   for (const p of stagePrompts()) {
+    if (READ_FALLBACK_OK.has(p.id)) {
+      it(`${p.id} 允许走强制读：一次 Read 必须能整篇读完`, () => {
+        const flow = p.id.split('/')[0]!;
+        const rendered = atInstalledPath(renderPrompt(readFileSync(p.file, 'utf-8'), DEEP_ANCHOR, flow));
+        const lines = rendered.split('\n');
+        expect(rendered.length, `${p.id} 渲染后 ${rendered.length} 字符，超过一次 Read 能整篇读完的上限`).toBeLessThanOrEqual(READ_SAFE_CHARS);
+        expect(lines.length).toBeLessThan(READ_MAX_LINES);
+        expect(Math.max(...lines.map((l) => l.length))).toBeLessThan(READ_MAX_LINE_CHARS);
+      });
+      continue;
+    }
     const known = KNOWN_OVERSIZE.has(p.id);
     it(`${p.id} ${known ? '（已知欠账，只许变小）' : '渲染后不超过内联上限'}`, () => {
       const flow = p.id.split('/')[0]!;
@@ -169,7 +199,7 @@ describe('stage 提示词的内联预算', () => {
 
 /**
  * 上面那一组是**算术**测试：它在测试文件里复刻一遍 overhead 的算法，然后拿 flow 里的提示词去比。
- * 它抓不到「引擎忘了把某一段的长度传给 `injectableStagePrompt`」——那种漏算里，测试算的和引擎
+ * 它抓不到「引擎忘了把某一段的长度传给 `stagePromptInjection`」——那种漏算里，测试算的和引擎
  * 算的是两回事，而测试永远算对。实测过：把 `advance-stage.ts` 里 `+ gateNote.length` 删掉，
  * 上面 15 个用例连同全仓 557 个用例**全绿**。
  *
@@ -300,7 +330,7 @@ describe('注入预算的行为级回归（调真引擎，不在测试里复算 
   });
 });
 
-describe('injectableStagePrompt', () => {
+describe('stagePromptInjection', () => {
   /** 落盘成功时的桩：返回一个副本路径。 */
   const ok = (p = '/repo/.ai-flow/f/state/current-prompt.md') => () => p;
   /** 落盘失败时的桩。降级路径靠它覆盖——CR 变异验证过：这条路上的文案此前零测试。 */
@@ -308,13 +338,13 @@ describe('injectableStagePrompt', () => {
 
   it('预算之内 → 原样注入', () => {
     const short = 'x'.repeat(100);
-    expect(injectableStagePrompt(short, '/repo/.ai-flow/f/stages/s.md', 0, ok())).toBe(short);
+    expect(stagePromptInjection(short, '/repo/.ai-flow/f/stages/s.md', 0, ok()).text).toBe(short);
   });
 
   it('包裹开销计入判据：正文本身没超、加上包裹就超 → 走兜底', () => {
     const body = 'x'.repeat(INLINE_INJECTION_BUDGET - 100);
-    expect(injectableStagePrompt(body, '/p.md', 0, ok())).toBe(body);      // 不计开销 → 通过
-    const out = injectableStagePrompt(body, '/p.md', 400, ok());           // 计入开销 → 兜底
+    expect(stagePromptInjection(body, '/p.md', 0, ok()).text).toBe(body);      // 不计开销 → 通过
+    const out = stagePromptInjection(body, '/p.md', 400, ok()).text;           // 计入开销 → 兜底
     expect(out).toContain('/repo/.ai-flow/f/state/current-prompt.md');
     expect(out).not.toContain('xxxxx');
   });
@@ -322,7 +352,7 @@ describe('injectableStagePrompt', () => {
   it('超预算 → 不注入截断正文，而是指向渲染副本 + 「立刻 Read」', () => {
     const long = '正文'.repeat(INLINE_INJECTION_BUDGET);
     const copy = '/repo/.ai-flow/f/state/current-prompt.md';
-    const out = injectableStagePrompt(long, '/repo/.ai-flow/f/stages/stage-3.md', 0, ok(copy));
+    const out = stagePromptInjection(long, '/repo/.ai-flow/f/stages/stage-3.md', 0, ok(copy)).text;
     expect(out).toContain(copy);
     expect(out).toContain('Read');
     expect(out.length).toBeLessThan(INLINE_INJECTION_BUDGET);
@@ -338,7 +368,7 @@ describe('injectableStagePrompt', () => {
   it('落盘失败 → 指向模板，且必须警告占位符未展开 + 补上长度纪律', () => {
     const long = '正文'.repeat(INLINE_INJECTION_BUDGET);
     const tpl = '/repo/.ai-flow/f/stages/stage-3.md';
-    const out = injectableStagePrompt(long, tpl, 0, fails);
+    const out = stagePromptInjection(long, tpl, 0, fails).text;
     expect(out).toContain(tpl);                    // 退回模板路径
     expect(out).toContain('{{flow_root}}');        // 点名那个会被照字面抄的东西
     expect(out).toContain('没有被展开');

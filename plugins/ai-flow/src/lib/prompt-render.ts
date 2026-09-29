@@ -34,7 +34,7 @@ import { flowDefDir, flowAnchorDir } from './flow-paths.js';
  * byte-based budget understates the overflow by ~1.9x and would set the wrong
  * target size.
  *
- * Why we care — but read `injectableStagePrompt` below before concluding anything
+ * Why we care — but read `stagePromptInjection` below before concluding anything
  * from this number. Spilling USED to be silent: the model got the first ~10% and
  * nothing told it the rest existed, because the path inside the host's preview
  * points at the HOST's copy of the injection, not at the stage file. Observed back
@@ -42,7 +42,7 @@ import { flowDefDir, flowAnchorDir } from './flow-paths.js';
  * ones that fell off the edge carried the rules whose violation is silent.
  *
  * That is NO LONGER what happens. Since v0.63.0 the engine never hands the host an
- * oversize body: `injectableStagePrompt` materializes the RENDERED prompt to
+ * oversize body: `stagePromptInjection` materializes the RENDERED prompt to
  * `state/current-prompt.md` and injects an order to read it. So going over budget
  * costs one Read round-trip, not a silent loss of rules.
  *
@@ -52,6 +52,26 @@ import { flowDefDir, flowAnchorDir } from './flow-paths.js';
  * for a different reason: the model can skip that Read, or half-read it.
  */
 export const INLINE_INJECTION_BUDGET = 10_000;
+
+/**
+ * Largest rendered prompt allowed to go over the inline budget and be handed over as a
+ * file instead (the read lock makes that hand-over reliable). Derived from what one Read
+ * returns whole, measured: the host caps a Read at 256 KB and, below that, by tokens — a
+ * 200 KB all-CJK file came back cut at line 769 (~20,700 characters, `truncatedByTokenCap`),
+ * a 60 KB one whole. CJK is the worst case per character, so 15,000 keeps ~25% margin.
+ * Lines matter too: Read returns at most 2,000 lines and cuts lines past 2,000 characters.
+ */
+export const READ_SAFE_CHARS = 15_000;
+export const READ_MAX_LINES = 2_000;
+export const READ_MAX_LINE_CHARS = 2_000;
+
+/** Whether one Read returns `text` whole (see `READ_SAFE_CHARS`). */
+export function readableInOneRead(text: string): boolean {
+  const lines = text.split('\n');
+  return text.length <= READ_SAFE_CHARS
+    && lines.length < READ_MAX_LINES
+    && lines.every((l) => l.length < READ_MAX_LINE_CHARS);
+}
 
 /**
  * Decide what actually gets injected for a stage prompt.
@@ -151,7 +171,15 @@ export function commandOutputPrefix(flowName: string): string {
  * copy is self-contained.) Copying a literal `{{flow_root}}` into Write is silent — it creates a directory
  * by that name and the write lands nowhere. See `materializeRenderedPrompt`.
  */
-export function injectableStagePrompt(
+/**
+ * `pointedTo` is the file the text sends the model to, or null when the prompt went inline;
+ * `readableWhole` says whether one Read can return that file whole. A pointer alone is advice
+ * the model may skip or half-read (observed: never read at all in one session,
+ * `cat … | head -50` in another), so the engine arms a read lock on it — see
+ * `injectStagePrompt`, the only way callers should reach this. A file one Read cannot return
+ * whole gets no lock (it could never be released) and the text says to read it in parts.
+ */
+export function stagePromptInjection(
   rendered: string,
   promptPath: string,
   overhead: number,
@@ -160,14 +188,18 @@ export function injectableStagePrompt(
   // forgets it should fail to compile, not fail quietly at runtime. Pass `() => null` to opt
   // into the degraded path deliberately.
   materialize: (rendered: string) => string | null
-): string {
-  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return rendered;
+): { text: string; pointedTo: string | null; readableWhole: boolean } {
+  if (rendered.length + overhead <= INLINE_INJECTION_BUDGET) return { text: rendered, pointedTo: null, readableWhole: true };
   const readyPath = materialize?.(rendered) ?? null;
   const target = readyPath ?? promptPath;
-  return (
+  // Measured on the prompt alone, for the wording. Whether to lock is decided on the file
+  // actually written (it carries a header) — see `injectStagePrompt`.
+  const readableWhole = readableInOneRead(rendered);
+  return { pointedTo: target, readableWhole, text: (
     `⛔ 本 stage 的提示词是 ${rendered.length} 字符，超过宿主注入能内联携带的上限（${INLINE_INJECTION_BUDGET} 字符），` +
     `**因此它没有随这次注入送到你手上**。\n\n` +
     `**现在立刻用 Read 工具读完整提示词，读完再开始任何动作：**\n${target}\n\n` +
+    (readableWhole ? '' : `（它超过一次 Read 能整篇返回的长度：用 offset / limit 分段读，直到读到最后一行。）\n\n`) +
     (readyPath
       ? `（这是引擎为你落盘的**渲染后**副本：路径占位符已展开、写盘文档长度纪律已在内。` +
         `Gate 协议不在副本里，它随本次注入另给。）\n\n`
@@ -180,7 +212,7 @@ export function injectableStagePrompt(
     // degraded template-pointer path needs it appended, or an oversize stage loses the
     // length discipline entirely.
     (readyPath ? '' : '\n' + writtenDocLengthNote())
-  );
+  ) };
 }
 
 /**

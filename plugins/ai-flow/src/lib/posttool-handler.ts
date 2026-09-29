@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { execSync } from 'child_process';
 import type { PostToolInput } from './types.js';
 import {
@@ -14,6 +14,9 @@ import {
   readSignal,
   nextStage,
   isForeignCheckout,
+  promptReadLockBinds,
+  realPathLoose,
+  clearPromptReadLock,
 } from './state.js';
 import { truncateError } from './format.js';
 import { contextPct, DEFAULT_CONTEXT_WINDOW } from './context.js';
@@ -47,6 +50,21 @@ export async function handlePostTool(
   const { flowName, state, repoRoot } = active;
 
   try {
+
+  // ─── The oversize prompt has been read whole → release the lock ─────────────
+  // "Whole" is judged on what the Read returned, not on its arguments: the host caps a
+  // Read by tokens as well as lines, and reports it (`numLines < totalLines`,
+  // `truncatedByTokenCap`) — a partial read must not count. A failed Read arrives as
+  // PostToolUseFailure, never here, so it cannot release the lock either.
+  if (tool_name === 'Read' && promptReadLockBinds(state, session_id, input.agent_id)) {
+    const lock = state.prompt_read_pending!;
+    const file = (input.tool_response as { file?: { startLine?: number; numLines?: number; totalLines?: number } } | null)?.file;
+    const target = realPathLoose(resolve(cwd, String(input.tool_input['file_path'] ?? '')));
+    if (target === realPathLoose(lock.path) && file && file.startLine === 1 && file.numLines === file.totalLines) {
+      await clearPromptReadLock(repoRoot, flowName);
+      await appendLog(repoRoot, flowName, session_id, `PROMPT_READ_LOCK_RELEASED lines=${file.totalLines}`);
+    }
+  }
 
   // ─── Stall watchdog: "a turn is running" ───────────────────────────────────
   // Stamped here, before the control-plane branches below (each of which returns),

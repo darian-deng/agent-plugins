@@ -53,6 +53,7 @@ const PROJECT_ARTIFACTS = new Set([
   'tickets.md',
   'tickets-archive.md',
   'candidates.md',
+  'doc-suspects.md',
   'review.md',
   'plan.md',
   'design.md',

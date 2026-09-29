@@ -11,6 +11,11 @@ import {
   isForeignCheckout,
   ticketTreeAnchor,
   realPathLoose,
+  promptReadLockBinds,
+  clearPromptReadLock,
+  patchActiveState,
+  PROMPT_READ_MAX_DENIES,
+  PROMPT_READ_DENY_WINDOW_MS,
   realPath,
 } from './state.js';
 import { loadFlowConfig, getStageConfig, resolveDocsPaths, stageIndex, getStageByPromptPath } from './flow-config-loader.js';
@@ -296,6 +301,43 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
     if (refusal) {
       await appendLog(repoRoot, activeFlowName, session_id, `SUBAGENT_ASYNC_BLOCKED tool=${tool_name} agent=${input.agent_id}`);
       return deny(refusal);
+    }
+  }
+
+  // ─── An oversize stage prompt is read before anything else ──────────────────
+  // Over the inline budget the prompt is handed over as a file with an order to Read it.
+  // An order is advice: observed once never read at all, once read as `cat … | head -50`.
+  // So until the owning main session has Read it whole (posttool clears the lock), every
+  // other call is refused. It heals itself instead of wedging: a lock for another stage, a
+  // file that is gone, or `PROMPT_READ_MAX_DENIES` refusals drop it and log why.
+  if (!foreign && promptReadLockBinds(state, session_id, input.agent_id)) {
+    const lock = state.prompt_read_pending!;
+    const why = lock.stage !== state.current_stage ? 'stage'
+      : !existsSync(lock.path) ? 'missing'
+      : lock.denies >= PROMPT_READ_MAX_DENIES ? 'denies'
+      : null;
+    if (why) {
+      await clearPromptReadLock(repoRoot, activeFlowName);
+      await appendLog(repoRoot, activeFlowName, session_id, `PROMPT_READ_LOCK_DROPPED reason=${why} path=${lock.path}`);
+    } else {
+      const readsIt = tool_name === 'Read'
+        && realPathLoose(resolve(cwd, String(tool_input['file_path'] ?? ''))) === realPathLoose(lock.path);
+      if (!readsIt) {
+        const now = Date.now();
+        await patchActiveState(repoRoot, activeFlowName, (cur) => {
+          const l = cur.prompt_read_pending;
+          if (!l) return {};
+          // Same round (a parallel batch) → do not count it again.
+          if (l.last_deny_at !== undefined && now - l.last_deny_at < PROMPT_READ_DENY_WINDOW_MS) return {};
+          return { prompt_read_pending: { ...l, denies: l.denies + 1, last_deny_at: now } };
+        });
+        await appendLog(repoRoot, activeFlowName, session_id, `PROMPT_READ_LOCK_DENY tool=${tool_name}`);
+        return deny(
+          `本 stage 的提示词超过了内联上限，是以文件交给你的，你还没读完它。\n` +
+          `先用 Read 工具**整篇**读这个文件（⛔ 不带 offset / limit，也别用 Bash cat / head）：\n${lock.path}\n` +
+          `读完之前其它工具调用都会被拒——你手上还没有这个 stage 的规则，现在做的任何事都是凭猜。`
+        );
+      }
     }
   }
 

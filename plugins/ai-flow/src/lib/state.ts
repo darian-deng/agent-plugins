@@ -50,6 +50,38 @@ interface LegacyContextFields {
   context_blocked?: boolean;
 }
 
+/**
+ * After this many refusals the lock drops itself and logs it. A lock that can never clear
+ * (the Read keeps failing, a permission rule denies it) would otherwise leave `abort` —
+ * losing the whole flow — as the only way out.
+ */
+export const PROMPT_READ_MAX_DENIES = 3;
+/**
+ * Refusals this close together count as one round. A model's first message often sends
+ * several tool calls in parallel; counted one by one, a single batch would spend the whole
+ * allowance before the model had seen one refusal, and the lock would drop unread.
+ */
+export const PROMPT_READ_DENY_WINDOW_MS = 10_000;
+
+/** True when the owning main session is the caller this lock binds. */
+export function promptReadLockBinds(state: ActiveState, sessionId: string, agentId: string | undefined): boolean {
+  const lock = state.prompt_read_pending;
+  if (!lock || agentId !== undefined || lock.session_id !== sessionId) return false;
+  // `resume` leaves the owner null until the next SessionStart; a DIFFERENT owner means
+  // this session is a read-only second session in the same checkout.
+  return (state.last_session_id ?? sessionId) === sessionId;
+}
+
+export interface PromptReadLock {
+  path: string;
+  stage: string;
+  session_id: string;
+  /** Refusal rounds so far; the lock gives way after `PROMPT_READ_MAX_DENIES` rather than wedge the flow. */
+  denies: number;
+  /** When the current round of refusals started (epoch ms); see `PROMPT_READ_DENY_WINDOW_MS`. */
+  last_deny_at?: number;
+}
+
 export interface ActiveState {
   flow_id: string;
   flow_name: string;
@@ -82,6 +114,13 @@ export interface ActiveState {
    * cross-flow pollution.
    */
   base_sha_code?: string;
+  /**
+   * Set when a stage prompt went over the inline budget and was handed over as a file to
+   * Read. Until the owning main session has read that file whole, PreToolUse refuses its
+   * other tool calls (the read-lock block in `handlePreTool`, released in `handlePostTool`). Lives in active.json so `abort` and flow
+   * completion take it with them.
+   */
+  prompt_read_pending?: PromptReadLock | null;
   /**
    * Stall-watchdog bookkeeping: when this session last ended a turn, whether
    * background work was in flight then, whether the watchdog cron exists, and how
@@ -312,6 +351,17 @@ export function realPathLoose(p: string): string {
     dir = up;
   }
   return join(realPath(dir), ...rest);
+}
+
+/** Arm the read lock for a prompt handed over as a file. Overwrites any older lock. */
+export async function armPromptReadLock(
+  repoRoot: string, flowName: string, path: string, stage: string, sessionId: string
+): Promise<void> {
+  await patchActiveState(repoRoot, flowName, { prompt_read_pending: { path, stage, session_id: sessionId, denies: 0 } });
+}
+
+export async function clearPromptReadLock(repoRoot: string, flowName: string): Promise<void> {
+  await patchActiveState(repoRoot, flowName, (cur) => (cur.prompt_read_pending ? { prompt_read_pending: null } : {}));
 }
 
 /** The active flow declared at exactly this anchor, or null. */
@@ -805,7 +855,7 @@ export function scriptsDir(repoRoot: string, flowName: string): string {
  * Where the engine parks a RENDERED copy of the current stage prompt for the model to Read.
  *
  * Two engine paths hand the model a path instead of the prompt body: the oversize fallback
- * (`injectableStagePrompt`) and the gate-pending branch. Both used to point at
+ * (`stagePromptInjection`) and the gate-pending branch. Both used to point at
  * `stages/<id>.md` — the TEMPLATE — and that is not the same document:
  *
  *  - `{{flow_root}}` / `{{project_root}}` are still literal there. Substitution happens in

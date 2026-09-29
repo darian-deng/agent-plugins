@@ -131,13 +131,18 @@ prompt is injected inline only while `rendered.length + overhead <= budget`; pas
 materialised to disk and the model gets a "go Read this file" pointer instead, costing a round
 trip on every entry into that stage — including every `/clear` re-entry. `rendered` counts the
 prompt *after* `{{flow_root}}` / `{{project_root}}` / `{{flow_def}}` expand to absolute paths, so
-the same file costs more in a deeply nested monorepo — and `{{flow_def}}` expands to the
+the same file costs more in a deeply nested monorepo. Since 0.84.0 the pointer is enforced: the
+injection arms `prompt_read_pending`, and PreToolUse refuses the owning main session every other
+call until PostToolUse sees a whole-file Read of that copy (judged on the Read's own
+`startLine` / `numLines` / `totalLines`; the lock drops itself on a stage mismatch, a missing
+file, or `PROMPT_READ_MAX_DENIES` refusals). A page may therefore exceed the budget if it is
+listed in `READ_FALLBACK_OK` and stays under `READ_SAFE_CHARS` (what one Read returns whole) — and `{{flow_def}}` expands to the
 installed plugin path (`~/.claude/plugins/…/ai-flow/<version>/.ai-flow/<flow>`), which is
 longer than the project path it replaced. Before growing any `stages/*.md`, measure: expand the
 placeholders against the longest project path you care about, add `writtenDocLengthNote()` plus
-the assembly overhead, and compare. `grill-flow`'s stage-3 runs ~230–320 characters under the
-cap, so it is the one that bites first — put new prose in a `references/*.md` (those are read on
-demand and cost nothing here) and spend stage-page characters only on a pointer.
+the assembly overhead, and compare. `grill-flow`'s stage-2 and stage-3 are listed, so they may
+grow past the inline cap; every other page must still fit inline. Short pages remain better —
+put new prose in a `references/*.md` where it belongs and spend stage-page characters on a pointer.
 
 ## Stall watchdog
 
