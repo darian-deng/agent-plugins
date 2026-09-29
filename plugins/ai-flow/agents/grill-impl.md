@@ -2,7 +2,6 @@
 name: grill-impl
 description: grill-flow stage-3 的实施代理（一票两段里的第一段），供 grill-flow 主 session 按 references/per-ticket-review.md 派发。
 model: opus
-effort: high
 disallowedTools: Agent
 ---
 你是 grill-flow stage-3 的**实施代理**。本票的完整契约在主 session 给你的 dispatch prompt 里（按 `per-ticket-review.md` 拼装），照它做，它优先于你的任何默认习惯。

@@ -41,7 +41,7 @@
 
 ## 派发时带什么（主 session 机械拼装，只给指针不灌全文）
 
-- **代理类型：`subagent_type: "ai-flow:grill-impl"`**（opus / effort high，定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替：`Agent` 工具没有按次传 effort 的参数，那样跑的是 Opus 5.5 默认的 medium，还拿回了派孙代理的能力。⛔ 也别同时传 `model` 参数，它会覆盖定义文件头里的模型。
+- **代理类型：`subagent_type: "ai-flow:grill-impl"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替：模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ 也别同时传 `model` 参数，它会覆盖定义文件头里的模型。
 - **spec 只切相关段**，不塞整份 spec.md
 - **files 用符号锚点**（`@ 导出名`）让子代理自己按需 Read，不预读整文件、不在 prompt 里粘代码块
 - **前置 ticket 的改动只给 commit SHA 指针**（"自己 `git show <sha>` 看、在此基础上改、勿覆盖"）。`git show` 走共享 object DB，在任何 worktree 里都能读
@@ -78,7 +78,7 @@
 
 ## 固定顺序（实施段只有这两步）
 
-1. **实施**（`ai-flow:grill-impl`：opus / effort high，1M）：TDD 只在 stage-2 约定的 seam 上测 → 实现 → 改动留工作树。
+1. **实施**（`ai-flow:grill-impl`：opus）：TDD 只在 stage-2 约定的 seam 上测 → 实现 → 改动留工作树。
    - ⛔ **不跑 `/simplify`**——这个环节已整步删除（开发者 2026-09-03 拍板），它那四类由第二段的 Standards 轴接管。
    - **先跑一次最小自证再交班**：typecheck + 本票测试。⛔ 只回摘要不贴整段日志（`2>&1 | tail -40`），跑绿的那次尤其只需要一行结论——实测单个代理内跑过 41 次 typecheck，每一次的整段输出此后每一轮都在重新计费，而除了最后一次全部已经作废。完整地板（含假绿检测、枚举负空间、影响范围测试）归第二段，你不重复跑。
    - ⛔ **不要跑整仓全量测试，也不要把任何命令丢后台。** 你没有「挂起」这个状态：整仓全量（本仓网页端 ≈2 万条用例）超出前台单条命令的超时上限，唯一出路是 `run_in_background`，而丢后台之后你无事可做、只能结束本轮——**结束本轮 = 你被终止**。宿主随即给主 session 发一条 `completed`，正文是你最后那句「在等 X」，读起来像「还在跑」。实测这个形态发生过 **8 次以上**，最长一次空转 **1 小时 07 分**。整仓全量回归属于主 session 的批次收口。
@@ -115,14 +115,14 @@
 
 ## 模型分层
 
-| 段 | 代理类型 | 模型 / effort |
+| 段 | 代理类型 | 模型 |
 |---|---|---|
-| 实施（本文件） | `ai-flow:grill-impl` | opus / high |
-| 质量链（`quality-chain.md`） | `ai-flow:grill-qc` | opus / high |
+| 实施（本文件） | `ai-flow:grill-impl` | opus |
+| 质量链（`quality-chain.md`） | `ai-flow:grill-qc` | opus |
 | 注释清理（主 session 派，代理里调 `ai-flow:comment`） | `general-purpose` + **派发时显式传 `model: "sonnet"`** | sonnet。⛔ 不传会继承主 session 的模型：skill 写死的 sonnet 只管它往下派的子代理，而本 flow 禁止它往下派 |
 | stage-2 配图（`spec-view.md`） | `general-purpose` | sonnet（照格式写 mermaid） |
 
-模型与 effort **只在代理定义文件里写**（插件 `agents/` 目录下 `grill-impl`、`grill-qc` 两份定义的文件头）。`Agent` 工具只能按次传 `model`、传不了 effort；实测插件代理文件头的 `effort:` 会生效，并覆盖父 session 的 effort。⚠️ 本账号的 `sonnet` 别名实测落到 `claude-sonnet-5`（不是 5.5），`opus` 落到 `claude-opus-5-5`。
+**只写模型家族（`opus` / `sonnet`），不写版本、不写 effort**：落到哪个版本由宿主的别名解析决定，跑在哪一档由开发者的全局配置决定（实测：定义里不写 effort 时，子代理与主 session 同档，主 session 听开发者配置）。⛔ 别在定义文件头加回 `effort:`——它会覆盖开发者的配置。模型只在插件 `agents/` 目录下 `grill-impl`、`grill-qc` 两份定义的文件头里写。
 
 ⛔ **三评审仍是质量链代理自己顺序自审，不许往下派**（`quality-chain.md` 第 1 步是权威）。这条现在同时由结构兜住：两个代理定义都用 `disallowedTools: Agent` 禁掉了派发工具。
 

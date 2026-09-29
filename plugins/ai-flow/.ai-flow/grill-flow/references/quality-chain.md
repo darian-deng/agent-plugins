@@ -56,7 +56,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 `<FD>` = 本文件所在目录的上一级（定义层：`references/` `scripts/` 在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（`state/` 在这儿）。就是 stage-3 提示词 `[ai-flow:paths]` 块里 `flow_def:` / `flow_root:` 那两行展开出来的绝对路径。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
 
-- **代理类型：`subagent_type: "ai-flow:grill-qc"`**（opus / effort high，且定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替——`Agent` 工具没有按次传 effort 的参数，那样跑出来是 Opus 5.5 默认的 medium，还拿回了派孙代理的能力。⛔ **也别同时传 `model` 参数**：它会覆盖定义文件头里的模型，而 `qc-metrics` 的 `model=` 照抄的是定义里的值，于是样本被静默标错。
+- **代理类型：`subagent_type: "ai-flow:grill-qc"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替——模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ **也别同时传 `model` 参数**：它会覆盖定义文件头里的模型，而 `qc-metrics` 的 `model=` 照抄的是定义里的值，于是样本被静默标错。
 - `<WT>` 与（monorepo 时）`<WT_ROOT>` 绝对路径 + cwd 纪律
 - **该票票面整段**（票行 + `delivers` + `Blocked by` + `Touches` + `AC`）——`Touches` 是第 6 步自检的对照物，缺了那一项做不了
 - **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径
@@ -101,7 +101,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 ⛔ **三个轴全部审完之前，你还没走到第 2 步。** 中途停下会被宿主记成「这一票交付了」（它在你「没有存活的后台子进程」时就给主 session 发完成通知），而你其实一行都没提交。要么审完，要么按第 6 步报「受阻」。
 
-> **待验证的下一步（本轮先不做）**：三评审改由**主 session** 派三个独立评审代理（depth-1 派发能被正确唤醒，主循环里批内实施代理并行派发就是这个模式）。那样能拿回「三个独立视角」，代价是主 session 每票多吸收约 1 万字符（实测三评审回报均值 3340 字符 × 3），且要在一票中间串行等两轮、同时还在并行调度 3 张票。等自审形态跑出数据再定。⚠️ **质量链代理本身已从 sonnet 换成 opus / effort high**（`ai-flow:grill-qc`）：拿 `qc-metrics` 判这件事时，按 `model=` 字段分组，⛔ 别把换模型前后的样本混在一起下结论。
+> **待验证的下一步（本轮先不做）**：三评审改由**主 session** 派三个独立评审代理（depth-1 派发能被正确唤醒，主循环里批内实施代理并行派发就是这个模式）。那样能拿回「三个独立视角」，代价是主 session 每票多吸收约 1 万字符（实测三评审回报均值 3340 字符 × 3），且要在一票中间串行等两轮、同时还在并行调度 3 张票。等自审形态跑出数据再定。⚠️ **质量链代理本身已从 sonnet 换成 opus**（`ai-flow:grill-qc`，effort 跟随开发者配置）：拿 `qc-metrics` 判这件事时，按 `model=` 字段分组，⛔ 别把换模型前后的样本混在一起下结论。
 
 ### 2. 裁 findings
 
@@ -295,9 +295,9 @@ git -C <WT> diff --shortstat --cached HEAD      # 形态乙 / 丙用 HEAD~1
 - **主 session 抄进票面的只有**：首行、第二行 `qc-metrics`、AC 逐条一行结论、待裁 finding 的编号 + 一句话、`cm:done` 那一行。**回报正文不抄**——它已经落在子代理 transcript 里（找回路径见 `handoff.md`），抄一遍是第二次付费、下个 session 切片读是第三次。
 - **第二行必须是本票的规模记账**（格式固定，⛔ 不要改字段名或加空格；主 session 会原样抄进 tickets.md）：
   ```
-  qc-metrics: diff=<第 5 步量到的 insertions + deletions> axes=<三轴 findings 条数> fixed=<就地修掉的机械型条数> model=<m> effort=<e>
+  qc-metrics: diff=<第 5 步量到的 insertions + deletions> axes=<三轴 findings 条数> fixed=<就地修掉的机械型条数> model=<m>
   ```
-  两个条数按你实际收到的填，一条都没有就写 `0`。`model=` / `effort=` **照抄你系统提示里给的那两个值**（`ai-flow:grill-qc` 代理定义的正文里写着）；系统提示里没有这两个值 ⇒ 写 `model=unknown effort=unknown`，⛔ 别凭感觉填——那说明主 session 派错了代理类型，这一行就是它唯一的痕迹。按这两个字段分组，才分得开换模型前后的样本。`fixed=` 数的是**第 2 步就地修掉的机械型条数**（含 Standards 轴接管的那四类）。⛔ 不再有 `simplify=` 字段。
+  两个条数按你实际收到的填，一条都没有就写 `0`。`model=` **照抄你系统提示里给的值**（`ai-flow:grill-qc` 代理定义的正文里写着）；系统提示里没有 ⇒ 写 `model=unknown`，⛔ 别凭感觉填——那说明主 session 派错了代理类型，这一行就是它唯一的痕迹。按它分组，才分得开换模型前后的样本。⚠️ 不记 effort：它跟随开发者的全局配置、代理自己看不到，跨开发者比样本时要记得这一层差异。⚠️ 汇总时，**行尾带 `effort=high` 的样本单独成组**：那是定义里写死 high 的那几个版本记的；不带 `effort=` 的 `model=opus` 样本跑在各开发者自己的档位上，两组不能混。`fixed=` 数的是**第 2 步就地修掉的机械型条数**（含 Standards 轴接管的那四类）。⛔ 不再有 `simplify=` 字段。
   **为什么要它**：这一段的成本有一个规模无关的地板（⚠️ 下面这几个数都是**旧形态**测的——三评审当时是派出去的独立子代理，模型是 sonnet——⛔ 只用来说明「地板存在」，别拿来论证当前形态该不该减配；实测回归截距 3.22M，最小的一张票——13 行 diff——实测 3.71M，是它实施段 0.846M 的 4.38 倍（含子孙代理的子树口径）），而**票的大小事前预测不了**（`stage-2.md` 记着实测：票面声明的改动路径数与实际工作量的秩相关 0.15、字数 0.12、六特征回归交叉验证 R² 为负）。所以「小票该不该减配」只能靠事后样本判，而现在样本量是 1。⛔ **别把这一行写进 commit body**——stage-4 的 squash 会 `git reset` 摊平、用全新 message 重提，再 `git branch -D` 删掉票分支，那些 per-ticket commit 连引用都不剩（实测 squash 后 `git log --format=%b | grep -c qc-metrics` = 0）。写进 tickets.md 才随 squash 永久留在仓库里，日后 `grep -rn qc-metrics docs/grill-flows/` 一条命令跨 flow 汇总。
 - ⛔ **「我在等 X」不是一种状态。** 评审子代理没齐、测试还在跑——那些时候你没有可交付的东西，返回等于向主 session 谎报完成（宿主会照发 `completed`）。两条出路：① 同步等到底；② 确实等不到（工具挂死、超时）→ 状态写**受阻**，正文第一句写清「卡在哪一步 / 工作树里现在有什么 / 从哪继续」。
 - **回报之前先确认这棵树上没有别人在写**：按本文件的契约你**不该派出过任何子代理**（三评审自审、注释清理已上收），所以树上只该有你自己的改动。回报前重跑一次 `git -C <WT> status --porcelain` 并把结果写进回报——如果它和你以为的不一样，说明有东西比你活得久还在写这棵树，⛔ 别 commit，报「受阻」。

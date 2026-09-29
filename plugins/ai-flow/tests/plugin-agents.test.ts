@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENTS_DIR = join(__dirname, '..', 'agents');
 
 /**
- * 插件代理的 model / effort 只能写在定义文件头（Agent 工具传不了 effort），而 grill-qc 还要在
- * 正文里把同样两个值原样交给 `qc-metrics`。两处靠手工同步：改了文件头忘了正文，每一行
- * qc-metrics 都会静默记成旧值，换模型前后的样本就分不开了。
+ * 插件代理只指定模型家族：版本交给宿主的别名解析，effort 交给开发者的全局配置。
+ * 定义文件头里写了 `effort:` 就会覆盖开发者的配置（实测：定义不写时子代理与主 session 同档）。
+ * grill-qc 还要在正文里把模型原样交给 `qc-metrics`，那一处与文件头靠手工同步。
  */
 
 function parse(file: string): { front: Record<string, string>; body: string } {
@@ -32,17 +32,17 @@ describe('插件代理定义', () => {
   });
 
   for (const f of files) {
-    it(`${f}: name 与文件名一致，且禁掉 Agent 工具（子代理派孙代理只能空转等待）`, () => {
+    it(`${f}: name 与文件名一致、禁掉 Agent 工具、只写模型家族、不写 effort`, () => {
       const { front } = parse(f);
       expect(front['name']).toBe(f.replace(/\.md$/, ''));
       expect(front['disallowedTools']?.split(/[,\s]+/)).toContain('Agent');
-      expect(front['model']).toBeTruthy();
-      expect(front['effort']).toBeTruthy();
+      expect(['opus', 'sonnet', 'haiku', 'inherit']).toContain(front['model']);
+      expect(front['effort'], 'effort 交给开发者的全局配置，别在定义里写死').toBeUndefined();
     });
   }
 
-  it('grill-qc 正文交给 qc-metrics 的 model= / effort= 与文件头一致', () => {
+  it('grill-qc 正文交给 qc-metrics 的 model= 与文件头一致', () => {
     const { front, body } = parse('grill-qc.md');
-    expect(body).toContain(`model=${front['model']} effort=${front['effort']}`);
+    expect(body).toContain(`model=${front['model']}`);
   });
 });
