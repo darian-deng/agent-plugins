@@ -27,19 +27,7 @@ const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
  * 这份测试是那条预算的唯一执行方。仓库里早有同类先例：`doc-length-note.test.ts` 给一条
  * 4 行的 note 设了硬预算——而比它大三个数量级的 stage 提示词此前没有任何约束。
  */
-/**
- * Pages allowed to go over the inline budget. Over it the engine hands the prompt over as a
- * file and the read lock refuses the main session everything else until it has Read that
- * file whole — nothing is dropped, it costs one Read round-trip per injection. Listing a page
- * is a deliberate act (it trades that round-trip for room); a listed page is still held to
- * what one Read can return whole (`READ_SAFE_CHARS` and the line limits).
- */
-const READ_FALLBACK_OK = new Set<string>([
-  // The two pages that kept running out of room: the stage-3 dispatch page carries every
-  // red line of the main loop, stage-2 every rule for cutting tickets.
-  'grill-flow/stages/stage-2.md',
-  'grill-flow/stages/stage-3.md',
-]);
+import { READ_FALLBACK_OK } from './read-fallback-pages.js';
 
 const KNOWN_OVERSIZE = new Set<string>([
   // 已知欠账：这些提示词现在就在丢内容，必须逐个拆到预算之内。

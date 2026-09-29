@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { renderPrompt, INLINE_INJECTION_BUDGET } from '../src/lib/prompt-render.js';
+import { renderPrompt, INLINE_INJECTION_BUDGET, READ_SAFE_CHARS } from '../src/lib/prompt-render.js';
+import { READ_FALLBACK_OK } from './read-fallback-pages.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FLOWS_DIR = join(__dirname, '..', '.ai-flow');
@@ -282,8 +283,12 @@ for (const sp of SPLIT_STAGES) {
       });
     }
 
-    it('拆分后仍在内联预算之内', () => {
-      expect(rendered().length).toBeLessThanOrEqual(INLINE_INJECTION_BUDGET);
+    // 登记在 READ_FALLBACK_OK 的页面（0.84.0 起）允许超内联预算、由引擎落盘并强制整篇读，
+    // 硬线换成一次 Read 能整篇读完；其余页面仍守内联预算。两处测试共用同一份登记。
+    const key = `${sp.flow}/stages/${sp.stage}`;
+    const cap = READ_FALLBACK_OK.has(key) ? READ_SAFE_CHARS : INLINE_INJECTION_BUDGET;
+    it(`拆分后仍在预算之内（${READ_FALLBACK_OK.has(key) ? '一次 Read 读完' : '内联'}）`, () => {
+      expect(rendered().length).toBeLessThanOrEqual(cap);
     });
   });
 }
