@@ -20,8 +20,9 @@
 //     `lane:`；没有就按「`Touches` 相交 ∨ 有 `Blocked by` 关系」取连通分量。
 'use strict';
 
-const { existsSync, readFileSync, realpathSync } = require('fs');
-const { join, dirname, basename, resolve } = require('path');
+const { existsSync, readFileSync, realpathSync, readdirSync, writeFileSync, renameSync } = require('fs');
+const { join, dirname, basename, resolve, relative } = require('path');
+const { execFileSync } = require('child_process');
 
 const die = (m) => { process.stderr.write('❌  ' + m + '\n'); process.exit(1); };
 const say = (m) => process.stdout.write(m + '\n');
@@ -88,10 +89,14 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' missed [<在飞票号> …]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' rm [<票号>]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' ticket <票号>\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' brief <票号> impl|qc|comment\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' mark <票号> [--done] [--drop <键>]… [<子项>]…\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 6。判据与两种模式的代价见 references/execution-unit.md。\n'
     + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票，按取票顺序（插票 → 下游链长降序 → 文件顺序）排好。只摆事实，不放行。\n'
     + 'ticket T<n>：原样打印该票票块（派发 prompt 里给子代理的就是这条命令，代替内联票面）。\n'
+    + 'brief T<n> <段>：打印派发简报（路径 / 回报落盘路径 / 票面 / 交接段 `### 派发纪律` 原文），子代理开工先跑它。\n'
+    + 'mark T<n>：给票记账——每个 <子项> 追加成票下一行 `  - <子项>`；--drop <键> 先删掉该键的子项（键照写、精确匹配，如 idle: / qc:done）；--done 把 [ ] 勾成 [x]。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
@@ -162,8 +167,8 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && SUB !== 'missed' && SUB !== 'rm' && SUB !== 'ticket') {
-  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark'].includes(SUB)) {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
 }
 
 const capIdx = process.argv.indexOf('--cap');
@@ -377,6 +382,138 @@ if (SUB === 'ticket') {
   say(lines.slice(t.start, t.end + 1).join('\n'));
   process.exit(0);
 }
+
+// ── 子命令 `brief`：一份派发简报，子代理开工先跑它 ─────────────────────────────
+// 存在理由：派发 prompt 里大半是机械拼装——四个绝对路径、回报落盘路径、票面命令、以及
+// 交接段那份项目派发纪律。实测一个 42 分钟的主 session 派了 25 次，prompt 合计 6.5 万字符，
+// 光「边界纪律」一段就 2.6 万：同一份纪律每派一次就经主 session 抄一遍、进它的上下文一遍，
+// 而且是有损抄写（交接段原文 9.3K，prompt 里平均只剩 1.5K，17 份出现 8 种版本）。
+// 改成脚本现切现给：主 session 的 prompt 只剩「跑这条命令」+ 它自己裁过的补充；纪律只有
+// 交接段那一份，不另存副本（handoff.md 禁第二份交接源的理由同样适用）。
+// ⛔ 这里只拼机械部分。形态甲/乙/丙、前置票结论、已订正项这些要判断的，仍由主 session 写进 prompt。
+if (SUB === 'brief') {
+  const t = process.argv[3];
+  const seg = process.argv[4];
+  if (!/^[TS]\d+$/.test(t || '') || !['impl', 'qc', 'comment'].includes(seg)) die('用法：brief T<n>|S<n> impl|qc|comment');
+  // S<n> = 旁路修复（side-fix.md）：有自己的树、走同一套实施 / 质量链，但不在台账里立票。
+  const side = t.startsWith('S');
+  const rec = side ? null : tk.get(t);
+  if (!side && !rec) die(`tickets.md 里找不到 ${t} 的票行`);
+  const git = (cwd, ...a) => { try { return execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  // 树的登记名：一票一树 / 旁路是 `<flow_id>-<票号>`；车道模式下票没有自己的树，住在票面
+  // `wip: R<n>`（派发前写的在飞标记）或 `lane: R<n>` 指的那条车道里。
+  const regOf = (name) => { try { return JSON.parse(readFileSync(join(flowDir, 'state', 'worktrees', `${state.flow_id}-${name}.json`), 'utf-8')).path || null; } catch { return null; } };
+  let wtRoot = regOf(t);
+  let laneName = null;
+  if (!wtRoot && rec) {
+    // 只认行首的 `- wip:` 子项（同 RM_SUBITEM 的口径）：票块里的备注常会提到别的车道。
+    const wipLine = lines.slice(rec.start + 1, rec.end + 1).map((l) => /^\s+-\s*`?wip:\s*`?(R\d+)/.exec(l)).find(Boolean);
+    laneName = (wipLine || [])[1] || (rec.lane && /^R\d+$/.test(rec.lane) ? rec.lane : null);
+    if (laneName) wtRoot = regOf(laneName);
+  }
+  const top = git(projectRoot, 'rev-parse', '--show-toplevel');
+  const sub = top ? relative(real(top), real(projectRoot)) : '';
+  const wt = wtRoot ? (sub ? join(wtRoot, sub) : wtRoot) : null;
+  const FD = resolve(__dirname, '..');
+  const reports = join(flowDir, 'state', 'reports');
+  let files = [];
+  try { files = readdirSync(reports); } catch { /* 还没有 */ }
+  const rounds = (kind) => files.map((f) => new RegExp(`^${t}\\.${kind}-(\\d+)\\.md$`).exec(f)).filter(Boolean)
+    .map((m) => Number(m[1])).sort((a, b) => a - b);
+  const out = [`# ${t} · ${{ impl: '实施', qc: '质量链', comment: '注释清理' }[seg]} 派发简报（schedule.cjs brief 生成；主 session 补的要点在派发 prompt 里）`, '', '## 路径（全部绝对路径）'];
+  out.push(wt ? `- <WT>（项目根，与票面 Touches 同基准）= ${wt}` + (laneName ? `（车道 ${laneName}）` : '')
+    : `- <WT> = ⚠️ 找不到 ${t} 的工作树（state/worktrees 里没有 ${t}` + (laneName ? `、也没有车道 ${laneName}` : side ? '' : '，票面也没写 `wip: R<n>`') + ' 的登记）——先停下回报主 session，别在别处动手');
+  if (wtRoot && sub) out.push(`- <WT_ROOT>（worktree 根）= ${wtRoot}`);
+  out.push(`- <FD>（定义层）= ${FD}`, `- <FR>（flow 实例，state/ 在这儿）= ${flowDir}`, `- flow_id = ${state.flow_id}`);
+  if (seg === 'comment' && wt) out.push(`- 本票当前 commit = ${git(wt, 'rev-parse', 'HEAD') || '（取不到）'}`);
+  const impl = rounds('impl');
+  if (seg === 'impl') out.push('', '## 你的回报全文落盘路径', `${join(reports, `${t}.impl-${(impl.at(-1) || 0) + 1}.md`)}（⛔ 不许覆盖已有轮次）`);
+  if (seg === 'qc') {
+    out.push('', '## 本票实施回报全文（按轮次）', ...(impl.length ? impl.map((k) => `- ${join(reports, `${t}.impl-${k}.md`)}`) : ['- ⚠️ 没找到——先停下回报主 session']));
+    out.push('', '## 你的回报全文落盘路径', `${join(reports, `${t}.qc-${(rounds('qc').at(-1) || 0) + 1}.md`)}（⛔ 不许覆盖已有轮次）`);
+  }
+  out.push('', '## 票面', side ? '（旁路修复不在台账里立票：要修什么、判据是什么，看派发 prompt）' : lines.slice(rec.start, rec.end + 1).join('\n'));
+  // 交接段里的 `### 派发纪律` 小节，原文照给（handoff.md 第 ⑥ 格）。
+  const hs = lines.findIndex((l) => /^##\s+🔴\s*重入交接/.test(l));
+  let ds = -1;
+  if (hs !== -1) for (let i = hs + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) if (/^###\s+派发纪律/.test(lines[i])) { ds = i; break; }
+  if (ds === -1) {
+    out.push('', '## 项目派发纪律', '⚠️ 交接段里没有 `### 派发纪律` 小节。主 session 须把本项目的边界纪律补进 prompt，并尽快在交接段补上这一节。');
+  } else {
+    let de = ds + 1;
+    while (de < lines.length && !/^#{2,3}\s/.test(lines[de])) de++;
+    out.push('', '## 项目派发纪律（交接段原文，逐条遵守，与你的代理定义同等效力）', ...lines.slice(ds + 1, de));
+  }
+  say(out.join('\n').replace(/\n{3,}/g, '\n\n'));
+  process.exit(0);
+}
+
+// ── 子命令 `mark`：给票记账 ───────────────────────────────────────────────────
+// 存在理由：记账（batch: / with: / impl:done / cm:done / qc-metrics / qc:done / 勾选）原先每次由
+// 主 session 现写一段 python heredoc 改 tickets.md——实测一个 42 分钟的 session 写了 26 次，
+// 命令文本 3.3 万字符、输出 1.9 万，全进主 session 上下文。操作只有三种：追加子项、删掉某键、勾选。
+if (SUB === 'mark') (() => {
+  const args = process.argv.slice(3);
+  const t = args.shift();
+  if (!/^T\d+$/.test(t || '')) die('用法：mark T<n> [--done] [--drop <键>]… [<子项>]…');
+  const rec = tk.get(t);
+  if (!rec) die(`tickets.md 里找不到 ${t} 的票行`);
+  let done = false;
+  const drops = [];
+  const adds = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--done') done = true;
+    else if (args[i] === '--drop') { if (!args[i + 1]) die('--drop 后面要跟键名，如 --drop idle:'); drops.push(args[++i]); }
+    else adds.push(args[i]);
+  }
+  if (!done && drops.length === 0 && adds.length === 0) die('mark 至少要有一个 <子项>、--drop 或 --done');
+  // 并发的两条 mark 各自「读全文 → 改 → 写回」会互相覆盖：先拿一把排他锁，再重读文件。
+  const lockPath = ticketsPath + '.lock';
+  const { openSync, closeSync, unlinkSync, statSync } = require('fs');
+  let fd = null;
+  for (let i = 0; i < 100 && fd === null; i++) {
+    try { fd = openSync(lockPath, 'wx'); }
+    catch (e) {
+      if (e.code !== 'EEXIST') die(`建不了锁文件 ${lockPath}：${e.message}`);
+      // 锁超过 30 秒 = 持有者已经死了（mark 本身是毫秒级），收走它。
+      try { if (Date.now() - statSync(lockPath).mtimeMs > 30_000) unlinkSync(lockPath); } catch { /* 刚被释放 */ }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  if (fd === null) die('tickets.md 正被另一条 mark 占着（5 秒没等到锁）——稍后重跑');
+  try {
+    const L = readFileSync(ticketsPath, 'utf-8').split('\n');
+    // 票块口径与上面的解析、gate-stage-3.cjs 一致：票行起，到下一条顶格条目或标题为止，中间
+    // 空行不断块；插入点是块里最后一条非空行之后。
+    const start = L.findIndex((l) => new RegExp(`^- \\[[ xX]\\] ${t}\\b`).test(l));
+    // 不能 die：process.exit 会跳过 finally、把锁留下。
+    if (start === -1) { process.stderr.write(`❌  tickets.md 里找不到 ${t} 的票行（锁内重读时已不在）\n`); process.exitCode = 1; return; }
+    let last = start;
+    for (let i = start + 1; i < L.length; i++) {
+      if (/^- \S/.test(L[i]) || /^#{1,6}\s/.test(L[i])) break;
+      if (L[i].trim() !== '') last = i;
+    }
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 按「键」精确匹配，不按前缀：`--drop qc` 不能顺手删掉 `qc-metrics` / `qc:done`。
+    // 键不带冒号时，后面也不许跟冒号：`qc` 只匹配子项 `qc`，不匹配 `qc:done`。
+    const dropRe = drops.map((k) => new RegExp('^\\s+-\\s*`?' + esc(k) + (k.endsWith(':') ? '' : '(?=$|[\\s`—])')));
+    const body = L.slice(start + 1, last + 1).filter((l) => !dropRe.some((r) => r.test(l)));
+    const removed = (last - start) - body.length;
+    for (const a of adds) body.push('  - ' + a.replace(/\n+/g, ' '));
+    if (done) L[start] = L[start].replace(/^- \[ \]/, '- [x]');
+    L.splice(start + 1, last - start, ...body);
+    const tmp = ticketsPath + '.' + process.pid + '.tmp';
+    writeFileSync(tmp, L.join('\n'));
+    renameSync(tmp, ticketsPath);
+    say(`✅ ${t}：+${adds.length} 条` + (removed ? `，删 ${removed} 条（${drops.join(' ')}）` : '') + (done ? '，已勾选' : ''));
+    if (drops.length && !removed) say(`⚠️ --drop ${drops.join(' ')} 一条都没删到：票块里没有这个键的子项（写在票行本身的不算；键要照写，带冒号的如 \`idle:\`）——核对一下键名。`);
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(lockPath); } catch { /* 已被收走 */ }
+  }
+})();
+if (SUB === 'mark') process.exit(process.exitCode || 0);
 
 // ── 子命令 `missed`：报「本可以一起开、却没开」的票 ──────────────────────────
 // 存在理由：stage-3 主循环的准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，

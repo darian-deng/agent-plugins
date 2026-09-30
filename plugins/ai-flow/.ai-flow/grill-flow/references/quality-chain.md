@@ -52,21 +52,22 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 
 ⛔ **三种形态都对不上（树干净、既没有 `[partial]` 也没有本票 commit）** → 停下报「受阻」，正文写「接到的工作树无未提交改动、也无本票 commit，实施段可能没交付或改动已被别人提交」。**不要自己去实现这张票**——那是实施段的事，你没有它的上下文，重做只会产出第二套实现。
 
-## 派发时带什么（主 session 机械拼装）
+## 派发时带什么（机械部分交给简报命令，prompt 只写你判断过的）
+
+🔴 **prompt 第一段固定是简报命令**：`node <FD>/scripts/schedule.cjs --flow-dir <FR> brief T<n> qc`。它给 `<WT>` / `<WT_ROOT>` / 本票全部实施回报路径 / 你的回报落盘路径（自动取下一个 `<k>`）/ 票面 / 交接段 `### 派发纪律` 原文。⛔ 这些别再抄进 prompt（理由与实测见 `per-ticket-review.md` 同名一节）。下面带 ✍️ 的是要你判断后写进 prompt 的。
 
 `<FD>` = 本文件所在目录的上一级（定义层：`references/` `scripts/` 在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（`state/` 在这儿）。就是 stage-3 提示词 `[ai-flow:paths]` 块里 `flow_def:` / `flow_root:` 那两行展开出来的绝对路径。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
 
 - **代理类型：`subagent_type: "ai-flow:grill-qc"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替——模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ **也别同时传 `model` 参数**：它会覆盖定义文件头里的模型，而 `qc-metrics` 的 `model=` 照抄的是定义里的值，于是样本被静默标错。
 - **`description` 以 `T<n>·质量链` 开头**（面板与 Stop 守卫数名额靠它，漏写会被催超上限，见 `per-ticket-review.md` 同名一条）
-- `<WT>` 与（monorepo 时）`<WT_ROOT>` 绝对路径 + cwd 纪律
-- **取票面的命令**（同 `per-ticket-review.md`「派发时带什么」那条：`node <FD>/scripts/schedule.cjs --flow-dir <FR> ticket T<n>`，⛔ 不内联、不给 tickets.md 路径）——`Touches` 是第 6 步自检的对照物，缺了那一项做不了
-- **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径
-- **前置/后继票关系**（票号 + 一句结论 + 它那笔 commit 的 sha）——第 5 步撞 pre-commit hook 时 `--no-verify` 的唯一依据
-- **本票全部实施轮次的回报全文路径**（`<FR>/state/reports/T<n>.impl-<k>.md`，`<k>` 从 1 起每轮一份，按轮次列全，绝对路径）——你自己读其中「取舍与为什么不选 X」段：你没写过这段代码，缺了它评审一问原因就只能上报。⛔ 主 session 别再把「取舍」改写成要点内联——实测改写本 1.1K–3.8K 字符，既占主 session 上下文、又不如原文忠实。**主 session 已裁 / 已订正过的项（改过的 AC、补过的 `Touches`）仍内联**，那些不在全文里。单票回报文件内容全部与本票相关，不属于下一条「给路径就被整篇读进来」防的那类大共享文件
-- **你的回报全文落盘路径**：`<FR>/state/reports/T<n>.qc-<k>.md`（`<k>` = 本票第几次派质量链，复派 +1，⛔ 不许覆盖前一次）
+- `<WT>` / `<WT_ROOT>` / 票面由简报给（⛔ 不内联、不给 tickets.md 路径）——`Touches` 是第 6 步自检的对照物
+- ✍️ **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径
+- ✍️ **前置/后继票关系**（票号 + 一句结论 + 它那笔 commit 的 sha）——第 5 步撞 pre-commit hook 时 `--no-verify` 的唯一依据
+- **本票全部实施轮次的回报全文路径**（简报按轮次列全）——子代理自己读其中「取舍与为什么不选 X」段：你没写过这段代码，缺了它评审一问原因就只能上报。⛔ 主 session 别再把「取舍」改写成要点内联——实测改写本 1.1K–3.8K 字符，既占主 session 上下文、又不如原文忠实。✍️ **主 session 已裁 / 已订正过的项（改过的 AC、补过的 `Touches`）仍写进 prompt**，那些不在全文里。单票回报文件内容全部与本票相关，不属于下一条「给路径就被整篇读进来」防的那类大共享文件
+- **回报全文落盘路径**由简报给：`<FR>/state/reports/T<n>.qc-<k>.md`（`<k>` = 本票第几次派质量链，复派 +1，⛔ 不许覆盖前一次）
 - `<FD>/references/fowler-smells.md` 的**绝对路径**（Standards 轴要携全文）
   - ⛔ **`<FD>` 的绝对路径每次都从注入 context 顶部 `[ai-flow:paths]` 的 `flow_def:` 行现取，不要从上文里抄。** 它带插件版本号（`…/ai-flow/<版本>/.ai-flow/<flow>`），插件一升级就变；跨越 0.69.0 迁移或跨插件升级恢复的 session，上文里那个是失效路径。实测过一次：resume 之后主 session 照旧从上文拼路径，三个质量链子代理全部拿到已被删除的 `references/` 路径，一个绕到自己 worktree 里那份陈旧副本，一个跑了 `find /` 全盘扫描。（引擎现在会拦下这种 `Read` 并点名正确路径，但那是兜底，不是让你少写这一步的理由。）
-- 形态是甲 / 乙 / 丙（见上）；**乙的话附上票面 `rest:` 字段的内容 + 它的完成状态**（「已由续做代理做完」/「无剩余」——⛔ 只丢一份清单过去，收到的人无法判断该不该等，见形态乙那条 fail-closed）；丙的话写明本轮任务是修 findings 还是 rebase 适配
+- ✍️ 形态是甲 / 乙 / 丙（见上）；**乙的话附上票面 `rest:` 字段的内容 + 它的完成状态**（「已由续做代理做完」/「无剩余」——⛔ 只丢一份清单过去，收到的人无法判断该不该等，见形态乙那条 fail-closed）；丙的话写明本轮任务是修 findings 还是 rebase 适配
 - ⛔ **不给 `tickets.md` / `spec.md` / `gate-stage-3.cjs` 的路径**（都是大文件，给了路径就被整篇读进来，此后每一轮都重新计费；实测被整篇读过 14 / — / 15 次）
 
 ## 固定顺序
@@ -134,7 +135,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 - 移出 commit 窗口之后，它迟到也不再影响 commit 边界。
 
 **主 session 侧怎么做**（stage-3 主循环第 5 步指到这里）：派一个 fresh-context 子代理（**`subagent_type: "ai-flow:grill-comment"`**，模型 sonnet 写在定义里；⛔ **别传 `model` 参数**、⛔ 别用 `general-purpose` 代替——那样要靠你每次记得传 `model: "sonnet"`，不传就继承主 session 的模型；`description` 以 `T<n>·注释清理` 开头，Stop 守卫数名额靠它）调
-`comment`，范围 = 本票那笔 commit 的改动。prompt 里只给本票变量：`<WT>`、本票 commit sha、范围文件清单、项目专属的注释约定（如有）。
+`comment`，范围 = 本票那笔 commit 的改动。prompt 里给简报命令 `node <FD>/scripts/schedule.cjs --flow-dir <FR> brief T<n> comment`（它给 `<WT>`、本票当前 commit 与项目派发纪律），再加范围文件清单、项目专属的注释约定（如有）。
 它改完由主 session `git -C <WT> commit --amend` 折回本票那笔。
 ⚠️ 它耗时 1.5–15 分钟（上面那个 93–886 秒区间）⇒ **丢后台去推别的票**，别原地等（主 session 会被完成通知唤醒，
 这是它有而子代理没有的能力）。

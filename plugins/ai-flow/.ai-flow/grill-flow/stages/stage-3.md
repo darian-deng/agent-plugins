@@ -84,7 +84,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> open <flow_id> T<n>
 1. **实施代理**（按 `per-ticket-review.md` 拼）→ 做完实现、改动留工作树不提交、按契约回报。
 2. 回报到手后**按第 4 步那两套判据复核** → 过了在该票那条写 `impl:done`（与 `qc:done` 同一口径，机器门不解析。**续做轮交付后照样写**——它是「剩余已做完」的唯一标记，漏了重入会再派一次实施）→ **再派质量链代理**（按 `quality-chain.md` 拼，`[partial]` 走形态乙），由它走三评审 → 裁 → 地板 → commit。
 
-契约里的「派发时带什么」是完整清单（含 cwd 纪律），这里只补一条：⛔ **票面给取票面命令 `schedule.cjs … ticket T<n>`，不内联、不给 `tickets.md` 路径**；固定纪律已在代理定义里，⛔ 别再抄进 prompt。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
+契约里的「派发时带什么」是完整清单（含 cwd 纪律），这里只补一条：⛔ **prompt 第一段给简报命令 `schedule.cjs … brief T<n> <段>`**（路径、回报落盘路径、票面、交接段派发纪律都在里面），票面不内联、不给 `tickets.md` 路径；固定纪律在代理定义里、项目纪律由简报切给，⛔ 都别再抄进 prompt。`spec.md` 同理只切相关段，`gate-stage-3.cjs` 不给路径。
 
 **派子代理的两条硬规则**（理由与失联处置在 `subagent-lifecycle.md`）：
 
@@ -141,7 +141,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 
 **记账的触发点是「该票 `close` 成功」，不是「本批结束」**——一票 ff 进需求分支后**立刻**做。理由：子代理的回报只活在你上下文里，`/clear` 随时会发生（代价见 `lane-mode.md`）。
 
-逐票记账（留工作树、不单独 commit），**顺序照这个来**：
+逐票记账（留工作树、不单独 commit），**顺序照这个来**；打标记一律用 `node <FD>/scripts/schedule.cjs --flow-dir <FR> mark T<n> [--done] [--drop <键>] '<子项>'…`，⛔ 不现写 python 改 tickets.md（实测一个 session 写了 26 次、3.3 万字符进上下文）：
 
 1. 落 candidates.md（带 ticket ID 前缀、append 前 grep 去重；沉淀候选只在回报**全文**里，从 `<FR>/state/reports/` 切那一段读，别读整份）
 2. **把质量链回报第二行的 `qc-metrics: …` 原样抄到该票那条**（与 `qc:done` 同一口径）。⛔ 别重算、别改格式——它是「小票该不该减配质量链」的唯一样本来源，commit body 留不住（squash 连分支一起删）

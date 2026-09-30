@@ -1121,6 +1121,61 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).code).toBe(0);
   });
 
+  it('brief：给路径、下一轮回报路径、票面与交接段「派发纪律」原文，不带别的小节', () => {
+    const head = '# t\n\n## 🔴 重入交接\n\n### 派发纪律（逐条）\n1. 规则甲\n2. 规则乙\n\n### 裁决纪律\n- 不该给子代理\n\n## 票\n\n';
+    const dir = makeFlow(head + T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
+    mkdirSync(join(dir, 'state', 'reports'), { recursive: true });
+    writeFileSync(join(dir, 'state', 'reports', 'T1.impl-1.md'), 'x');
+    const impl = sched(dir, 'brief', 'T1', 'impl');
+    expect(impl).toContain('<WT>（项目根，与票面 Touches 同基准）= /x');
+    expect(impl).toContain(join(dir, 'state', 'reports', 'T1.impl-2.md'));
+    expect(impl).toContain('- [ ] T1 x');
+    expect(impl).not.toContain('T2 x');
+    expect(impl).toContain('1. 规则甲\n2. 规则乙');
+    expect(impl).not.toContain('不该给子代理');
+    const qc = sched(dir, 'brief', 'T1', 'qc');
+    expect(qc).toContain(join(dir, 'state', 'reports', 'T1.impl-1.md'));
+    expect(qc).toContain(join(dir, 'state', 'reports', 'T1.qc-1.md'));
+    // 没开树的票、交接段没有那一节：都说出来，不静默
+    const bare = makeFlow(T('T1', false, 'src/a/'));
+    const out = sched(bare, 'brief', 'T1', 'impl');
+    expect(out).toContain('找不到 T1 的工作树');
+    expect(out).toContain('没有 `### 派发纪律` 小节');
+  });
+
+  it('mark：追加子项、按键删、勾选，只动这一张票', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/', '  - idle: 等 T9\n') + T('T2', false, 'src/b/'));
+    const out = sched(dir, 'mark', 'T1', '--drop', 'idle:', '--done', 'qc-metrics: diff=3 axes=0 fixed=0 model=opus', 'qc:done');
+    expect(out).toContain('✅ T1：+2 条，删 1 条（idle:），已勾选');
+    const md = readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8');
+    expect(md).toContain('- [x] T1 x\n  - Blocked by: none\n  - Touches: src/a/\n  - qc-metrics: diff=3 axes=0 fixed=0 model=opus\n  - qc:done\n- [ ] T2 x');
+    expect(md).not.toContain('idle:');
+    expect(sched(dir, 'mark', 'T1')).toContain('至少要有一个');
+    expect(sched(dir, 'mark', 'T99', 'x')).toContain('找不到 T99');
+  });
+
+  it('brief：车道模式按票面 wip:/lane: 找车道树；旁路 S<n> 不要票面', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/', '  - 📥 备注：之前误写成 wip: R1\n  - wip: R2\n'), ['R1', 'R2']);
+    expect(sched(dir, 'brief', 'T1', 'impl')).toContain('= /x（车道 R2）');
+    const side = makeFlow(T('T1', false, 'src/a/'), ['S1']);
+    const out = sched(side, 'brief', 'S1', 'qc');
+    expect(out).toContain('<WT>（项目根，与票面 Touches 同基准）= /x');
+    expect(out).toContain('旁路修复不在台账里立票');
+  });
+
+  it('mark：票块中间有空行不断块；--drop 按键精确匹配；没删到要说', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/', '\n  - idle: 等 T9\n  - qc-metrics: diff=1\n') + T('T2', false, 'src/b/'));
+    sched(dir, 'mark', 'T1', '--drop', 'idle:', 'impl:done');
+    const md = readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8');
+    expect(md).not.toContain('idle:');
+    expect(md).toContain('  - qc-metrics: diff=1\n  - impl:done\n- [ ] T2 x');
+    sched(dir, 'mark', 'T1', 'qc:done');
+    expect(sched(dir, 'mark', 'T1', '--drop', 'qc', 'x')).toContain('一条都没删到');
+    expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('  - qc:done');
+    expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('qc-metrics: diff=1');
+    expect(existsSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md.lock'))).toBe(false);
+  });
+
   it('missed --json 带上并发上限 cap（缺省 6，stop-guard 按它算空几个名额）', () => {
     const dir = makeFlow(T('T1', false, 'src/a/'));
     expect(JSON.parse(sched(dir, 'missed', '--json').trim().split('\n').pop()!).cap).toBe(6);

@@ -18,13 +18,13 @@ disallowedTools: Agent
 
 ## 路径与 cwd（每次派发都成立）
 
-- 派发 prompt 给你 `<WT>`（工作树里的项目根）、必要时 `<WT_ROOT>`（工作树根），以及 `<FD>`（flow 定义目录）、`<FR>`（主仓里的 flow 实例目录），都是绝对路径。没给就别猜，在回报里问。
+- 你要用到 `<WT>`（工作树里的项目根）、必要时 `<WT_ROOT>`（工作树根），以及 `<FD>`（flow 定义目录）、`<FR>`（主仓里的 flow 实例目录），都是绝对路径。prompt 给了 `<FD>` 和 `<FR>`，其余由下面的简报命令给；拿不到就别猜，在回报里问。
 - 每次 Bash 之间 cwd 可能被重置：git 一律 `git -C <WT> …`；要在工作树里跑的命令写成单条 `cd <WT> && …`；Write / Edit 的 `file_path` 一律绝对路径。⛔ 不 cd 到别的仓库目录；⛔ 不用裸 `git stash`（stash 栈在所有工作树之间共享）。
-- 票面用 prompt 里给的命令取：`node <FD>/scripts/schedule.cjs --flow-dir <FR> ticket T<n>`。⛔ 不要去读 `tickets.md`（整份台账很大，读进来之后每一轮都重新计费）。
-- 实施段的「取舍与为什么不选 X」在 prompt 列出的实施回报全文里（`<FR>/state/reports/T<n>.impl-<k>.md`，可能有多轮），自己读。
+- **开工第一步跑 prompt 里给的简报命令**：`node <FD>/scripts/schedule.cjs --flow-dir <FR> brief T<n> qc`。它给出上面这几个路径、本票各轮实施回报全文路径与你的回报落盘路径、票面，以及本项目的**派发纪律**（交接段原文）——那份纪律与本文件同等效力，逐条遵守。⛔ 不要去读 `tickets.md`（整份台账很大，读进来之后每一轮都重新计费）。
+- 实施段的「取舍与为什么不选 X」在简报列出的实施回报全文里（`<FR>/state/reports/T<n>.impl-<k>.md`，可能有多轮），自己读。
 
 ## 回报
 
-全文用 Write 写到 prompt 给的回报全文路径（`<FR>/state/reports/T<n>.qc-<k>.md`），最终消息只回首屏。两份各写什么见契约第 6 步。
+全文用 Write 写到简报给的回报全文路径（`<FR>/state/reports/T<n>.qc-<k>.md`），最终消息只回首屏。两份各写什么见契约第 6 步。
 
 回报里 `qc-metrics` 行末尾的 `model=` 照抄这里：`model=opus`（与本文件文件头一致；改文件头时同步改这一行）。
