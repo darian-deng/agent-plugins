@@ -6,10 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/hooks/session.ts
-import { readFileSync as readFileSync8 } from "fs";
+import { readFileSync as readFileSync9 } from "fs";
 
 // src/lib/session-handler.ts
-import { readFileSync as readFileSync7, existsSync as existsSync7 } from "fs";
+import { readFileSync as readFileSync8, existsSync as existsSync8 } from "fs";
 
 // src/lib/state.ts
 import {
@@ -494,10 +494,14 @@ function truncateError(e, max = 120) {
   const s = String(e).replace(/\n/g, " ");
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
-function flowStatusLine(opts) {
-  const prefix = opts.recovered ? "\u6062\u590D \xB7 " : "";
-  const gate = opts.gatePending ? " \xB7 gate \u5F85\u786E\u8BA4" : "";
-  return `[${opts.flowName}] ${prefix}${opts.stageId}${gate} \xB7 flow ${opts.flowId}`;
+function developerStatusLine(opts) {
+  const idx = opts.stages.findIndex((s) => s.id === opts.stageId);
+  const name = opts.stages[idx]?.name;
+  const where = idx >= 0 ? `${opts.flowName} \u7B2C ${idx + 1}/${opts.stages.length} \u6B65${name ? `\uFF1A${name}` : ""}` : `${opts.flowName} ${opts.stageId}`;
+  return opts.gatePending ? `${where} \xB7 \u8FD9\u4E00\u6B65\u5DF2\u5B8C\u6210\uFF0C\u7B49\u4F60\u786E\u8BA4\u8FDB\u4E0B\u4E00\u6B65` : where;
+}
+function readOnlyStatusLine(flowName) {
+  return `\u26A0 ${flowName} \u7531\u53E6\u4E00\u4E2A\u4F1A\u8BDD\u6301\u6709\uFF0C\u672C\u4F1A\u8BDD\u53EA\u8BFB\uFF1B\u90A3\u4E2A\u4F1A\u8BDD\u82E5\u5DF2\u5173\u95ED\uFF0C/clear \u5373\u53EF\u63A5\u7BA1`;
 }
 
 // src/lib/flow-config-loader.ts
@@ -4557,6 +4561,12 @@ var CompletionSchema = external_exports.object({
 });
 var StageConfigSchema = external_exports.object({
   id: StageIdSchema,
+  /**
+   * What the developer calls this stage ("逐票实施"). Only shown to the developer — the
+   * SessionStart status line and the agent panel's subagentStatusLine read it as
+   * "第 3/5 步：逐票实施". Optional: without it they show the position alone, never the id.
+   */
+  name: external_exports.string().min(1).optional(),
   prompt: external_exports.string().min(1),
   write_scope: external_exports.enum(["unrestricted", "docs_only"]),
   /**
@@ -4944,11 +4954,39 @@ function pruneLegacyInstall(repoRoot, flowName) {
   return { removed, configKeysDropped };
 }
 
+// src/lib/statusline-install.ts
+import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync7, writeFileSync as writeFileSync4, renameSync as renameSync3 } from "fs";
+import { randomBytes as randomBytes3 } from "crypto";
+import { join as join6 } from "path";
+var STATUSLINE_SCRIPT = "subagent-statusline.cjs";
+var STATUSLINE_SIDECAR = "subagent-statusline.json";
+function statuslineInstallDir() {
+  return join6(claudeDir(), "ai-flow");
+}
+function writeIfChanged(path, content) {
+  if (existsSync7(path) && readFileSync7(path, "utf-8") === content) return;
+  const tmp = `${path}.${randomBytes3(4).toString("hex")}.tmp`;
+  writeFileSync4(tmp, content);
+  renameSync3(tmp, path);
+}
+function installSubagentStatusline(pluginRoot = PLUGIN_ROOT) {
+  try {
+    const src = join6(pluginRoot, "statusline", STATUSLINE_SCRIPT);
+    if (!existsSync7(src)) return;
+    const dir = statuslineInstallDir();
+    mkdirSync3(dir, { recursive: true });
+    writeIfChanged(join6(dir, STATUSLINE_SIDECAR), JSON.stringify({ pluginRoot }, null, 2) + "\n");
+    writeIfChanged(join6(dir, STATUSLINE_SCRIPT), readFileSync7(src, "utf-8"));
+  } catch {
+  }
+}
+
 // src/lib/session-handler.ts
 async function handleSessionStart(input2) {
   const { cwd, session_id, model } = input2;
   await gcRegistry().catch(() => {
   });
+  installSubagentStatusline();
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
   const { flowName, state, repoRoot } = active;
@@ -4979,7 +5017,7 @@ async function handleSessionStart(input2) {
     if (state.last_session_id && state.last_session_id !== session_id) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_READONLY owner=${state.last_session_id}`);
       const activeFile = activeJsonPath(repoRoot, flowName);
-      const statusLine2 = `[ai-flow:${flowName}] \u5DE5\u7A0B\u8FDB\u884C\u4E2D\uFF0C\u672C session \u53EA\u8BFB\uFF08\u7981\u6B62\u4FEE\u6539\u9879\u76EE\u4E0E\u6D41\u7A0B\u547D\u4EE4\uFF09`;
+      const statusLine2 = readOnlyStatusLine(flowName);
       const lines = [
         `[ai-flow] \u5F53\u524D\u5DE5\u7A0B\u5DF2\u5728\u8FDB\u884C\u6D41\u7A0B '${flowName}'\uFF08\u7531\u53E6\u4E00 session \u63A7\u5236\uFF09\u3002`,
         ``,
@@ -5037,19 +5075,18 @@ async function handleSessionStart(input2) {
     const pathsPreamble = buildAiFlowPreamble(repoRoot, flowName, state.base_sha_code);
     if (isGatePending(signal, config, state.current_stage)) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
-      const statusLine2 = flowStatusLine({
+      const statusLine2 = developerStatusLine({
         flowName,
+        stages: config.stages,
         stageId: state.current_stage,
-        flowId: state.flow_id,
-        gatePending: true,
-        recovered: true
+        gatePending: true
       });
       const isTerminal = expectedNext === null;
       const templatePath = stagePromptPath(repoRoot, flowName, stageCfg.prompt);
       let renderedForRead = null;
       let templateReadable = true;
       try {
-        renderedForRead = renderPrompt(readFileSync7(templatePath, "utf-8"), repoRoot, flowName);
+        renderedForRead = renderPrompt(readFileSync8(templatePath, "utf-8"), repoRoot, flowName);
       } catch {
         templateReadable = false;
       }
@@ -5086,7 +5123,7 @@ async function handleSessionStart(input2) {
       const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
       const base = { additionalContext: pathsPreamble + result.additionalContext };
       if (!result.terminal && expectedNext) {
-        return { ...base, systemMessage: flowStatusLine({ flowName, stageId: expectedNext, flowId: state.flow_id, gatePending: false, recovered: false }) };
+        return { ...base, systemMessage: developerStatusLine({ flowName, stages: config.stages, stageId: expectedNext, gatePending: false }) };
       }
       return base;
     }
@@ -5103,14 +5140,14 @@ async function handleSessionStart(input2) {
     ].join("\n");
     const gateNote = stageCfg.completion.gate ? "\n" + gateProtocolNote() : "";
     let promptContent = "";
-    if (existsSync7(promptPath)) {
+    if (existsSync8(promptPath)) {
       try {
         promptContent = await injectStagePrompt({
           repoRoot,
           flowName,
           stageId: state.current_stage,
           sessionId: session_id,
-          rendered: renderPrompt(readFileSync7(promptPath, "utf-8"), repoRoot, flowName),
+          rendered: renderPrompt(readFileSync8(promptPath, "utf-8"), repoRoot, flowName),
           promptPath,
           overhead: assembledOverhead(assemble) + gateNote.length
         });
@@ -5118,12 +5155,11 @@ async function handleSessionStart(input2) {
       }
     }
     promptContent += gateNote;
-    const statusLine = flowStatusLine({
+    const statusLine = developerStatusLine({
       flowName,
+      stages: config.stages,
       stageId: state.current_stage,
-      flowId: state.flow_id,
-      gatePending: false,
-      recovered: true
+      gatePending: false
     });
     return { additionalContext: assemble(promptContent), systemMessage: statusLine };
   } catch (e) {
@@ -5138,7 +5174,7 @@ async function handleSessionStart(input2) {
 // src/hooks/session.ts
 var raw = (() => {
   try {
-    return readFileSync8(0, "utf-8");
+    return readFileSync9(0, "utf-8");
   } catch {
     return "{}";
   }
