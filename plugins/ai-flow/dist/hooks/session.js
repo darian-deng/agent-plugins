@@ -395,6 +395,11 @@ function readHold(repoRoot, flowName) {
     return null;
   }
 }
+var WRAP_UP_HOLD_PREFIX = "wrap-up:";
+function isWrapUpHold(content) {
+  const first = content.split("\n").find((l) => l.trim() !== "") ?? "";
+  return first.trim().toLowerCase().startsWith(WRAP_UP_HOLD_PREFIX);
+}
 function clearHold(repoRoot, flowName) {
   const content = readHold(repoRoot, flowName);
   if (content === null) return null;
@@ -4580,9 +4585,10 @@ var StageConfigSchema = external_exports.object({
   task_gates: external_exports.array(external_exports.string()).optional(),
   /**
    * A command (run with cwd = the flow's definition dir, like `completion.script`)
-   * the engine invokes at the end of a turn that nothing mechanical explains: no
-   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
-   * developer started. The engine passes what it alone can see in
+   * the engine invokes at the end of a turn that nothing mechanical explains: no gate
+   * pending and no `state/hold`. Subagents in flight and developer-started turns do not
+   * exempt; the facts say so (`agents_in_flight`, `developer_turn`) and the script decides.
+   * The engine passes what it alone can see in
    * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
    * the script answers with exit 3 + stdout to continue the turn ("these tickets
    * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
@@ -5055,6 +5061,11 @@ async function handleSessionStart(input2) {
       }
       return patch;
     });
+    const held = input2.source === "clear" ? readHold(repoRoot, flowName) : null;
+    if (held !== null && isWrapUpHold(held)) {
+      clearHold(repoRoot, flowName);
+      await appendLog(repoRoot, flowName, session_id, `HOLD_CLEARED_BY_CLEAR ${(held.split("\n")[0] ?? "").slice(0, 200)}`);
+    }
     bindSession(session_id, repoRoot, flowName);
     const config = await loadFlowConfig(repoRoot, flowName);
     const stageCfg = getStageConfig(config, state.current_stage);

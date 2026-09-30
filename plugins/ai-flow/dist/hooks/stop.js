@@ -4402,9 +4402,10 @@ var StageConfigSchema = external_exports.object({
   task_gates: external_exports.array(external_exports.string()).optional(),
   /**
    * A command (run with cwd = the flow's definition dir, like `completion.script`)
-   * the engine invokes at the end of a turn that nothing mechanical explains: no
-   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
-   * developer started. The engine passes what it alone can see in
+   * the engine invokes at the end of a turn that nothing mechanical explains: no gate
+   * pending and no `state/hold`. Subagents in flight and developer-started turns do not
+   * exempt; the facts say so (`agents_in_flight`, `developer_turn`) and the script decides.
+   * The engine passes what it alone can see in
    * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
    * the script answers with exit 3 + stdout to continue the turn ("these tickets
    * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
@@ -4733,7 +4734,7 @@ async function handleStop(input2) {
       out.push(armInstruction(repoRoot, flowName, state.flow_id, session_id));
     }
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
-    if (guard && wd.enabled && (!input2.stop_hook_active || prevContinuation === "arm") && !developerYetToSpeak && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
+    if (guard && wd.enabled && (!input2.stop_hook_active || prevContinuation === "arm") && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
       const facts = {
         flow_id: state.flow_id,
         stage: state.current_stage,

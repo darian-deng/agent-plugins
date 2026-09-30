@@ -349,6 +349,11 @@ function readHold(repoRoot, flowName) {
     return null;
   }
 }
+var WRAP_UP_HOLD_PREFIX = "wrap-up:";
+function isWrapUpHold(content) {
+  const first = content.split("\n").find((l) => l.trim() !== "") ?? "";
+  return first.trim().toLowerCase().startsWith(WRAP_UP_HOLD_PREFIX);
+}
 function clearHold(repoRoot, flowName) {
   const content = readHold(repoRoot, flowName);
   if (content === null) return null;
@@ -4529,9 +4534,10 @@ var StageConfigSchema = external_exports.object({
   task_gates: external_exports.array(external_exports.string()).optional(),
   /**
    * A command (run with cwd = the flow's definition dir, like `completion.script`)
-   * the engine invokes at the end of a turn that nothing mechanical explains: no
-   * subagent in flight, no gate pending, no `state/hold`, and not a turn the
-   * developer started. The engine passes what it alone can see in
+   * the engine invokes at the end of a turn that nothing mechanical explains: no gate
+   * pending and no `state/hold`. Subagents in flight and developer-started turns do not
+   * exempt; the facts say so (`agents_in_flight`, `developer_turn`) and the script decides.
+   * The engine passes what it alone can see in
    * `AI_FLOW_STOP_FACTS` (JSON: stage, bash tasks still running, hold path, …);
    * the script answers with exit 3 + stdout to continue the turn ("these tickets
    * were eligible and nothing is running"), or exit 0 to let the stop stand. Any
@@ -4908,7 +4914,7 @@ async function handlePostTool(input2) {
       const held = readHold(repoRoot, flowName) ?? "";
       await appendLog(repoRoot, flowName, session_id, `HOLD_SET stage=${state.current_stage} ${(held.split("\n")[0] ?? "").slice(0, 200)}`);
       return {
-        additionalContext: `[ai-flow] state/hold \u5DF2\u767B\u8BB0\uFF0C\u505C\u6EDE\u81EA\u68C0\u4E0E Stop \u5B88\u536B\u4E0D\u518D\u50AC\u3002\u5F00\u53D1\u8005\u4E0B\u4E00\u6761\u8F93\u5165\u4F1A\u81EA\u52A8\u6E05\u6389\u5B83\u3002` + (held.trim() === "" ? `
+        additionalContext: `[ai-flow] state/hold \u5DF2\u767B\u8BB0\uFF0C\u505C\u6EDE\u81EA\u68C0\u4E0E Stop \u5B88\u536B\u4E0D\u518D\u50AC\u3002\u5F00\u53D1\u8005\u4E0B\u4E00\u6761\u8F93\u5165\u4F1A\u81EA\u52A8\u6E05\u6389\u5B83\uFF1B\u9996\u884C\u4EE5 \`wrap-up:\` \u5F00\u5934\u7684\uFF0C/clear \u65F6\u4E5F\u4F1A\u6E05\u6389\u3002` + (held.trim() === "" ? `
 \u26A0\uFE0F \u5185\u5BB9\u662F\u7A7A\u7684\u2014\u2014\u5199\u4E00\u884C\uFF1A\u7B49\u8C01\u505A\u4EC0\u4E48\u3001\u4E3A\u4EC0\u4E48\u53EA\u80FD\u4ED6\u505A\u3001\u7B49\u5230\u4E4B\u540E\u4E0B\u4E00\u6B65\u662F\u4EC0\u4E48\u3002` : "")
       };
     }
@@ -5011,6 +5017,8 @@ async function handlePostTool(input2) {
     const hasEscape = docsPaths.length > 0;
     const docsList = docsPaths.join("\u3001");
     const landing = hasEscape ? docsList : `\u4ED3\u5E93\u91CC\u7684\u4EA4\u63A5\u6587\u6863\uFF08\u672C stage \u6CA1\u6709\u914D docs_paths\uFF0C\u81EA\u5DF1\u9009\u4E00\u4E2A\u4E0E\u9700\u6C42\u76F8\u5173\u7684\u6587\u6863\u843D\u76D8\uFF0C\u5E76\u5728\u544A\u77E5\u5F00\u53D1\u8005\u65F6\u8BF4\u6E05\u843D\u70B9\uFF09`;
+    const existingHold = readHold(repoRoot, flowName);
+    const holdStep = existingHold !== null && !isWrapUpHold(existingHold) ? `\u6536\u5C3E\u505A\u5B8C**\u522B\u8986\u76D6**\u5DF2\u6709\u7684 \`${holdPath(repoRoot, flowName)}\`\uFF08\u5B83\u5199\u7684\u662F\u300C${(existingHold.split("\n")[0] ?? "").slice(0, 80)}\u300D\uFF0C/clear \u540E\u8981\u7EE7\u7EED\u6321\u7740\uFF09\uFF0C\u9700\u8981\u8865\u4E00\u53E5\u5C31\u63A5\u5728\u539F\u6587\u4E0B\u4E00\u884C\u2014\u2014` : `\u6536\u5C3E\u505A\u5B8C\u5148\u7528 Write \u5199 \`${holdPath(repoRoot, flowName)}\`\uFF08\u4E00\u884C\uFF0C\u4EE5 \`wrap-up:\` \u5F00\u5934\uFF1A\u7B49\u5F00\u53D1\u8005 /clear\uFF0C\u4E0B\u4E2A session \u5148\u8BFB\u54EA\u3002/clear \u65F6\u5F15\u64CE\u53EA\u6E05\u5E26\u8FD9\u4E2A\u524D\u7F00\u7684 hold\uFF1B\u53EA\u6709\u5F00\u53D1\u8005\u53EB\u505C\u4E86\u6574\u4F53\u63A8\u8FDB\u624D\u522B\u5E26\u524D\u7F00\u3001\u8BA9\u5B83\u6D3B\u8FC7 /clear\u2014\u2014\u67D0\u4EF6\u4E8B\u5728\u7B49\u4ED6\u62CD\u677F\u4E0D\u7B97\uFF0C\u90A3\u4EF6\u4E8B\u6309\u672C flow \u7684\u89C4\u5219\u767B\u8BB0\uFF08grill-flow\uFF1A\`freeze.md\` \u51BB\u7ED3\u9762\uFF09\uFF0Chold \u7167\u5E26\u524D\u7F00\uFF09\u2014\u2014`;
     return {
       additionalContext: `[ai-flow] Context \u5DF2\u8FBE ${pct}%\uFF08\u6536\u5C3E\u9608\u503C ${wrapUpAt}%\uFF09\u3002
 
@@ -5024,7 +5032,7 @@ async function handlePostTool(input2) {
 
 **\u5F80 ${landing} \u91CC\u53EA\u5199\u540E\u6765\u7684 session \u91CD\u5EFA\u4E0D\u51FA\u6765\u7684\u4E1C\u897F**\uFF1A\u54EA\u68F5\u6811/\u54EA\u6761\u8F66\u9053\u5728\u505A\u54EA\u7968\u3001\u54EA\u4E9B\u5B50\u4EE3\u7406\u8FD8\u5728\u98DE\uFF08\u5728\u54EA\u68F5\u6811\u4E0A\uFF09\u3001\u5F53\u524D\u6D4B\u8BD5\u57FA\u7EBF\u3001\u4EE5\u53CA\u4F60\u5DF2\u7ECF\u62CD\u4E86\u4F46\u8FD8\u6CA1\u843D\u76D8\u7684\u51B3\u7B56\u3002
 
-\u6536\u5C3E\u505A\u5B8C\u5148\u7528 Write \u5199 \`${holdPath(repoRoot, flowName)}\`\uFF08\u4E00\u884C\uFF1A\u7B49\u5F00\u53D1\u8005 /clear\uFF0C\u4E0B\u4E2A session \u5148\u8BFB\u54EA\uFF09\u2014\u2014\u4E0D\u5199\u7684\u8BDD\u5F15\u64CE\u4F1A\u5728\u56DE\u5408\u7ED3\u675F\u65F6\u7EE7\u7EED\u50AC\u4F60\u63A8\u8FDB\uFF1B\u518D\u544A\u77E5\u5F00\u53D1\u8005\u53EF\u4EE5 /clear\u3002\u5E76\u4E14**\u73B0\u5728**\u5C31\u5411\u5F00\u53D1\u8005\u8F93\u51FA\u4E00\u6761\u9192\u76EE\u63D0\u9192\uFF08\u7528 > \u5F15\u7528\u5757\u6216\u52A0\u7C97\uFF09\uFF1A"\u26A0\uFE0F Context \u5DF2\u8FBE ${pct}%\uFF0C\u6211\u5F00\u59CB\u505A\u6536\u5C3E\u4EA4\u63A5\uFF0C\u5B8C\u6210\u540E\u4F60\u53EF\u4EE5 /clear\u3002"`
+` + holdStep + `\u4E0D\u5199\u7684\u8BDD\u5F15\u64CE\u4F1A\u5728\u56DE\u5408\u7ED3\u675F\u65F6\u7EE7\u7EED\u50AC\u4F60\u63A8\u8FDB\uFF1B\u518D\u544A\u77E5\u5F00\u53D1\u8005\u53EF\u4EE5 /clear\u3002\u5E76\u4E14**\u73B0\u5728**\u5C31\u5411\u5F00\u53D1\u8005\u8F93\u51FA\u4E00\u6761\u9192\u76EE\u63D0\u9192\uFF08\u7528 > \u5F15\u7528\u5757\u6216\u52A0\u7C97\uFF09\uFF1A"\u26A0\uFE0F Context \u5DF2\u8FBE ${pct}%\uFF0C\u6211\u5F00\u59CB\u505A\u6536\u5C3E\u4EA4\u63A5\uFF0C\u5B8C\u6210\u540E\u4F60\u53EF\u4EE5 /clear\u3002"`
     };
   } catch (e) {
     try {
