@@ -6,10 +6,10 @@ var __export = (target, all) => {
 };
 
 // src/hooks/userprompt.ts
-import { readFileSync as readFileSync10 } from "fs";
+import { readFileSync as readFileSync11 } from "fs";
 
 // src/lib/userprompt-handler.ts
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 
 // src/lib/flow-config-loader.ts
 import { existsSync as existsSync2, readdirSync, readFileSync } from "fs";
@@ -5594,6 +5594,31 @@ Run \`${flowName} status\` to check current progress.`
   return { action: "allow", additionalContext: lines.join("\n") };
 }
 
+// src/lib/statusline-install.ts
+import { existsSync as existsSync13, mkdirSync as mkdirSync4, readFileSync as readFileSync10, writeFileSync as writeFileSync5, renameSync as renameSync3 } from "fs";
+import { randomBytes as randomBytes3 } from "crypto";
+import { join as join10 } from "path";
+var STATUSLINE_SCRIPT = "subagent-statusline.cjs";
+function statuslineInstallDir() {
+  return join10(claudeDir(), "ai-flow");
+}
+function writeIfChanged(path, content) {
+  if (existsSync13(path) && readFileSync10(path, "utf-8") === content) return;
+  const tmp = `${path}.${randomBytes3(4).toString("hex")}.tmp`;
+  writeFileSync5(tmp, content);
+  renameSync3(tmp, path);
+}
+function installSubagentStatusline(pluginRoot = PLUGIN_ROOT) {
+  try {
+    const src = join10(pluginRoot, "statusline", STATUSLINE_SCRIPT);
+    if (!existsSync13(src)) return;
+    const dir = statuslineInstallDir();
+    mkdirSync4(dir, { recursive: true });
+    writeIfChanged(join10(dir, STATUSLINE_SCRIPT), readFileSync10(src, "utf-8"));
+  } catch {
+  }
+}
+
 // src/lib/userprompt-handler.ts
 function makeOutput(additionalContext, permissionDecision, reason) {
   const o = {
@@ -5626,6 +5651,7 @@ function resultToHookOutput(result, flowName) {
 }
 async function handleUserPrompt(input2) {
   const { cwd, prompt, session_id } = input2;
+  installSubagentStatusline();
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   const foreign = !!active && isForeignCheckout(active, cwd);
   const repoRoot = (foreign ? null : active?.repoRoot) ?? findRepoRoot(cwd) ?? cwd;
@@ -5678,7 +5704,7 @@ async function handleUserPrompt(input2) {
       } catch {
       }
       await patchActiveState(active.repoRoot, active.flowName, { first_prompt_handled: true });
-      const stateDir2 = join10(active.repoRoot, ".ai-flow", active.flowName, "state");
+      const stateDir2 = join11(active.repoRoot, ".ai-flow", active.flowName, "state");
       const defDir = flowDefDir(active.repoRoot, active.flowName);
       const statusLine = flowStatusLine({
         flowName: active.flowName,
@@ -5698,12 +5724,12 @@ async function handleUserPrompt(input2) {
         `\xB7 \u82E5\u662F\u300C\u7EE7\u7EED/\u63A8\u8FDB\u5F53\u524D\u9636\u6BB5/approve/\u8BA8\u8BBA\u5F53\u524D stage \u4EA7\u7269\u300D\u2192 \u6309\u5F53\u524D stage \u72B6\u6001\u76F4\u63A5\u63A5\u7EED\uFF0C\u4E0D\u53E6\u8D77\u7089\u7076\u3002`,
         `\xB7 \u82E5\u662F\u4E00\u4E2A\u770B\u8D77\u6765\u72EC\u7ACB\u7684\u65B0\u4EFB\u52A1 \u2192 \u5148\u638C\u63E1 flow \u80CC\u666F\uFF0C\u518D\u5224\u65AD\u5B83\u4E0E\u5F53\u524D flow \u7684\u5173\u7CFB\uFF0C\u7136\u540E\u52A8\u624B\u3002`,
         `  \u80CC\u666F\u6309\u8FD9\u4E2A\u987A\u5E8F\u53D6\uFF08\u4E09\u4E2A\u76EE\u5F55\u4E0D\u662F\u4E00\u4E2A\uFF0C\u522B\u4E92\u76F8\u4EE3\u5165\uFF09\uFF1A`,
-        `    1. ${join10(defDir, "helper.md")} \u2014 \u6D41\u7A0B\u603B\u89C8\uFF1A\u51E0\u4E2A stage\u3001\u5404\u81EA\u4EA7\u51FA\u4EC0\u4E48`,
-        `    2. ${join10(defDir, "references")}/ \u2014 \u5404\u9879\u7EAA\u5F8B\u4E0E\u5951\u7EA6\uFF08\u4EA4\u63A5\u3001\u4FEE\u8BA2\u3001\u5B50\u4EE3\u7406\u8FB9\u754C\uFF09`,
+        `    1. ${join11(defDir, "helper.md")} \u2014 \u6D41\u7A0B\u603B\u89C8\uFF1A\u51E0\u4E2A stage\u3001\u5404\u81EA\u4EA7\u51FA\u4EC0\u4E48`,
+        `    2. ${join11(defDir, "references")}/ \u2014 \u5404\u9879\u7EAA\u5F8B\u4E0E\u5951\u7EA6\uFF08\u4EA4\u63A5\u3001\u4FEE\u8BA2\u3001\u5B50\u4EE3\u7406\u8FB9\u754C\uFF09`,
         `    3. ${stateDir2}/active.json \u2014 \u5F53\u524D stage\u3001flow_id\u3001base_sha`,
         ...docsPaths.length > 0 ? [
           `    4. \u672C\u6B21\u4EA7\u7269\uFF08\u9700\u6C42 / \u65B9\u6848 / \u7968\u9762\u90FD\u5728\u8FD9\u513F\uFF0C\u662F\u300C\u8FD9\u4EF6\u4E8B\u5F53\u65F6\u5B9A\u8FC7\u5417\u300D\u7684\u7B54\u6848\u6240\u5728\uFF09\uFF1A`,
-          ...docsPaths.map((d) => `       ${join10(active.repoRoot, d)}`)
+          ...docsPaths.map((d) => `       ${join11(active.repoRoot, d)}`)
         ] : [`    4. \u672C stage \u6CA1\u914D docs_paths\uFF0C\u4EA7\u7269\u843D\u70B9\u95EE\u5F00\u53D1\u8005\uFF0C\u26D4 \u522B\u731C\u4E00\u4E2A\u8DEF\u5F84\u53BB Read\u3002`],
         `  \u5168\u7A0B\u4FDD\u6301 flow \u7EA6\u675F\uFF08gate \u5F85\u786E\u8BA4\u65F6\u52FF\u64C5\u81EA\u63A8\u8FDB stage\uFF0Cwrite_scope \u9650\u5236\u4ECD\u751F\u6548\uFF09\u3002`
       ].join("\n");
@@ -5773,7 +5799,7 @@ Valid commands: ${VALID_COMMANDS.join(", ")}`
 // src/hooks/userprompt.ts
 var raw = (() => {
   try {
-    return readFileSync10(0, "utf-8");
+    return readFileSync11(0, "utf-8");
   } catch {
     return "{}";
   }

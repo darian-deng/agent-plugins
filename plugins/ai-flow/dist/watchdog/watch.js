@@ -4462,7 +4462,9 @@ function watcherOwnership(state, flowId2, sessionId2) {
   return "ours";
 }
 function ownerChangeReady(state) {
-  return state !== null && readWatchdog(state).last_user_prompt_at !== null;
+  if (state === null) return false;
+  const w = readWatchdog(state);
+  return w.last_user_prompt_at !== null && !w.watcher_seen;
 }
 function ownerChangedText(flowName2, rearmCommand) {
   return [
@@ -4488,12 +4490,14 @@ if (!repoRoot || !flowName) {
   process.exit(2);
 }
 var startedAt = Date.now();
+var superseded = false;
 for (; ; ) {
   await sleep(WATCHER_POLL_MS);
   const state = await readActiveState(repoRoot, flowName).catch(() => null);
   const ownership = watcherOwnership(state, flowId, sessionId);
   if (ownership === "foreign-flow" || !state) continue;
-  if (ownership === "owner-changed" && !ownerChangeReady(state)) continue;
+  if (ownership === "owner-changed" && readWatchdog(state).watcher_seen) superseded = true;
+  if (ownership === "owner-changed" && (superseded || !ownerChangeReady(state))) continue;
   if (ownership === "owner-changed") {
     await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {
     });
