@@ -4632,7 +4632,7 @@ var AGENT_TASK_TYPES = /* @__PURE__ */ new Set([
 ]);
 var BASH_TASK_TYPES = /* @__PURE__ */ new Set(["shell", "local_bash", "bash"]);
 function classifyInFlight(tasks) {
-  const out = { agents: false, bash: false, bashTasks: [] };
+  const out = { agents: false, bash: false, bashTasks: [], agentTasks: [] };
   for (const t of tasks) {
     const type = t.type ?? (t.command !== void 0 ? "shell" : "subagent");
     if (BASH_TASK_TYPES.has(type)) {
@@ -4641,6 +4641,7 @@ function classifyInFlight(tasks) {
       out.bashTasks.push((t.description || t.command || t.id || "shell task").slice(0, 120));
     } else if (AGENT_TASK_TYPES.has(type)) {
       out.agents = true;
+      out.agentTasks.push((t.description || t.id || "agent").slice(0, 120));
     }
   }
   return out;
@@ -4723,13 +4724,15 @@ async function handleStop(input2) {
       out.push(armInstruction(repoRoot, flowName, state.flow_id, session_id));
     }
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
-    if (guard && wd.enabled && !input2.stop_hook_active && !agentsInFlight && !developerTurn && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
+    if (guard && wd.enabled && !input2.stop_hook_active && !developerTurn && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
       const facts = {
         flow_id: state.flow_id,
         stage: state.current_stage,
         session_id,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
+        agents_in_flight: agentsInFlight,
+        agent_tasks: inFlight.agentTasks,
         hold_path: holdPath(repoRoot, flowName),
         wrap_up_pct: state.context_wrap_up.at_pct,
         last_assistant_message: (input2.last_assistant_message ?? "").slice(-4e3)

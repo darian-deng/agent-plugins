@@ -4461,6 +4461,9 @@ function watcherOwnership(state, flowId2, sessionId2) {
   if (sessionId2 && state.last_session_id !== null && state.last_session_id !== sessionId2) return "owner-changed";
   return "ours";
 }
+function ownerChangeReady(state) {
+  return state !== null && readWatchdog(state).last_user_prompt_at !== null;
+}
 function ownerChangedText(flowName2, rearmCommand) {
   return [
     `${WATCHDOG_LABEL} \u4E0A\u4E00\u4E2A session \u8D77\u7684\u505C\u6EDE\u81EA\u68C0\u53D1\u73B0\u6D41\u7A0B '${flowName2}' \u5DF2\u6362\u4E86 session\uFF0C\u81EA\u884C\u9000\u51FA\uFF08\u4E0D\u662F\u5F00\u53D1\u8005\u8BF4\u7684\u8BDD\uFF09\u3002`,
@@ -4490,6 +4493,7 @@ for (; ; ) {
   const state = await readActiveState(repoRoot, flowName).catch(() => null);
   const ownership = watcherOwnership(state, flowId, sessionId);
   if (ownership === "foreign-flow" || !state) continue;
+  if (ownership === "owner-changed" && !ownerChangeReady(state)) continue;
   if (ownership === "owner-changed") {
     await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {
     });
