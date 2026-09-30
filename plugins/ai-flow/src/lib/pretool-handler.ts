@@ -511,13 +511,16 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
   // remedy unsafe: the flow's whole design is "everything a later session needs is on
   // disk", and the act that puts it there — writing the handoff / bookkeeping into the
   // flow's own docs — is a write. Observed: a session crossed the threshold with a
-  // subagent still in flight, could no longer record anything, and `/clear` then lost
-  // that subagent's report (its findings, its real-machine items, its security
-  // self-check) — none of which is recoverable from the commit it left behind.
+  // subagent still in flight and could no longer record anything about it.
   //
   // So: still refuse writes to the codebase, but let the flow's own docs through, and
-  // say plainly what /clear does and does not cost. The claim it used to make —
-  // "progress won't be lost" — is false while a subagent is running.
+  // say plainly what /clear does and does not cost. What it costs was itself misstated
+  // here until 0.88.2 ("an in-flight subagent's report does not survive /clear, prefer
+  // waiting"), which made sessions drain every subagent before handing over. Measured
+  // across one project's transcripts: 4 subagents spanned a /clear and every report
+  // reached the next session; the only two ever lost died because the developer EXITED
+  // Claude Code 11 seconds after that /clear. So the message says: don't wait, list them,
+  // and warn the developer off exiting — the one action that does kill them.
   //
   // Scope it to the main session, mirroring the measurement side (`posttool-handler`
   // skips accounting when `agent_id` is present). `context_wrap_up.at_pct` is latched on the
@@ -577,10 +580,11 @@ export async function handlePreTool(input: PreToolInput): Promise<PreToolResult 
         + `Before /clear: write whatever a later session cannot reconstruct into those docs — which lane is `
         + `where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any `
         + `decision you have made but not recorded.\n`
-        + `What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report `
-        + `does not** — its findings, real-machine items and security self-check cannot be reconstructed from `
-        + `the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree `
-        + `state into the docs first.`
+        + `What /clear costs: flow state and commits are on disk and survive. **An in-flight subagent survives `
+        + `/clear too** — it keeps running and its report is delivered to the session after /clear, so do not `
+        + `wait for it; list it in the docs (what it is doing, which worktree, where its report lands). `
+        + `**Exiting or restarting Claude Code kills it**: when you tell the developer they can /clear, name `
+        + `the subagents still running and ask them not to exit or restart Claude Code until those report.`
       );
     }
   }
