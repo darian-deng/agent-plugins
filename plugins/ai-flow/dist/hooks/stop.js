@@ -4593,7 +4593,8 @@ function emptyWatchdog() {
     last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
-    last_nudge_at: null
+    last_nudge_at: null,
+    last_continuation: null
   };
 }
 function readWatchdog(state) {
@@ -4693,10 +4694,12 @@ async function handleStop(input2) {
     let willAsk = false;
     let developerTurn = false;
     let developerYetToSpeak = false;
+    let prevContinuation = null;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
       developerTurn = w.last_user_prompt_at !== null && (w.last_stop_at === null || Date.parse(w.last_user_prompt_at) > Date.parse(w.last_stop_at));
       developerYetToSpeak = w.last_user_prompt_at === null;
+      prevContinuation = w.last_continuation;
       const next = {
         ...w,
         last_stop_at: nowIso,
@@ -4704,14 +4707,18 @@ async function handleStop(input2) {
         agents_in_flight: agentsInFlight,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
-        watcher_seen: watcherSeen
+        watcher_seen: watcherSeen,
+        last_continuation: null
       };
       if (watcherSeen) next.arm_asks = 0;
       willAsk = wd.enabled && // The host sets this on a turn that only happened because a Stop hook asked
       // for it. Bailing here is what makes a chain impossible: at most one extra
       // turn per ask, never a second stacked on top.
       !input2.stop_hook_active && !watcherSeen && !developerYetToSpeak && w.arm_asks < MAX_ARM_ASKS;
-      if (willAsk) next.arm_asks = w.arm_asks + 1;
+      if (willAsk) {
+        next.arm_asks = w.arm_asks + 1;
+        next.last_continuation = "arm";
+      }
       return { watchdog: next };
     });
     if (!written) return null;
@@ -4726,11 +4733,12 @@ async function handleStop(input2) {
       out.push(armInstruction(repoRoot, flowName, state.flow_id, session_id));
     }
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
-    if (guard && wd.enabled && !input2.stop_hook_active && !developerTurn && !developerYetToSpeak && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
+    if (guard && wd.enabled && (!input2.stop_hook_active || prevContinuation === "arm") && !developerYetToSpeak && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
       const facts = {
         flow_id: state.flow_id,
         stage: state.current_stage,
         session_id,
+        developer_turn: developerTurn,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
         // Subagents only: a session cron also wakes the session (so it counts toward the
@@ -4751,7 +4759,8 @@ async function handleStop(input2) {
       });
       if (res.status === STOP_GUARD_CONTINUE_EXIT) {
         const text = res.output.trim();
-        await appendLog(repoRoot, flowName, session_id, `STOP_GUARD_CONTINUE stage=${state.current_stage}`);
+        await appendLog(repoRoot, flowName, session_id, `STOP_GUARD_CONTINUE stage=${state.current_stage}${developerTurn ? " developer_turn" : ""}`);
+        await patchActiveState(repoRoot, flowName, (cur) => ({ watchdog: { ...readWatchdog(cur), last_continuation: "guard" } }));
         out.push(text.startsWith(STOP_GUARD_LABEL) ? text : `${STOP_GUARD_LABEL} ${text}`);
       } else if (!res.ok) {
         await appendLog(repoRoot, flowName, session_id, `ERROR stop_guard: ${truncateError(res.reason)}`);

@@ -470,7 +470,8 @@ function emptyWatchdog() {
     last_user_prompt_at: null,
     arm_asks: 0,
     nudges_this_stage: 0,
-    last_nudge_at: null
+    last_nudge_at: null,
+    last_continuation: null
   };
 }
 function readWatchdog(state) {
