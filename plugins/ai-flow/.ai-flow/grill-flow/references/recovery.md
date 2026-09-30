@@ -16,7 +16,7 @@
 **处置分两种**：
 
 - **在某棵 worktree 里撞到** → `node <FD>/scripts/worktree.cjs --flow-dir <FR> sync <flow_id> <T或R编号>`；`sync` / `close` 会自己检测并补装（`--no-install` 只报不装）。
-- **在主树上撞到**（一票一树的收口测试跑在全部树都拆掉之后，`sync` 那条命令此时必然报「不存在」——**别去查票号是不是写错了**）：`close` 本应在 ff 时自动补装过，先回看它当时有没有报补装失败；没补上就在主树手动跑一次装依赖命令（`pnpm install` / `npm ci` 等，照本仓库的）再重跑测试。⛔ 无论哪种，**都不要去读代码追这个「回归」**。
+- **在主树上撞到**（收口测试覆盖的是已 close 的票，那些票树都已拆，对它们跑 `sync` 必然报「不存在」——**别去查票号是不是写错了**）：`close` 本应在 ff 时自动补装过，先回看它当时有没有报补装失败；没补上就在主树手动跑一次装依赖命令（`pnpm install` / `npm ci` 等，照本仓库的）再重跑测试。⛔ 无论哪种，**都不要去读代码追这个「回归」**。
 
 **你自己手动 rebase / 切分支之后不会有人替你装**，那时同样手动装一次。
 
@@ -64,7 +64,7 @@ git branch -D wt/<旧 flow_id>-T<n>
 
 ⚠️ 真有东西要留（那条 flow 没收完、你想接着做）：**先把那条 flow 恢复成活跃的**（`/ai-flow:resume`），在它自己的上下文里 close，⛔ 不要在别的 flow 里绕过这道门。
 
-## 三、收口测试失败（worktree 已拆）
+## 三、收口测试失败（被覆盖的票树已拆）
 
 `--amend` 折回中间那笔票 commit 做不到。就在主树修，然后把修复**squash 进它真正属于的那张票**那笔里（机器门要求区间内每笔 commit 都归属某一票，所以不能留一笔独立的 `fix:`）。两条命令，都能在无人值守下跑完：
 
@@ -79,7 +79,7 @@ GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --autostash <base_sha_code>
 - **`--autostash` 不能省**。stage-3 期间主树**一直有未提交的记账改动**（tickets.md 的 `qc:done` / `[x]`、candidates.md），而 rebase 在工作树脏时直接拒绝。那条报错（"cannot rebase: You have unstaged changes"）会诱你去提交记账——**别提**，那会造出一笔不归属任何票的 commit，机器门③ 立刻拦。
 - rebase 中途有冲突时，autostash 的恢复**推迟到 rebase 结束或 `--abort` 之后**，期间记账改动看不见。别以为丢了、别重写一遍。
 
-**车道模式下这次 rebase 作废了全部车道基线**，跑完必须逐车道 `sync` + `status` 复核 —— 见 `lane-mode.md` 的「收口测试后如果做过 fixup rebase」。
+**这次 rebase 作废了此刻所有开着的树的基线**（收口期间照常开树派发，所以一票一树模式下也有）：跑完对每棵开着的树 `sync`，树里有在跑的代理就等它回报后再 sync；车道模式逐车道 `sync` + `status` 复核 —— 见 `lane-mode.md` 的「收口测试后如果做过 fixup rebase」。实测 28 次收口里只有 1 次走到这一步。
 
 同时在回报 / review 交接里记下这笔修复属于哪票。
 

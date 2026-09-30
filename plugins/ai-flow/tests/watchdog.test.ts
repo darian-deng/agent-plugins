@@ -95,6 +95,7 @@ function armedWatchdog(over: Record<string, unknown> = {}) {
     last_user_prompt_at: new Date(Date.now() - 600_000).toISOString(),
     watcher_seen: true,
     arm_asks: 1,
+    last_continuation: null,
     nudges_this_stage: 0,
     last_nudge_at: null,
     ...over,
@@ -807,7 +808,7 @@ describe('stage stop guard', () => {
 const f = JSON.parse(process.env.AI_FLOW_STOP_FACTS || '{}');
 if (process.env.GUARD_MODE === 'crash') { process.stderr.write('boom'); process.exit(1); }
 if (process.env.GUARD_MODE === 'pass') process.exit(0);
-process.stdout.write('${STOP_GUARD_LABEL} 够格未开 2 张 stage=' + f.stage + ' bash=' + f.bash_in_flight + ' agents=' + f.agents_in_flight + ':' + (f.agent_tasks || []).join('|') + ' hold=' + f.hold_path);
+process.stdout.write('${STOP_GUARD_LABEL} 够格未开 2 张 stage=' + f.stage + ' dev=' + f.developer_turn + ' bash=' + f.bash_in_flight + ' agents=' + f.agents_in_flight + ':' + (f.agent_tasks || []).join('|') + ' hold=' + f.hold_path);
 process.exit(${STOP_GUARD_CONTINUE_EXIT});
 `;
   function guardedRepo() {
@@ -829,7 +830,7 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
   it('a turn nobody started, nothing in flight, no hold → the guard runs and its verdict continues the turn', async () => {
     const repo = guardedRepo();
     const out = await handleStop(input(repo.repoRoot));
-    expect(out?.additionalContext).toContain(`${STOP_GUARD_LABEL} 够格未开 2 张 stage=work bash=false`);
+    expect(out?.additionalContext).toContain(`${STOP_GUARD_LABEL} 够格未开 2 张 stage=work dev=false bash=false`);
     expect(out?.additionalContext).toContain(holdPath(repo.repoRoot, 'guarded-flow'));
     const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8');
     expect(log).toContain('STOP_GUARD_CONTINUE stage=work');
@@ -871,18 +872,42 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
     expect(await handleStop(input(repo.repoRoot))).toBeNull();
   });
 
-  it('the turn the developer started → no guard (the watchdog\'s idle rule covers them)', async () => {
+  it('the turn the developer started → the guard runs, told developer_turn (it then speaks only about idle slots)', async () => {
     const repo = guardedRepo();
-    await handleUserPrompt({ hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repo.repoRoot, prompt: '进度到哪了', source: 'user' });
-    expect(await handleStop(input(repo.repoRoot))).toBeNull();
-    // …but the NEXT turn, if nothing started it, is guarded again.
+    await handleUserPrompt({ hook_event_name: 'UserPromptSubmit', session_id: OWNER, cwd: repo.repoRoot, prompt: '继续', source: 'user' });
     const out = await handleStop(input(repo.repoRoot));
-    expect(out?.additionalContext).toContain(STOP_GUARD_LABEL);
+    expect(out?.additionalContext).toContain('dev=true');
+    const log = readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8');
+    expect(log).toContain('STOP_GUARD_CONTINUE stage=work developer_turn');
+    // The next turn end, nobody having typed since, is not a developer turn.
+    expect((await handleStop(input(repo.repoRoot)))?.additionalContext).toContain('dev=false');
   });
 
   it('stop_hook_active → no guard (never chains)', async () => {
     const repo = guardedRepo();
     expect(await handleStop(input(repo.repoRoot, { stop_hook_active: true }))).toBeNull();
+  });
+
+  it('the continuation only asked for the watcher → the guard still gets that turn end, once', async () => {
+    const repo = guardedRepo();
+    // First stop with no watcher running: the arming ask and the guard speak together.
+    const first = await handleStop(stopInput(repo.repoRoot, { background_tasks: [] }));
+    expect(first?.additionalContext).toContain('停滞自检');
+    expect(first?.additionalContext).toContain(STOP_GUARD_LABEL);
+    // The guard spoke, so the continuation's end is a chain → no guard.
+    expect(await handleStop(input(repo.repoRoot, { stop_hook_active: true }))).toBeNull();
+
+    // Same, but the guard stayed silent at the first stop: only the ask continued the turn.
+    const repo2 = guardedRepo();
+    process.env['GUARD_MODE'] = 'pass';
+    try {
+      const ask = await handleStop(stopInput(repo2.repoRoot, { background_tasks: [] }));
+      expect(ask?.additionalContext).not.toContain(STOP_GUARD_LABEL);
+    } finally { delete process.env['GUARD_MODE']; }
+    const after = await handleStop(input(repo2.repoRoot, { stop_hook_active: true }));
+    expect(after?.additionalContext).toContain(STOP_GUARD_LABEL);
+    // …and that guard continuation is the last link.
+    expect(await handleStop(input(repo2.repoRoot, { stop_hook_active: true }))).toBeNull();
   });
 
   it('a gate pending → no guard', async () => {

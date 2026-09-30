@@ -33,11 +33,9 @@ export const STOP_GUARD_LABEL = '[ai-flow:stop-guard]';
  *     of whether the stop was warranted (which tickets could have been opened).
  *
  * Deliberately never returns `decision: "block"` — `additionalContext` continues the
- * conversation through the same protections, without surfacing as a hook error. And
- * job 3 is skipped for a turn the DEVELOPER started: at that instant they are usually
- * still reading, and the watchdog's idle rule (job 1) is the right instrument for
- * them. The guard is for the turn nobody started — a subagent's report, a timer, a
- * previous continuation — where the model's "next turn I'll…" has no next turn.
+ * conversation through the same protections, without surfacing as a hook error. A turn
+ * the DEVELOPER started still runs job 3, but the script is told so and limits itself to
+ * idle capacity (see the guard block below for why the old exemption went).
  */
 export async function handleStop(input: StopInput): Promise<{ additionalContext: string } | null> {
   const { cwd, session_id } = input;
@@ -95,6 +93,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
     let willAsk = false;
     let developerTurn = false;
     let developerYetToSpeak = false;
+    let prevContinuation: WatchdogState['last_continuation'] = null;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
       // Decided against the previous stop, before this one overwrites it: the turn
@@ -107,6 +106,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
       // and the developer decided (2026-09-30) that until they speak, such a turn only takes the
       // delivery: no guard pushing the next dispatch, no watcher to nudge it later.
       developerYetToSpeak = w.last_user_prompt_at === null;
+      prevContinuation = w.last_continuation;
       const next: WatchdogState = {
         ...w,
         last_stop_at: nowIso,
@@ -115,6 +115,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
         watcher_seen: watcherSeen,
+        last_continuation: null,
       };
       // Seeing a watcher means every ask so far worked, so the give-up counter starts
       // over. It must: delivering a nudge KILLS the watcher (the exit is the wake), so
@@ -133,7 +134,10 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         !watcherSeen &&
         !developerYetToSpeak &&
         w.arm_asks < MAX_ARM_ASKS;
-      if (willAsk) next.arm_asks = w.arm_asks + 1;
+      if (willAsk) {
+        next.arm_asks = w.arm_asks + 1;
+        next.last_continuation = 'arm';
+      }
       return { watchdog: next };
     });
     // null = the flow completed or was aborted while this turn was ending.
@@ -150,8 +154,8 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
 
     // ─── Stage stop guard ────────────────────────────────────────────────────────
     // Only when nothing mechanical explains the stop: no gate is waiting on the
-    // developer, no hold names what is waited for, and the developer did not start this
-    // turn. Shell tasks do not exempt — the guard's most frequent target is a session
+    // developer, no hold names what is waited for, and the developer has spoken in this
+    // session. Shell tasks do not exempt — the guard's most frequent target is a session
     // that "left a dev instance running" and stopped, and the script sees
     // `bash_in_flight` to weigh it itself.
     //
@@ -161,12 +165,21 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
     // slots running and 5 tickets eligible, and nothing asked why, because the one
     // mechanism that counts eligible work was switched off by the agents still running.
     // The script gets their descriptions and decides whether the stop left capacity idle.
+    //
+    // A turn the developer started does not exempt either, since 0.90.0. It used to, so as
+    // not to talk over them while they read — but in a flow's execution stage their
+    // "continue" means "go work", and measured: after one "continue" nobody counted slots
+    // for the whole opening, and filling 6 took 14 minutes. The script is told
+    // (`developer_turn`) and then speaks only about idle capacity, and offers the hold.
+    //
+    // `stop_hook_active` still bars a chain, with one exception: when the continuation that
+    // led here only asked for the watcher. That ask fires on the first stop of every session
+    // (no watcher yet), so without the exception the guard never saw the end of that turn.
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
     if (
       guard &&
       wd.enabled &&
-      !input.stop_hook_active &&
-      !developerTurn &&
+      (!input.stop_hook_active || prevContinuation === 'arm') &&
       !developerYetToSpeak &&
       readHold(repoRoot, flowName) === null &&
       !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)
@@ -175,6 +188,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         flow_id: state.flow_id,
         stage: state.current_stage,
         session_id,
+        developer_turn: developerTurn,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
         // Subagents only: a session cron also wakes the session (so it counts toward the
@@ -195,7 +209,8 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
       });
       if (res.status === STOP_GUARD_CONTINUE_EXIT) {
         const text = res.output.trim();
-        await appendLog(repoRoot, flowName, session_id, `STOP_GUARD_CONTINUE stage=${state.current_stage}`);
+        await appendLog(repoRoot, flowName, session_id, `STOP_GUARD_CONTINUE stage=${state.current_stage}${developerTurn ? ' developer_turn' : ''}`);
+        await patchActiveState(repoRoot, flowName, (cur) => ({ watchdog: { ...readWatchdog(cur), last_continuation: 'guard' } }));
         out.push(text.startsWith(STOP_GUARD_LABEL) ? text : `${STOP_GUARD_LABEL} ${text}`);
       } else if (!res.ok) {
         // A broken guard must be visible in the log, never in the model's context:

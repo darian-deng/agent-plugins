@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlin
 import { join, resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
-import { execFileSync, execSync, spawnSync } from 'child_process';
+import { execFileSync, execSync, spawnSync, spawn } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, '..');
@@ -538,6 +538,35 @@ describe('grill-flow worktree.cjs', () => {
       // 才失败），两者退出码一样。真正的差别是「哪一条断言在说话」——查不了就该就地拒绝，
       // 而不是让后面某一步碰巧兜住。
       expect(r.stderr).toContain('无法检查票分支上有没有 merge commit');
+    });
+  });
+
+  describe('收口在跑时 close 拒绝', () => {
+    it('collecting.json 的持锁进程活着 → 拒绝 close、不 ff；进程已死 → 视为不在', () => {
+      const { repo, anchor } = makeRepo({ anchorRel: '', anchorLock: true });
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      const before = git(repo, 'rev-parse', 'HEAD').trim();
+      const lock = join(anchor, '.ai-flow', 'grill-flow', 'state', 'collecting.json');
+      // 本测试进程自己的 pid：一定活着。
+      writeFileSync(lock, JSON.stringify({ pid: process.pid, label: 'B9', started: '2026-09-30T00:00:00Z' }));
+      const r = run(anchor, 'close', 'f1', 'R1', '--keep');
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('收口 B9 正在主工作树跑');
+      expect(r.stderr).toContain('开树、派发、续派照常');
+      expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(before);
+      // 被 SIGKILL 杀掉留下的锁：pid 已不在，不能把 close 永久卡住。
+      const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf-8' });
+      writeFileSync(lock, JSON.stringify({ pid: Number(dead.stdout), label: 'B9' }));
+      // collect 本身死了、收口命令的进程组还活着（collect 被 SIGKILL）→ 照样拒。
+      const sleeper = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+      try {
+        writeFileSync(lock, JSON.stringify({ pid: Number(dead.stdout), pgid: sleeper.pid, label: 'B9' }));
+        expect(run(anchor, 'close', 'f1', 'R1', '--keep').stderr).toContain('正在主工作树跑');
+      } finally { process.kill(-sleeper.pid!, 'SIGKILL'); }
+      // 刚写下、还解析不了的锁（10 秒内）→ 当活锁拒，不当没锁放行。
+      writeFileSync(lock, '');
+      expect(run(anchor, 'close', 'f1', 'R1', '--keep').stderr).toContain('正在主工作树跑');
+      expect(git(repo, 'rev-parse', 'HEAD').trim()).toBe(before);
     });
   });
 
@@ -1113,6 +1142,97 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
   });
 
+  it('stop-guard：开发者起的回合只报空名额——有空有票 → exit 3 并给写 hold 的出口；满了 / 收尾期 / 车道模式 → exit 0', () => {
+    const t = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
+    const open2 = makeFlow(t, ['T1', 'T2']);
+    const r = guard(open2, { developer_turn: true, agents_in_flight: true, agent_tasks: ['T1·实施', 'T2·质量链'], hold_path: '/h' });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('空 4 个');
+    expect(r.out).toContain('收口测试只挡 close');
+    expect(r.out).toContain('这回合是开发者起的');
+    expect(r.out).toContain('不写 hold');   // 等他回答不写 hold：hold 会连带关掉名额检查
+    expect(r.out).not.toContain('没有任何东西会在将来把你叫醒');
+    // 没有代理在飞也走同一段：两棵开着的树没人跑 → 占名额并点名。
+    const idle = guard(open2, { developer_turn: true, agents_in_flight: false, agent_tasks: [] });
+    expect(idle.code).toBe(3);
+    expect(idle.out).not.toContain('别等在飞的代理回来');
+    expect(idle.out).toContain('开着却没代理在跑的树 2 棵（T1 T2）');
+    const six = ['T1·实施', 'T2·实施', 'T3·实施', 'T4·实施', 'T5·实施', 'T6·实施'];
+    expect(guard(makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']), { developer_turn: true, agents_in_flight: true, agent_tasks: six }).code).toBe(0);
+    expect(guard(open2, { developer_turn: true, agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).code).toBe(0);
+    const lane = makeFlow(T('T1', false, 'src/a/', '  - wip: R1\n') + T('T2', false, 'src/b/'), ['R1']);
+    expect(guard(lane, { developer_turn: true, agents_in_flight: false, agent_tasks: [] }).code).toBe(0);
+  });
+
+  it('stop-guard：收口在跑（collecting.json 持锁进程活着）时，开发者回合不点名没人跑的树；非开发者回合点名并说明只差 close 的等它', () => {
+    const t = T('T1', false, 'src/a/') + T('T2', false, 'src/b/');
+    const dir = makeFlow(t, ['T1', 'T2']);
+    writeFileSync(join(dir, 'state', 'collecting.json'), JSON.stringify({ pid: process.pid, label: 'B7' }));
+    expect(guard(dir, { developer_turn: true, agents_in_flight: false, agent_tasks: [] }).code).toBe(0);
+    // 不点名 ≠ 不占名额：六棵没人跑的树 + 够格新票，开发者回合、收口在跑 → 不能再补（会开出 10 棵）。
+    const t10 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
+    const six = makeFlow(t10, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
+    writeFileSync(join(six, 'state', 'collecting.json'), JSON.stringify({ pid: process.pid, label: 'B7' }));
+    expect(guard(six, { developer_turn: true, agents_in_flight: false, agent_tasks: [] }).code).toBe(0);
+    const r = guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施'] });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('收口 B7 正在跑：只差 close 的树等它结束');
+  });
+
+  it('collect：跑命令并透传退出码，跑的期间持锁、跑完删锁；已有活锁时拒绝再起', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/'));
+    const lock = join(dir, 'state', 'collecting.json');
+    const seen = join(dir, 'seen.txt');
+    const r = spawnSync(process.execPath, [SCHED, '--flow-dir', dir, 'collect', 'B3', '--', `cat '${lock}' > '${seen}'; exit 7`], { cwd: tmpdir(), encoding: 'utf-8' });
+    expect(r.status).toBe(7);
+    expect(JSON.parse(readFileSync(seen, 'utf-8'))).toMatchObject({ label: 'B3' });
+    expect(existsSync(lock)).toBe(false);
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, label: 'B2' }));
+    expect(sched(dir, 'collect', 'B3', '--', 'true')).toContain('收口 B2 已经在跑');
+    expect(sched(dir, 'collect', 'B3')).toContain('用法：collect');
+    rmSync(lock);
+    // `--` 后多个参数会丢引号 → 拒；`--` 后的 -h 属于命令、不被当成帮助。
+    expect(sched(dir, 'collect', 'B3', '--', 'printf', 'a b')).toContain('`--` 后面收到 2 个参数');
+    expect(sched(dir, 'collect', 'B3', '--', '-h')).not.toContain('用法（--flow-dir');
+    // 被信号杀掉 → 128+信号值，不和「测试红了」的 1 混。
+    const killed = spawnSync(process.execPath, [SCHED, '--flow-dir', dir, 'collect', 'B3', '--', 'kill -TERM $$'], { cwd: tmpdir(), encoding: 'utf-8' });
+    expect(killed.status).toBe(143);
+    expect(existsSync(lock)).toBe(false);
+    // 刚写下、还解析不了的锁 → 当活锁，不抢。
+    writeFileSync(lock, '');
+    expect(sched(dir, 'collect', 'B3', '--', 'true')).toContain('已经在跑');
+    rmSync(lock);
+  });
+
+  it('collect 收到 SIGTERM（停后台任务）→ 转发给收口命令的进程组，退出码 143、锁删掉', async () => {
+    const dir = makeFlow(T('T1', false, 'src/a/'));
+    const lock = join(dir, 'state', 'collecting.json');
+    const child = spawn(process.execPath, [SCHED, '--flow-dir', dir, 'collect', 'B4', '--', 'sleep 30'], { cwd: tmpdir(), stdio: 'ignore' });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      try { if (JSON.parse(readFileSync(lock, 'utf-8')).pgid) break; } catch { /* 还没写 */ }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const pgid = JSON.parse(readFileSync(lock, 'utf-8')).pgid as number;
+    const code = await new Promise<number | null>((res) => { child.on('exit', (c) => res(c)); child.kill('SIGTERM'); });
+    expect(code).toBe(143);
+    expect(existsSync(lock)).toBe(false);
+    let groupAlive = true;
+    try { process.kill(-pgid, 0); } catch { groupAlive = false; }
+    expect(groupAlive).toBe(false);
+  });
+
+  it('collect 被 SIGKILL、收口命令的进程组还活着 → 锁仍算在跑（守卫与 close 读同一口径）', () => {
+    const t = T('T1', false, 'src/a/') + T('T2', false, 'src/b/');
+    const dir = makeFlow(t, ['T1', 'T2']);
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf-8' });
+    const sleeper = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+    try {
+      writeFileSync(join(dir, 'state', 'collecting.json'), JSON.stringify({ pid: Number(dead.stdout), pgid: sleeper.pid, label: 'B8' }));
+      expect(guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).out).toContain('收口 B8 正在跑');
+    } finally { process.kill(-sleeper.pid!, 'SIGKILL'); }
+  });
+
   it('stop-guard：有代理在飞时，名额满 → exit 0、收尾期只催交接；树都有人跑、没有新票可开 → exit 0', () => {
     const t = [1, 2, 3, 4, 5, 6, 7].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
     const full = makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
@@ -1177,6 +1297,33 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('  - qc:done');
     expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('qc-metrics: diff=1');
     expect(existsSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md.lock'))).toBe(false);
+  });
+
+  it('mark：--drop 漏了冒号 → 不代删，但点名票块里那个带冒号的键；`qc` 不会被提示成 `qc:done`', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/', '  - idle: 等 T9\n  - qc:done\n'));
+    const out = sched(dir, 'mark', 'T1', '--drop', 'idle');
+    expect(out).toContain('一条都没删到');
+    expect(out).toContain('重跑 `mark T1 --drop idle:`');
+    expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('idle: 等 T9');
+    expect(sched(dir, 'mark', 'T1', '--drop', 'qc')).not.toContain('重跑');
+  });
+
+  it('selfcheck：交接段把收口写成补位 / 开树的前置 → 提醒（不影响退出码）；「收口只挡 close」、否定句、引用不误报', () => {
+    const mk = (line: string) => makeFlow('# t\n\n## 🔴 重入交接\n\n### 派发纪律\n1. x\n\n### 当前状态\n' + line + '\n\n## 票\n\n' + T('T1', false, 'src/a/'));
+    expect(sched(mk('- B73 必须先跑完才能补位'), 'selfcheck')).toContain('像是把收口');
+    // 只是提醒：❌ 那一行只数真问题（这里只有「没有切读命令」那一条）。
+    expect(sched(mk('- B73 必须先跑完才能补位'), 'selfcheck')).toMatch(/❌ 交接机械自检：1 处问题[\s\S]*⚠️ 1 处疑似串行化写法/);
+    expect(sched(mk('- 只有 close 与开新树（补位）等收口判绿'), 'selfcheck')).toContain('像是把收口');
+    expect(sched(mk('- B74 跑完前不补位'), 'selfcheck')).toContain('像是把收口');
+    expect(sched(mk('- 等 B74 收口完再开 T250'), 'selfcheck')).toContain('像是把收口');
+    for (const bad of ['- 收口期间不开新树', '- 收口时不补位', '- 等收口判绿，再补位', '- 补位等 B74 判绿']) {
+      expect(sched(mk(bad), 'selfcheck')).toContain('像是把收口');
+    }
+    for (const ok of ['- 收口在跑：只挡 close，开树、派发、续派照常', '- T12 实施跑完再派质量链', '- T30 等开发者拍板之后再派', '- T9 close 之后再开树 T10（写集相交）', '- web4 全量跑完再派',
+      '- 收口跑完再开始记账', '- T20 回归用例写完后再派质量链', '- T5 修回归后再派 qc-2', '- B3 之后再派 T4',
+      '- 补位不用等收口，照常开', '- 不需要等 B74 跑完再派 T161', '- ⛔ 不要写「收口跑完再补位」', '- B12 登录页票跑完才能开 T13']) {
+      expect(sched(mk(ok), 'selfcheck')).not.toContain('像是把收口');
+    }
   });
 
   it('selfcheck：交接段份数、派发纪律、切读命令命中、登记残留与已勾票残留树都查', () => {

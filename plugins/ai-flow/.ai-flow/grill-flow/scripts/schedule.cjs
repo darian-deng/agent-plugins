@@ -20,11 +20,28 @@
 //     `lane:`；没有就按「`Touches` 相交 ∨ 有 `Blocked by` 关系」取连通分量。
 'use strict';
 
-const { existsSync, readFileSync, realpathSync, readdirSync, writeFileSync, renameSync } = require('fs');
+const { existsSync, readFileSync, realpathSync, readdirSync, writeFileSync, renameSync, linkSync, unlinkSync } = require('fs');
 const { join, dirname, basename, resolve, relative } = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const die = (m) => { process.stderr.write('❌  ' + m + '\n'); process.exit(1); };
+// kill(pid, 0) 只探活不发信号：ESRCH = 进程不在；EPERM = 在（属于别的用户）。负数 = 整个进程组。
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid === 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+// 读收口锁：没有 → null；解析不了但 10 秒内刚写过 → 'fresh'（当活着，别抢）；更老的坏文件 → null。
+function readLock(p) {
+  let raw;
+  try { raw = readFileSync(p, 'utf-8'); } catch { return null; }
+  try { return JSON.parse(raw); } catch {
+    try { return Date.now() - require('fs').statSync(p).mtimeMs < 10_000 ? 'fresh' : null; } catch { return null; }
+  }
+}
+// 收口锁算活着：collect 进程还在，或它起的收口命令进程组还在（collect 被 SIGKILL 时测试照跑）。
+function lockAlive(held) {
+  return (held.pid > 0 && pidAlive(held.pid)) || (held.pgid > 0 && pidAlive(-held.pgid));
+}
 const say = (m) => process.stdout.write(m + '\n');
 
 // ── flowDir 解析（四级，最后一级响亮地死）──────────────────────────────────
@@ -82,7 +99,9 @@ function resolveFlowDir() {
 
 // `--help` 必须拦在 flowDir 解析**之前**：解析失败会先死，于是「我想知道怎么用」被答成一条定位失败的报错；不拦又会静默跑完一次全量调度报表（实测一个子代理想看用法，拿到的是一份 25 票的报表）。两种都不是用法。
 // 拿到的是一份 25 票的报表）——那不是错误结果，只是把「我想知道怎么用」答成了别的东西。
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
+// 只看 `--` 之前：`collect B1 -- ls -h` 里的 -h 属于收口命令，被这里截走会打印用法、退出码 0，像是跑成功了。
+const OWN_ARGS = process.argv.indexOf('--') === -1 ? process.argv : process.argv.slice(0, process.argv.indexOf('--'));
+if (OWN_ARGS.includes('--help') || OWN_ARGS.includes('-h')) {
   process.stdout.write(
     '用法（--flow-dir 紧跟脚本路径）:\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' [--cap <正整数>]\n'
@@ -91,6 +110,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' ticket <票号>\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' brief <票号> impl|qc|comment\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' mark <票号> [--done] [--drop <键>]… [<子项>]…\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' collect <B<n>> -- <收口命令…>\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 6。判据与两种模式的代价见 references/execution-unit.md。\n'
     + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票，按取票顺序（插票 → 下游链长降序 → 文件顺序）排好。只摆事实，不放行。\n'
@@ -98,6 +118,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + 'brief T<n> <段>：打印派发简报（路径 / 回报落盘路径 / 票面 / 交接段 `### 派发纪律` 原文），子代理开工先跑它。\n'
     + 'mark T<n>：给票记账——每个 <子项> 追加成票下一行 `  - <子项>`；--drop <键> 先删掉该键的子项（键照写、精确匹配，如 idle: / qc:done）；--done 把 [ ] 勾成 [x]。\n'
     + 'selfcheck：交接的机械自检（交接段只一份、有 `### 派发纪律`、切读命令的文件与起始图案都在、登记的树目录都在、已勾的票没有残留树），派冷读之前先跑。\n'
+    + 'collect B<n> -- <命令>：跑收口测试（命令整条交给 sh -c，退出码原样透传），跑的期间持 `state/collecting.json`，`worktree.cjs close` 见到它就拒绝——收口只挡 close，开树、派发、续派照常。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
@@ -168,8 +189,61 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark', 'selfcheck'].includes(SUB)) {
-  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark` / `selfcheck`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark', 'selfcheck', 'collect'].includes(SUB)) {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark` / `selfcheck` / `collect`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+}
+
+// ── collect：收口测试期间持锁，让 close 等它 ──────────────────────────────────
+// 收口在主工作树跑，而 close 的 ff 会改动正在被测的文件（假红 / 假绿）。0.90.0 之前的规则是
+// 「收口时暂停补位」，把开树、派发也一起停了：实测 46 次收口后台任务里 40 次期间零派发，
+// 合计 181 分钟名额空着，而真正冲突的只有 close。锁只挡 close（`worktree.cjs` 读它）。
+// 锁里存本进程 pid：被 SIGKILL 杀掉留下的锁，pid 已死即视为不在，不会把 close 永久卡住。
+if (SUB === 'collect') {
+  const dd = process.argv.indexOf('--');
+  const label = process.argv[3];
+  const usage = '用法：collect <B<n>> -- \'<收口命令>\'（`--` 后面只接**一个**参数，整条命令用单引号包起来交给 sh -c；例：collect B74 -- \'pnpm typecheck > $L/tc.log 2>&1; echo tc=$? >> $L/exit.txt\'）';
+  if (!label || label === '--' || dd === -1 || dd === process.argv.length - 1) die(usage);
+  // 多个参数拼回一条会丢掉原来的引号（`printf '%s\n' 'a b'` 变成别的命令），不猜，直接拒。
+  if (process.argv.length - dd - 1 !== 1) die('`--` 后面收到 ' + (process.argv.length - dd - 1) + ' 个参数。' + usage);
+  const cmdline = process.argv[dd + 1];
+  const lockPath = join(flowDir, 'state', 'collecting.json');
+  // 原子抢锁：先写满临时文件、再 link 成锁名（目标已存在就失败），别人永远读不到半截的锁。
+  // 已有的锁持有者死了（pid 与进程组都不在）才清掉重抢一次。
+  const tmpLock = lockPath + '.' + process.pid + '.tmp';
+  const grab = () => {
+    try {
+      writeFileSync(tmpLock, JSON.stringify({ pid: process.pid, pgid: null, label, started: new Date().toISOString(), cmd: cmdline.slice(0, 300) }) + '\n');
+      linkSync(tmpLock, lockPath);
+    } finally { try { unlinkSync(tmpLock); } catch { /* 已删 */ } }
+  };
+  try { grab(); } catch (e) {
+    if (e.code !== 'EEXIST') die('写不了收口锁 ' + lockPath + ': ' + e.message + (/EPERM|ENOTSUP|EOPNOTSUPP/.test(e.code || '') ? '（所在文件系统不支持硬链接）' : ''));
+    const raw = (() => { try { return readFileSync(lockPath, 'utf-8'); } catch { return ''; } })();
+    const held = readLock(lockPath);
+    if (held === 'fresh' || (held && lockAlive(held))) die(`收口 ${held && held !== 'fresh' ? held.label : '?'} 已经在跑` + (held && held !== 'fresh' ? `（pid ${held.pid}，起于 ${held.started || '?'}）` : '（锁刚写下）') + '——等它结束再起下一次。');
+    // 删之前再核一次内容没变：另一个 collect 可能已经清掉失效锁、抢到了新锁。
+    try {
+      if ((() => { try { return readFileSync(lockPath, 'utf-8'); } catch { return null; } })() === raw) unlinkSync(lockPath);
+      grab();
+    } catch (e2) { die('收口锁被别的进程同时抢走了，稍后再起: ' + e2.message); }
+  }
+  const release = () => {
+    try { if (JSON.parse(readFileSync(lockPath, 'utf-8')).pid === process.pid) unlinkSync(lockPath); } catch { /* 已被清掉 */ }
+  };
+  // 子进程单独成一个进程组，组号写进锁：本进程被 SIGKILL 时测试还在跑，close 查到组还活着照样拒。
+  const child = spawn('sh', ['-c', cmdline], { stdio: 'inherit', detached: true });
+  try {
+    const cur = JSON.parse(readFileSync(lockPath, 'utf-8'));
+    writeFileSync(tmpLock, JSON.stringify({ ...cur, pgid: child.pid }) + '\n');
+    renameSync(tmpLock, lockPath);   // rename 原子替换：读方看到的要么是旧锁、要么是新锁
+  } catch { try { unlinkSync(tmpLock); } catch { /* 没留下 */ } /* 锁已不在：下面照常跑，只是 close 不再被挡 */ }
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => { try { process.kill(-child.pid, sig); } catch { /* 组已退出 */ } });
+  }
+  child.on('error', (e) => { release(); die('收口命令起不来: ' + e.message); });
+  // 被信号杀掉按 shell 惯例报 128+信号值，别和「测试红了」的 1 混在一起。
+  child.on('exit', (code, sig) => { release(); process.exit(code !== null ? code : 128 + (require('os').constants.signals[sig] || 0)); });
+  return;
 }
 
 const capIdx = process.argv.indexOf('--cap');
@@ -501,6 +575,12 @@ if (SUB === 'mark') (() => {
     const dropRe = drops.map((k) => new RegExp('^\\s+-\\s*`?' + esc(k) + (k.endsWith(':') ? '' : '(?=$|[\\s`—])')));
     const body = L.slice(start + 1, last + 1).filter((l) => !dropRe.some((r) => r.test(l)));
     const removed = (last - start) - body.length;
+    // 键漏了冒号（`--drop idle`，子项实际是 `- idle: …`）时只提示、不代补：自动补冒号会让
+    // `--drop qc` 变成 `qc:`、顺手删掉 `qc:done`——那正是精确匹配要挡的形态。
+    const hints = removed ? [] : drops.filter((k) => !k.endsWith(':')).filter((k) => {
+      const r = new RegExp('^\\s+-\\s*`?' + esc(k) + ':(?=$|[\\s`—])');
+      return L.slice(start + 1, last + 1).some((l) => r.test(l));
+    });
     for (const a of adds) body.push('  - ' + a.replace(/\n+/g, ' '));
     if (done) L[start] = L[start].replace(/^- \[ \]/, '- [x]');
     L.splice(start + 1, last - start, ...body);
@@ -508,7 +588,10 @@ if (SUB === 'mark') (() => {
     writeFileSync(tmp, L.join('\n'));
     renameSync(tmp, ticketsPath);
     say(`✅ ${t}：+${adds.length} 条` + (removed ? `，删 ${removed} 条（${drops.join(' ')}）` : '') + (done ? '，已勾选' : ''));
-    if (drops.length && !removed) say(`⚠️ --drop ${drops.join(' ')} 一条都没删到：票块里没有这个键的子项（写在票行本身的不算；键要照写，带冒号的如 \`idle:\`）——核对一下键名。`);
+    if (drops.length && !removed) {
+      say(`⚠️ --drop ${drops.join(' ')} 一条都没删到：票块里没有这个键的子项（写在票行本身的不算；键要照写，带冒号的如 \`idle:\`）——核对一下键名。`
+        + (hints.length ? `票块里有 ${hints.map((k) => `\`${k}:\``).join(' ')} 子项，要删它就重跑 \`mark ${t} ${hints.map((k) => `--drop ${k}:`).join(' ')}\`。` : ''));
+    }
   } finally {
     closeSync(fd);
     try { unlinkSync(lockPath); } catch { /* 已被收走 */ }
@@ -529,6 +612,37 @@ if (SUB === 'selfcheck') {
   if (hStart !== -1) for (let i = hStart + 1; i < lines.length; i++) if (/^##\s/.test(lines[i])) { hEnd = i; break; }
   const section = hStart === -1 ? [] : lines.slice(hStart, hEnd);
   if (hStart !== -1 && !section.some((l) => /^###\s+派发纪律/.test(l))) problems.push('交接段里没有 `### 派发纪律` 小节（`brief` 靠它把纪律切给子代理）');
+  // 把「收口挡 close」写成「收口挡补位」：新 session 照做，开场名额空着等收口（实测一次 14 分钟才打满）。
+  // 冷读查可读性、命令能不能跑，查不出这种串行化，所以机器扫一遍字面。
+  // 每种写法都要求同一分句里出现收口 / 回归（不含「回归用例」「修回归」），批号 B<n> 还得带跑完 / 判绿 / 收口字样
+  // （票标题里的阶段号也叫 B<n>）；动作只认补位、派、开树 / 开 T<n>（「开始」「开发者」不算）。
+  const C = '(?:收口|(?<!修)回归(?!用例|测试))';
+  const B = '(?<![A-Za-z])B\\d+';
+  const K = '[^。；，,\\n]';
+  const ACT = '(?:补位|派|开(?:新?树|\\s*T\\d+))';
+  const serial = new RegExp([
+    '暂停补位',
+    `${C}${K}{0,12}(?:跑完|判绿|结束|完成|完|之后|以后|后)${K}{0,6}(?:才能|才|再)${ACT}`,
+    `${B}${K}{0,6}(?:判绿|收口完?)${K}{0,6}(?:才能|才|再)${ACT}`,
+    // 批号 +「跑完」只配「补位」：票标题里的阶段号常写「B12 登录页票跑完才能开 T13」，那是票间依赖。
+    `${B}${K}{0,6}跑完${K}{0,6}(?:才能|才|再)补位`,
+    `${B}${K}{0,6}跑完${K}{0,3}前${K}{0,3}(?:不|别)${K}{0,3}补位`,
+    `(?:${C}|${B}${K}{0,6}判绿)${K}{0,12}前${K}{0,3}(?:不|别|勿|⛔)${K}{0,3}${ACT}`,
+    `等\\s*[^。；\\n]{0,10}(?:${C}|${B})[^。；\\n]{0,10}(?:再|才)${ACT}`,
+    `(?:补位|开新树|开树|派发)[^。；\\n]{0,10}等\\s*(?:${C}|${B})`,
+    `${C}(?:期间|在跑|跑着|时)${K}{0,4}(?:不|别|暂停)${K}{0,3}${ACT}`,
+  ].join('|'));
+  // 字面启发式，只提醒、不挡冷读（不进 problems）：否定句「补位不用等收口」、引用旧写法当反例都会长得像，
+  // 拿退出码 1 去挡它，误报的代价是整个交接卡住。命中前 6 字内有否定词、或命中落在「」引号里的放过。
+  const warnings = [];
+  section.forEach((l, i) => {
+    const m = serial.exec(l);
+    if (!m) return;
+    if (/不用|无需|不必|不需要|别等|不要等/.test(l.slice(Math.max(0, m.index - 6), m.index + m[0].length))) return;
+    const before = l.slice(0, m.index);
+    if ((before.split('「').length - before.split('」').length) > 0) return;
+    warnings.push(`第 ${hStart + i + 1} 行像是把收口 / 回归写成了补位的前置：「…${l.slice(Math.max(0, m.index - 20), m.index + m[0].length + 10)}…」——收口只挡 close，开树、派发、续派照常；真有别的依赖就写出后者碰了前者的什么，误报就不用管`);
+  });
   // 切读命令：文件在不在、起始图案有没有命中（read-section 零命中会退出 1，这里提前报）。
   // 交接段自己会定义产物目录的简写（实测写的是 `<产物>`，handoff.md 用 `<产物目录>`），两种都认。
   const artifactDir = join('docs', 'grill-flows', state.flow_id);
@@ -560,13 +674,16 @@ if (SUB === 'selfcheck') {
     else if (tk.get(name)?.done) problems.push(`${name}：票已勾选，树却还开着——漏了 close？`);
   }
   if (checked === 0 && hStart !== -1) problems.push('交接段里一条切读命令都没查到（入场表每格应给 `read-section.cjs` 命令；若用了别的占位符，写成 `<产物>`）');
+  const warnOut = () => { if (warnings.length) { say(`⚠️ ${warnings.length} 处疑似串行化写法（提醒，不影响退出码）：`); for (const x of warnings) say('  - ' + x); } };
   if (problems.length) {
     say(`❌ 交接机械自检：${problems.length} 处问题（修完再派冷读）；切读命令查了 ${checked} 条` + (skipped.length ? `、${skipped.length} 条带未知占位符没查` : ''));
     for (const x of problems) say('  - ' + x);
+    warnOut();
     process.exit(1);
   }
   say(`✅ 交接机械自检通过：交接段一份、有派发纪律、登记的树都在；切读命令查了 ${checked} 条全部命中`
     + (skipped.length ? `，另有 ${skipped.length} 条带未知占位符没查（${[...new Set(skipped)].join(' ')}）` : '') + '。语义问题交给冷读。');
+  warnOut();
   process.exit(0);
 }
 

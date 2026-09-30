@@ -751,6 +751,25 @@ if (cmd === 'park') {
 if (cmd === 'close') {
   if (!existsSync(wtPath)) die(`${wtPath} 不存在（已收口过？或 flow_id/票号写错）。`);
 
+  // 收口测试在主工作树跑时不 close：ff 会改动正在被测的文件，那一轮的红绿就不再代表任何
+  // 一棵树。锁由 `schedule.cjs collect` 持有、跑完自删；collect 进程与收口命令的进程组都不在才视为不在。
+  // 只挡 close——开树、派发、续派不碰主工作树，照常。
+  {
+    let held = null;
+    const lockFile = join(flowDir, 'state', 'collecting.json');
+    try { held = JSON.parse(readFileSync(lockFile, 'utf-8')); } catch {
+      // 解析不了、但 10 秒内刚写过：当成正在写的活锁（拒），别当没锁放行。
+      try { if (Date.now() - statSync(lockFile).mtimeMs < 10_000) held = { fresh: true }; } catch { /* 没有锁 */ }
+    }
+    // collect 进程或它起的收口命令进程组（pgid，负数探整组）任一还在就算在跑：collect 被 SIGKILL 时测试照跑。
+    const probe = (id) => { try { process.kill(id, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+    const alive = !!held && (held.fresh || (held.pid > 0 && probe(held.pid)) || (held.pgid > 0 && probe(-held.pgid)));
+    if (alive) {
+      die((held.fresh ? '收口锁刚写下（还读不全）、收口正在主工作树跑' : `收口 ${held.label || '?'} 正在主工作树跑（pid ${held.pid}，起于 ${held.started || '?'}）`) + '，拒绝 close：ff 会改动正在被测的文件。'
+        + `\n    等它结束再 close（后台任务结束的通知会叫醒你）。这期间开树、派发、续派照常，别让名额空着。`);
+    }
+  }
+
   // 主仓在哪条分支上：`sync` 查了，`close` 原先没查——而 `close` 才是不可逆的那个。
   // stage-3 期间主 session 确实会临时切分支（认领无主 commit 之类），此时误跑一次 close，
   // `--ff-only` 在拓扑上照样成立、照样打印「已 fast-forward」、照样把树拆掉，改动却进了

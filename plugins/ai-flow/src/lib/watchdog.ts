@@ -187,6 +187,14 @@ export interface WatchdogState {
   nudges_this_stage: number;
   /** When a nudge last fired, ISO. Reported by `<flow> status`. */
   last_nudge_at: string | null;
+  /**
+   * What the last Stop asked the model to continue for: 'arm' = only "start the watcher",
+   * 'guard' = the stage stop guard spoke, null = nothing. Rewritten on every Stop. The next
+   * Stop arrives with `stop_hook_active`, and only an 'arm' continuation lets the guard run
+   * there — otherwise the watcher ask would silently use up the one turn end in which the
+   * guard could have counted idle slots.
+   */
+  last_continuation: 'arm' | 'guard' | null;
 }
 
 /**
@@ -225,6 +233,7 @@ export function emptyWatchdog(): WatchdogState {
     arm_asks: 0,
     nudges_this_stage: 0,
     last_nudge_at: null,
+    last_continuation: null,
   };
 }
 

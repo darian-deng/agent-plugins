@@ -2,9 +2,11 @@
 // grill-flow stage-3 的 Stop 守卫：主 session 一个回合结束、而**没有任何东西会在将来把它叫醒**
 // 时，由引擎（`src/lib/stop-handler.ts`）调用，回答一个问题——「此刻有没有本可以推进的工作」。
 //
-// 引擎只在这些机械条件全成立时才跑本脚本：无待批 gate、无 `state/hold`、
-// 且这回合不是开发者起的（他刚说过话的回合交给停滞自检的 5 分钟规则，别打断他读回答）。
-// 有子代理在飞时也跑（0.88.3 起）：那时只问一件事——名额空着、够格票却没开（见文件末尾）。
+// 引擎只在这些机械条件全成立时才跑本脚本：无待批 gate、无 `state/hold`、开发者本 session 已开口。
+// 有子代理在飞时也跑（0.88.3 起）、开发者起的回合也跑（0.90.0 起）：这两种情形只问一件事——
+// 名额空着、够格票却没开（见「只查名额」那一节），别的一概不说。
+// 开发者回合原先整段豁免（怕打断他读回答），实测代价：他说「继续」后的整个开场都没人数名额，
+// 一次入场 14 分钟才打满 6 个名额；而开发者要的正是「时刻想着名额有没有打满」。
 // 引擎看得见的事实放在环境变量 `AI_FLOW_STOP_FACTS`（JSON），本脚本补上它看不见的：
 // tickets.md 里还有几张票够格、state/worktrees 里还开着几棵树。
 //
@@ -78,6 +80,18 @@ const freezeDesc = (sched.freeze || []).filter((f) => f.count > 0).map((f) => `$
 const wrappingUp = facts.wrap_up_pct !== null && facts.wrap_up_pct !== undefined;
 const holdPath = facts.hold_path || join(flowDir, 'state', 'hold');
 const signalPath = join(flowDir, 'state', 'signal');
+const developerTurn = facts.developer_turn === true;
+
+// 收口测试是否在跑：`schedule.cjs collect` 持有的锁；collect 进程与收口命令的进程组都不在才视为不在。
+let collecting = null;
+try {
+  const held = JSON.parse(readFileSync(join(flowDir, 'state', 'collecting.json'), 'utf-8'));
+  const probe = (id) => { try { process.kill(id, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+  if ((held.pid > 0 && probe(held.pid)) || (held.pgid > 0 && probe(-held.pgid))) collecting = held;
+} catch { /* 没有锁 */ }
+
+// 开发者起的回合、又在收尾期：收尾分支是给「没人起的回合」催写交接用的，开发者正在和你说话时不插嘴。
+if (wrappingUp && developerTurn) process.exit(0);
 
 // ── 收尾期（context 过线）：只写交接、写 hold，不推进 ──
 // 走到这里说明还没写 hold（有 hold 引擎不会跑本脚本）。0.89.1 之前这里是「只收不派，开着的树
@@ -97,7 +111,7 @@ if (wrappingUp) {
   process.exit(CONTINUE);
 }
 
-// ── 有子代理在飞：只查名额用没用足 ──
+// ── 只查名额用没用足（有子代理在飞，或开发者起的回合） ──
 // 实测（0.88.2，一条 150+ 票的 flow）：回合结束时 6 个名额只占 4 个、5 张票够格，
 // 连着几个回合没有任何东西问一句——原先引擎在「有代理在飞」时直接跳过本脚本。
 // 两类没用足：① 开着、没标 idle:、却没代理在跑的树——它的下一段迟早要派，所以它占名额，
@@ -106,7 +120,7 @@ if (wrappingUp) {
 // ⚠️ ① 的风险：代理的 description 没带 `T<n>·` 前缀，它的树会被当成「没人跑」。三段派发
 // 约定都要求这个前缀（per-ticket-review.md / quality-chain.md），文案里也写明「其实有代理在跑
 // 就别重派、点明是哪个」——宁可让主 session 多核对一次，也不让名额静默空着。
-if (facts.agents_in_flight) {
+if (facts.agents_in_flight || developerTurn) {
   // 车道模式（登记里有 `<flow_id>-R<n>` 的长驻树）：名额是车道、在飞票记在票面 `wip:` 上，
   // 这里的「开树补位」话术不适用，而且 openTrees 只认 T<n> ⇒ 在飞票会被当成够格——实测会
   // 催「重派正在跑的票」。车道模式不催补位，交给它自己的节奏。
@@ -121,11 +135,14 @@ if (facts.agents_in_flight) {
   // 占名额的 = 有代理在跑的票 ∪ 开着、没标 idle:、此刻却没人跑的树（下一段迟早要派，
   // 不算进去就会先把名额借给新票，等它派下一段时同时在跑的就超过上限）。
   const stalled = activeTrees.filter((t) => !busy.has(t));
+  // 开发者回合且收口在跑：没人跑的树多半只差 close（收口挡着），在他说话时点名它们是噪音——
+  // 但它们照样占名额，否则会把名额借给新票、开出超过上限的树。
+  const named = developerTurn && collecting ? [] : stalled;
   const occupied = new Set([...busy, ...stalled]);
   const cap = sched.cap || 6;
   const free = cap - occupied.size;
   const fresh = eligible.filter((t) => !busy.has(t) && !openTrees.includes(t));
-  if (stalled.length === 0 && (free <= 0 || fresh.length === 0)) process.exit(0);
+  if (named.length === 0 && (free <= 0 || fresh.length === 0)) process.exit(0);
   const take = fresh.slice(0, Math.max(0, free));
   const out = [
     `${LABEL} 回合结束时名额没用足（引擎数的，不是开发者说的话）：有代理在跑的票 ${busy.size} 张`
@@ -133,19 +150,23 @@ if (facts.agents_in_flight) {
       + (stalled.length ? `，开着却没代理在跑的树 ${stalled.length} 棵（${stalled.join(' ')}）` : '')
       + `，上限 ${cap}，空 ${Math.max(0, free)} 个；够格未开 ${fresh.length} 张` + (fresh.length ? `（${fresh.join(' ')}，已按取票顺序排好）` : '') + '。',
   ];
-  if (stalled.length) {
-    out.push(`**本回合**先推进没人跑的树（${stalled.join(' ')}）：看票面到哪段——无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账。`
-      + `（它的代理其实还在跑、只是 description 没带 \`T<n>·\` 前缀 → 别重派，在回复里点明是哪个代理。）`);
+  if (named.length) {
+    out.push(`**本回合**先推进没人跑的树（${named.join(' ')}）：看票面到哪段——无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账。`
+      + `（它的代理其实还在跑、只是 description 没带 \`T<n>·\` 前缀 → 别重派，在回复里点明是哪个代理。）`
+      + (collecting ? `收口 ${collecting.label || ''} 正在跑：只差 close 的树等它结束（结束通知会叫醒你），别的段照推。` : ''));
   }
   if (take.length) {
     out.push(`**本回合**再补上：${take.join(' ')} → 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步）。`
-      + `⛔ 别等在飞的代理回来再一起开——它们回来之前这 ${free} 个名额一直空着。`);
+      + (facts.agents_in_flight ? `⛔ 别等在飞的代理回来再一起开——它们回来之前这 ${free} 个名额一直空着。` : '')
+      + `收口测试只挡 close，不挡开树、派发、续派。`);
   }
   process.stdout.write([
     ...out,
     `票数按在飞代理 description 的 \`T<n>·\` 前缀认；某个在跑的代理没按这个前缀写就会被漏数——`
       + `真满了就在回复里说明哪几个代理占着名额，然后结束回合。`
       + `某张够格票确实要等开发者拍板才能开，按 \`freeze.md\` 给它登记冻结面（冻住的票不再算够格）；整体停派才用 Write 写 \`${holdPath}\`。`,
+    ...(developerTurn ? [`这回合是开发者起的：他明确叫停了派发 → 用 Write 写 \`${holdPath}\`（一行：他叫停了什么），然后结束回合；`
+      + `你正在等他回答一个问题 → 不写 hold（hold 会连带关掉名额检查，直到他回话），在回复里一句话说明为什么这回合不派，然后结束回合。`] : []),
   ].join('\n') + '\n');
   process.exit(CONTINUE);
 }
