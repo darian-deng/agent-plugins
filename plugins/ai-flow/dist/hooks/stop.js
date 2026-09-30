@@ -4692,9 +4692,11 @@ async function handleStop(input2) {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     let willAsk = false;
     let developerTurn = false;
+    let developerYetToSpeak = false;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
       developerTurn = w.last_user_prompt_at !== null && (w.last_stop_at === null || Date.parse(w.last_user_prompt_at) > Date.parse(w.last_stop_at));
+      developerYetToSpeak = w.last_user_prompt_at === null;
       const next = {
         ...w,
         last_stop_at: nowIso,
@@ -4708,7 +4710,7 @@ async function handleStop(input2) {
       willAsk = wd.enabled && // The host sets this on a turn that only happened because a Stop hook asked
       // for it. Bailing here is what makes a chain impossible: at most one extra
       // turn per ask, never a second stacked on top.
-      !input2.stop_hook_active && !watcherSeen && w.arm_asks < MAX_ARM_ASKS;
+      !input2.stop_hook_active && !watcherSeen && !developerYetToSpeak && w.arm_asks < MAX_ARM_ASKS;
       if (willAsk) next.arm_asks = w.arm_asks + 1;
       return { watchdog: next };
     });
@@ -4724,7 +4726,7 @@ async function handleStop(input2) {
       out.push(armInstruction(repoRoot, flowName, state.flow_id, session_id));
     }
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
-    if (guard && wd.enabled && !input2.stop_hook_active && !developerTurn && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
+    if (guard && wd.enabled && !input2.stop_hook_active && !developerTurn && !developerYetToSpeak && readHold(repoRoot, flowName) === null && !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)) {
       const facts = {
         flow_id: state.flow_id,
         stage: state.current_stage,

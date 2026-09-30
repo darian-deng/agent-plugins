@@ -4516,6 +4516,7 @@ for (; ; ) {
   }
   const config = await loadFlowConfig(repoRoot, flowName).catch(() => null);
   if (!config) continue;
+  if (readWatchdog(state).last_user_prompt_at === null) continue;
   const w = readWatchdog(state);
   const lastStopAt = w.last_stop_at ? Date.parse(w.last_stop_at) : NaN;
   const lastActivityAt = w.last_activity_at ? Date.parse(w.last_activity_at) : NaN;

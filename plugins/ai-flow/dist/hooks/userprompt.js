@@ -5793,6 +5793,11 @@ Valid commands: ${VALID_COMMANDS.join(", ")}`
       result = await handleHelp(repoRoot, flowName);
       break;
   }
+  if (subCmd === "start" || subCmd === "resume") {
+    await patchActiveState(repoRoot, flowName, (cur) => ({
+      watchdog: { ...readWatchdog(cur), last_user_prompt_at: (/* @__PURE__ */ new Date()).toISOString() }
+    })).catch(() => null);
+  }
   return resultToHookOutput(result, flowName);
 }
 
