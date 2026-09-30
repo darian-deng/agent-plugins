@@ -57,7 +57,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 `<FD>` = 本文件所在目录的上一级（定义层：`references/` `scripts/` 在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（`state/` 在这儿）。就是 stage-3 提示词 `[ai-flow:paths]` 块里 `flow_def:` / `flow_root:` 那两行展开出来的绝对路径。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
 
 - **代理类型：`subagent_type: "ai-flow:grill-qc"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替——模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ **也别同时传 `model` 参数**：它会覆盖定义文件头里的模型，而 `qc-metrics` 的 `model=` 照抄的是定义里的值，于是样本被静默标错。
-- **`description` 以 `T<n>·质量链` 开头**（面板状态行靠它认票号，见 `per-ticket-review.md` 同名一条）
+- **`description` 以 `T<n>·质量链` 开头**（面板数「在跑几张票」靠它，见 `per-ticket-review.md` 同名一条）
 - `<WT>` 与（monorepo 时）`<WT_ROOT>` 绝对路径 + cwd 纪律
 - **取票面的命令**（同 `per-ticket-review.md`「派发时带什么」那条：`node <FD>/scripts/schedule.cjs --flow-dir <FR> ticket T<n>`，⛔ 不内联、不给 tickets.md 路径）——`Touches` 是第 6 步自检的对照物，缺了那一项做不了
 - **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径

@@ -238,7 +238,7 @@ export async function handleSessionStart(
   if (isGatePending(signal, config, state.current_stage)) {
     await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
     const statusLine = developerStatusLine({
-      flowName, stages: config.stages, stageId: state.current_stage, gatePending: true,
+      flowName, stageId: state.current_stage, gatePending: true,
     });
     const isTerminal = expectedNext === null;
     // The stage prompt is NOT injected on this branch (it would be redundant for the
@@ -337,7 +337,7 @@ export async function handleSessionStart(
     // expectedNext is the stage we just advanced into (it was the signal value)
     const base = { additionalContext: pathsPreamble + result.additionalContext };
     if (!result.terminal && expectedNext) {
-      return { ...base, systemMessage: developerStatusLine({ flowName, stages: config.stages, stageId: expectedNext, gatePending: false }) };
+      return { ...base, systemMessage: developerStatusLine({ flowName, stageId: expectedNext, gatePending: false }) };
     }
     return base;
   }
@@ -376,7 +376,7 @@ export async function handleSessionStart(
   promptContent += gateNote;
 
   const statusLine = developerStatusLine({
-    flowName, stages: config.stages, stageId: state.current_stage, gatePending: false,
+    flowName, stageId: state.current_stage, gatePending: false,
   });
 
   return { additionalContext: assemble(promptContent), systemMessage: statusLine };

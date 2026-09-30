@@ -22,26 +22,14 @@ export function flowStatusLine(opts: {
 }
 
 /**
- * The same status, worded for the DEVELOPER: the SessionStart systemMessage, which
- * never reaches the model. No stage id and no flow id — both are engine vocabulary a
- * developer has to look up. Position plus the stage's `name` instead, and the one
- * thing the developer may have to act on.
- * e.g. "grill-flow 第 5/5 步：知识沉淀 · 这一步已完成，等你确认进下一步"
- * Kept in step with `statusline/subagent-statusline.cjs`, which shows the same line in
- * the agent panel.
+ * The same status for the DEVELOPER: the SessionStart systemMessage, which never reaches
+ * the model. Keeps the stage id — stage prompts and flow messages all say `stage-x` — and
+ * drops the flow id. Kept in step with `statusline/subagent-statusline.cjs`.
+ * e.g. "grill-flow stage-5 · 等你 approve"
  */
-export function developerStatusLine(opts: {
-  flowName: string;
-  stages: ReadonlyArray<{ id: string; name?: string | undefined }>;
-  stageId: string;
-  gatePending: boolean;
-}): string {
-  const idx = opts.stages.findIndex((s) => s.id === opts.stageId);
-  const name = opts.stages[idx]?.name;
-  const where = idx >= 0
-    ? `${opts.flowName} 第 ${idx + 1}/${opts.stages.length} 步${name ? `：${name}` : ''}`
-    : `${opts.flowName} ${opts.stageId}`;
-  return opts.gatePending ? `${where} · 这一步已完成，等你确认进下一步` : where;
+export function developerStatusLine(opts: { flowName: string; stageId: string; gatePending: boolean }): string {
+  const where = `${opts.flowName} ${opts.stageId}`;
+  return opts.gatePending ? `${where} · 等你 approve` : where;
 }
 
 /** Shown to a session that cannot drive the flow because another one owns it. */

@@ -12,8 +12,7 @@ import { claudeDir } from './session-registry.js';
  * empty string there, and the failure is silent (a debug-log line, default rows). The
  * install path also cannot be spelled in advance — it moves with the marketplace name and
  * the version. So SessionStart copies the script to a fixed location under the Claude
- * config dir, and records the plugin root beside it: the script reads the flow's stage
- * list from the plugin's own `.ai-flow/<flow>/config.json`.
+ * config dir.
  *
  * Runs on every SessionStart, flow or not — a session that later starts a flow needs the
  * script already in place. Writes only when the content differs, via tmp + rename so a
@@ -21,7 +20,6 @@ import { claudeDir } from './session-registry.js';
  * the session.
  */
 export const STATUSLINE_SCRIPT = 'subagent-statusline.cjs';
-export const STATUSLINE_SIDECAR = 'subagent-statusline.json';
 
 export function statuslineInstallDir(): string {
   return join(claudeDir(), 'ai-flow');
@@ -40,7 +38,6 @@ export function installSubagentStatusline(pluginRoot: string = PLUGIN_ROOT): voi
     if (!existsSync(src)) return;
     const dir = statuslineInstallDir();
     mkdirSync(dir, { recursive: true });
-    writeIfChanged(join(dir, STATUSLINE_SIDECAR), JSON.stringify({ pluginRoot }, null, 2) + '\n');
     writeIfChanged(join(dir, STATUSLINE_SCRIPT), readFileSync(src, 'utf-8'));
   } catch { /* best-effort: the panel keeps its default rows */ }
 }
