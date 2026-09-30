@@ -16,7 +16,7 @@ import {
 } from './state.js';
 import { bindSession } from './session-registry.js';
 import { emptyWatchdog } from './watchdog.js';
-import { truncateError, flowStatusLine } from './format.js';
+import { truncateError, developerStatusLine, readOnlyStatusLine } from './format.js';
 import { loadFlowConfig, getStageConfig } from './flow-config-loader.js';
 import { contextWindowForModel } from './context.js';
 import { advanceStage } from './advance-stage.js';
@@ -24,6 +24,7 @@ import { renderPrompt, assembledOverhead, buildAiFlowPreamble, gateProtocolNote,
 import { stagePromptPath as stagePromptTemplatePath } from './flow-paths.js';
 import { pruneLegacyInstall } from './legacy-cleanup.js';
 import { injectStagePrompt } from './stage-injection.js';
+import { installSubagentStatusline } from './statusline-install.js';
 
 
 export async function handleSessionStart(
@@ -33,6 +34,9 @@ export async function handleSessionStart(
 
   // Prune dead bindings opportunistically (best-effort, never throws).
   await gcRegistry().catch(() => {});
+  // Before the no-flow return: a session that starts a flow later needs the panel script
+  // in place already. Never throws.
+  installSubagentStatusline();
 
   const active = await resolveActiveFlow(cwd, session_id).catch(() => null);
   if (!active) return null;
@@ -105,7 +109,7 @@ export async function handleSessionStart(
     // session inside one of the flow's OWN ticket worktrees is meant to see the ordinary
     // mutex — the anchor living elsewhere is the expected shape there, and telling that
     // session to park the state of the flow that opened its tree is exactly wrong.
-    const statusLine = `[ai-flow:${flowName}] 工程进行中，本 session 只读（禁止修改项目与流程命令）`;
+    const statusLine = readOnlyStatusLine(flowName);
     const lines = [
       `[ai-flow] 当前工程已在进行流程 '${flowName}'（由另一 session 控制）。`,
       ``,
@@ -233,12 +237,8 @@ export async function handleSessionStart(
   // S1 + gate: gate pending
   if (isGatePending(signal, config, state.current_stage)) {
     await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
-    const statusLine = flowStatusLine({
-      flowName,
-      stageId: state.current_stage,
-      flowId: state.flow_id,
-      gatePending: true,
-      recovered: true,
+    const statusLine = developerStatusLine({
+      flowName, stages: config.stages, stageId: state.current_stage, gatePending: true,
     });
     const isTerminal = expectedNext === null;
     // The stage prompt is NOT injected on this branch (it would be redundant for the
@@ -337,7 +337,7 @@ export async function handleSessionStart(
     // expectedNext is the stage we just advanced into (it was the signal value)
     const base = { additionalContext: pathsPreamble + result.additionalContext };
     if (!result.terminal && expectedNext) {
-      return { ...base, systemMessage: flowStatusLine({ flowName, stageId: expectedNext, flowId: state.flow_id, gatePending: false, recovered: false }) };
+      return { ...base, systemMessage: developerStatusLine({ flowName, stages: config.stages, stageId: expectedNext, gatePending: false }) };
     }
     return base;
   }
@@ -375,12 +375,8 @@ export async function handleSessionStart(
   }
   promptContent += gateNote;
 
-  const statusLine = flowStatusLine({
-    flowName,
-    stageId: state.current_stage,
-    flowId: state.flow_id,
-    gatePending: false,
-    recovered: true,
+  const statusLine = developerStatusLine({
+    flowName, stages: config.stages, stageId: state.current_stage, gatePending: false,
   });
 
   return { additionalContext: assemble(promptContent), systemMessage: statusLine };

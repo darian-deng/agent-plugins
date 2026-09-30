@@ -14,6 +14,12 @@ const CompletionSchema = z.object({
 
 const StageConfigSchema = z.object({
   id: StageIdSchema,
+  /**
+   * What the developer calls this stage ("逐票实施"). Only shown to the developer — the
+   * SessionStart status line and the agent panel's subagentStatusLine read it as
+   * "第 3/5 步：逐票实施". Optional: without it they show the position alone, never the id.
+   */
+  name: z.string().min(1).optional(),
   prompt: z.string().min(1),
   write_scope: z.enum(['unrestricted', 'docs_only']),
   /**

@@ -46,6 +46,11 @@ Flow 定义生成后，用以下命令操作（将 `{flow-name}` 替换为你的
 
 这些命令以纯文本输入，UserPromptSubmit hook 自动拦截处理。
 
+**看进度**：会话开始（含 `/clear`、resume）时，提示区显示一行「grill-flow 第 3/5 步：逐票实施」。之后只要有子代理在跑，代理面板第一行就带上 flow 进度与需要你处理的事（在等你回答 / 等你确认进下一步 / 上下文快满正在收尾 / 被另一个会话持有），grill-flow 的票行显示成「T186 写代码 · 已跑 12 分钟」。这一项不消耗模型 token。已知限制：
+- 你自己（或另一个插件）配置了 `subagentStatusLine` 时，以那个为准，本插件的显示不出现；
+- 面板里没有子代理时面板不出现，这段显示也就没有；
+- 脚本由 SessionStart 复制到 `${CLAUDE_CONFIG_DIR:-~/.claude}/ai-flow/`，装完插件后第一次会话开始前不生效；Windows 需要 Git Bash。
+
 ### 工作原理
 
 flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `stages/`、参考资料 `references/`、验证脚本 `scripts/`）随插件版本走，住在插件里。项目里只有两样：`.ai-flow/{flow-name}/config.json`——一个**稀疏覆盖层**，只写要改的键，留空就是全用插件默认；以及 `.ai-flow/{flow-name}/state/` 运行态。
@@ -151,6 +156,11 @@ your flow directory name):
 
 Type these commands as plain text in Claude Code — the UserPromptSubmit hook
 intercepts and processes them automatically.
+
+**Seeing progress**: at session start (including `/clear` and resume) a one-line notice shows e.g. "grill-flow 第 3/5 步：逐票实施". While subagents are running, the first row of the agent panel carries the flow's progress plus anything waiting on you (a question, a gate to approve, context wrap-up, another session owning the flow); grill-flow ticket rows read like "T186 写代码 · 已跑 12 分钟". Costs no model tokens. Known limits:
+- a `subagentStatusLine` of your own (or from another plugin) takes precedence, and this display does not appear;
+- with no subagents the panel is hidden, and so is this display;
+- the script is copied to `${CLAUDE_CONFIG_DIR:-~/.claude}/ai-flow/` at SessionStart, so it starts working from the first session after install; Windows needs Git Bash.
 
 ### How it works
 

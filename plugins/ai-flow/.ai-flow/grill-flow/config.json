@@ -8,6 +8,7 @@
   "stages": [
     {
       "id": "stage-1",
+      "name": "需求对齐",
       "prompt": "stages/stage-1.md",
       "write_scope": "docs_only",
       "docs_paths": ["docs/grill-flows/"],
@@ -15,6 +16,7 @@
     },
     {
       "id": "stage-2",
+      "name": "写规格与切票",
       "prompt": "stages/stage-2.md",
       "write_scope": "docs_only",
       "docs_paths": ["docs/grill-flows/"],
@@ -25,6 +27,7 @@
     },
     {
       "id": "stage-3",
+      "name": "逐票实施",
       "prompt": "stages/stage-3.md",
       "write_scope": "unrestricted",
       "docs_paths": ["docs/grill-flows/"],
@@ -35,6 +38,7 @@
     },
     {
       "id": "stage-4",
+      "name": "整体评审与合并",
       "prompt": "stages/stage-4.md",
       "write_scope": "unrestricted",
       "docs_paths": ["docs/grill-flows/"],
@@ -42,6 +46,7 @@
     },
     {
       "id": "stage-5",
+      "name": "知识沉淀",
       "prompt": "stages/stage-5.md",
       "write_scope": "unrestricted",
       "docs_paths": ["docs/grill-flows/"],

@@ -57,6 +57,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 `<FD>` = 本文件所在目录的上一级（定义层：`references/` `scripts/` 在这儿）；`<FR>` = 项目里的 `.ai-flow/<flow>`（`state/` 在这儿）。就是 stage-3 提示词 `[ai-flow:paths]` 块里 `flow_def:` / `flow_root:` 那两行展开出来的绝对路径。子代理没有占位符注入，**下面凡是路径都要给绝对路径**。
 
 - **代理类型：`subagent_type: "ai-flow:grill-qc"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替——模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ **也别同时传 `model` 参数**：它会覆盖定义文件头里的模型，而 `qc-metrics` 的 `model=` 照抄的是定义里的值，于是样本被静默标错。
+- **`description` 以 `T<n>·质量链` 开头**（面板状态行靠它认票号，见 `per-ticket-review.md` 同名一条）
 - `<WT>` 与（monorepo 时）`<WT_ROOT>` 绝对路径 + cwd 纪律
 - **取票面的命令**（同 `per-ticket-review.md`「派发时带什么」那条：`node <FD>/scripts/schedule.cjs --flow-dir <FR> ticket T<n>`，⛔ 不内联、不给 tickets.md 路径）——`Touches` 是第 6 步自检的对照物，缺了那一项做不了
 - **spec 相关段**（Spec 轴要用）——切好给，⛔ 不给 `spec.md` 路径
@@ -132,7 +133,7 @@ git -C <WT> log --oneline -1        # 必须看到本票那笔，subject 不带 
 - 它是**写操作**，且耗时是分钟量级。**当前形态实测：93–886 秒，均值 451、中位 481，n=20**（同一个 flow 实例的全部 20 个清理代理，量的是宿主自己写进完成通知的 `<usage><duration_ms>`——比 transcript 首末时间戳硬，误差只有启动/收尾那几秒）。最慢一次 **886 秒 = 14.8 分钟**（T218，285k token / 214 个工具调用）；最快那次 93 秒是零产出、判完就收工。⚠️ **本条曾按 n=12 的样本（114–557 秒、均值 418）给「898.8 秒 / 837.9 秒」这两个旧数字判过死刑，理由是「最慢那次只有 898.8 的 62%」——那条判决已被 n=20 的实测推翻**：886 是 898.8 的 98.6%，当前形态确实跑到过将近 900 秒；20 个样本里有 7 个（35%）落在 557 以外，当初那 12 个样本根本没覆盖到尾部。🔴 **教训是形态级的，比这个数字本身重要：用小样本给一个数字判死刑，本身就是个错误形态。** 样本不够时只能写「本样本未观察到」，不能写「不成立」。那两个旧数字仍留着一条有效信息：它们来自**注释清理还在质量链代理内部、由它同步等**的旧形态（旧形态下「是三评审回报耗时的 3.5–9.3 倍」那个比较仍然作废——当前形态下没有同口径的三评审样本，所以下面不再拿它和三评审比；旧成本模型整体作废见 `execution-unit.md` 的「实际峰值并发」节）。⚠️ 这个区间也**不是主 session 的等待时长**：上收之后派发是异步丢后台的，实测 12 次派发的 `tool_use → tool_result` 间隔只有 2–12 秒。**换掉的只是数字，下面两次事故仍然是有效的设计约束**——放在 commit 之前，等待窗口必然被撑破：一次是等不到就先 commit、清理代理随后陆续落改动，**一张票裂成 4 笔 commit**（破了「一票一 commit」，主 session 事后 `git reset --soft` 收拾）；另一次是等不到就**自己动手改同一批文件**、和仍在跑的清理代理撞车，误删三处注释指针（`DEFECT-WSNOTIFY-01` 的归属指针等）。
 - 移出 commit 窗口之后，它迟到也不再影响 commit 边界。
 
-**主 session 侧怎么做**（stage-3 主循环第 5 步指到这里）：派一个 fresh-context 子代理（**`subagent_type: "ai-flow:grill-comment"`**，模型 sonnet 写在定义里；⛔ **别传 `model` 参数**、⛔ 别用 `general-purpose` 代替——那样要靠你每次记得传 `model: "sonnet"`，不传就继承主 session 的模型）调
+**主 session 侧怎么做**（stage-3 主循环第 5 步指到这里）：派一个 fresh-context 子代理（**`subagent_type: "ai-flow:grill-comment"`**，模型 sonnet 写在定义里；⛔ **别传 `model` 参数**、⛔ 别用 `general-purpose` 代替——那样要靠你每次记得传 `model: "sonnet"`，不传就继承主 session 的模型；`description` 以 `T<n>·注释清理` 开头）调
 `comment`，范围 = 本票那笔 commit 的改动。prompt 里只给本票变量：`<WT>`、本票 commit sha、范围文件清单、项目专属的注释约定（如有）。
 它改完由主 session `git -C <WT> commit --amend` 折回本票那笔。
 ⚠️ 它耗时 1.5–15 分钟（上面那个 93–886 秒区间）⇒ **丢后台去推别的票**，别原地等（主 session 会被完成通知唤醒，

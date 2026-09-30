@@ -33,7 +33,7 @@ export interface SessionBinding {
   boundAt: string;
 }
 
-function claudeDir(): string {
+export function claudeDir(): string {
   // Honor CLAUDE_CONFIG_DIR (Claude Code's config relocation env, also used for
   // test isolation) before falling back to the default ~/.claude.
   return process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude');
