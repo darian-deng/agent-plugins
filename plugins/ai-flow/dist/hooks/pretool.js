@@ -4820,7 +4820,7 @@ ${lock.path}
           `Context wrap-up started at ${wrapUpPct}%. Writes to the codebase are refused; writes to this flow's own docs (${docsPaths.join(", ")}) are still allowed so you can land a handoff.
 
 Before /clear: write whatever a later session cannot reconstruct into those docs \u2014 which lane is where, which subagents are STILL RUNNING and on which worktree, current test baselines, and any decision you have made but not recorded.
-What /clear costs: flow state and commits are on disk and survive; **an in-flight subagent's report does not** \u2014 its findings, real-machine items and security self-check cannot be reconstructed from the commit it leaves behind. If one is running, prefer waiting for it, or summarise its worktree state into the docs first.`
+What /clear costs: flow state and commits are on disk and survive. **An in-flight subagent survives /clear too** \u2014 it keeps running and its report is delivered to the session after /clear, so do not wait for it; list it in the docs (what it is doing, which worktree, where its report lands). **Exiting or restarting Claude Code kills it**: when you tell the developer they can /clear, name the subagents still running and ask them not to exit or restart Claude Code until those report.`
         );
       }
     }
