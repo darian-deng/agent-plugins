@@ -495,10 +495,8 @@ function truncateError(e, max = 120) {
   return s.length > max ? s.slice(0, max - 3) + "..." : s;
 }
 function developerStatusLine(opts) {
-  const idx = opts.stages.findIndex((s) => s.id === opts.stageId);
-  const name = opts.stages[idx]?.name;
-  const where = idx >= 0 ? `${opts.flowName} \u7B2C ${idx + 1}/${opts.stages.length} \u6B65${name ? `\uFF1A${name}` : ""}` : `${opts.flowName} ${opts.stageId}`;
-  return opts.gatePending ? `${where} \xB7 \u8FD9\u4E00\u6B65\u5DF2\u5B8C\u6210\uFF0C\u7B49\u4F60\u786E\u8BA4\u8FDB\u4E0B\u4E00\u6B65` : where;
+  const where = `${opts.flowName} ${opts.stageId}`;
+  return opts.gatePending ? `${where} \xB7 \u7B49\u4F60 approve` : where;
 }
 function readOnlyStatusLine(flowName) {
   return `\u26A0 ${flowName} \u7531\u53E6\u4E00\u4E2A\u4F1A\u8BDD\u6301\u6709\uFF0C\u672C\u4F1A\u8BDD\u53EA\u8BFB\uFF1B\u90A3\u4E2A\u4F1A\u8BDD\u82E5\u5DF2\u5173\u95ED\uFF0C/clear \u5373\u53EF\u63A5\u7BA1`;
@@ -4561,12 +4559,6 @@ var CompletionSchema = external_exports.object({
 });
 var StageConfigSchema = external_exports.object({
   id: StageIdSchema,
-  /**
-   * What the developer calls this stage ("逐票实施"). Only shown to the developer — the
-   * SessionStart status line and the agent panel's subagentStatusLine read it as
-   * "第 3/5 步：逐票实施". Optional: without it they show the position alone, never the id.
-   */
-  name: external_exports.string().min(1).optional(),
   prompt: external_exports.string().min(1),
   write_scope: external_exports.enum(["unrestricted", "docs_only"]),
   /**
@@ -4959,7 +4951,6 @@ import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as rea
 import { randomBytes as randomBytes3 } from "crypto";
 import { join as join6 } from "path";
 var STATUSLINE_SCRIPT = "subagent-statusline.cjs";
-var STATUSLINE_SIDECAR = "subagent-statusline.json";
 function statuslineInstallDir() {
   return join6(claudeDir(), "ai-flow");
 }
@@ -4975,7 +4966,6 @@ function installSubagentStatusline(pluginRoot = PLUGIN_ROOT) {
     if (!existsSync7(src)) return;
     const dir = statuslineInstallDir();
     mkdirSync3(dir, { recursive: true });
-    writeIfChanged(join6(dir, STATUSLINE_SIDECAR), JSON.stringify({ pluginRoot }, null, 2) + "\n");
     writeIfChanged(join6(dir, STATUSLINE_SCRIPT), readFileSync7(src, "utf-8"));
   } catch {
   }
@@ -5077,7 +5067,6 @@ async function handleSessionStart(input2) {
       await appendLog(repoRoot, flowName, session_id, `SESSION_GATE_PENDING stage=${state.current_stage}`);
       const statusLine2 = developerStatusLine({
         flowName,
-        stages: config.stages,
         stageId: state.current_stage,
         gatePending: true
       });
@@ -5123,7 +5112,7 @@ async function handleSessionStart(input2) {
       const result = await advanceStage(repoRoot, flowName, session_id, pathsPreamble.length);
       const base = { additionalContext: pathsPreamble + result.additionalContext };
       if (!result.terminal && expectedNext) {
-        return { ...base, systemMessage: developerStatusLine({ flowName, stages: config.stages, stageId: expectedNext, gatePending: false }) };
+        return { ...base, systemMessage: developerStatusLine({ flowName, stageId: expectedNext, gatePending: false }) };
       }
       return base;
     }
@@ -5157,7 +5146,6 @@ async function handleSessionStart(input2) {
     promptContent += gateNote;
     const statusLine = developerStatusLine({
       flowName,
-      stages: config.stages,
       stageId: state.current_stage,
       gatePending: false
     });

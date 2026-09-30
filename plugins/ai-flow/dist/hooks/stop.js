@@ -4382,12 +4382,6 @@ var CompletionSchema = external_exports.object({
 });
 var StageConfigSchema = external_exports.object({
   id: StageIdSchema,
-  /**
-   * What the developer calls this stage ("逐票实施"). Only shown to the developer — the
-   * SessionStart status line and the agent panel's subagentStatusLine read it as
-   * "第 3/5 步：逐票实施". Optional: without it they show the position alone, never the id.
-   */
-  name: external_exports.string().min(1).optional(),
   prompt: external_exports.string().min(1),
   write_scope: external_exports.enum(["unrestricted", "docs_only"]),
   /**
