@@ -87,9 +87,11 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' [--cap <正整数>]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' missed [<在飞票号> …]\n'
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' rm [<票号>]\n'
+    + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' ticket <票号>\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 4。判据与两种模式的代价见 references/execution-unit.md。\n'
     + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票，按取票顺序（插票 → 下游链长降序 → 文件顺序）排好。只摆事实，不放行。\n'
+    + 'ticket T<n>：原样打印该票票块（派发 prompt 里给子代理的就是这条命令，代替内联票面）。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
@@ -160,8 +162,8 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && SUB !== 'missed' && SUB !== 'rm') {
-  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && SUB !== 'missed' && SUB !== 'rm' && SUB !== 'ticket') {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
 }
 
 const capIdx = process.argv.indexOf('--cap');
@@ -195,17 +197,23 @@ function collectRm(rec, line, isTicketLine) {
 }
 
 let cur = null;
-for (const l of lines) {
+let blockClosed = false;
+for (let li = 0; li < lines.length; li++) {
+  const l = lines[li];
   const m = /^- \[([ xX])\] (T\d+)/.exec(l);
   if (m) {
     cur = m[2];
-    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', inserted: false, rmHits: [] });
+    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', inserted: false, idle: null, start: li, end: li, rmHits: [] });
     order.push(cur);
+    blockClosed = false;
     collectRm(tk.get(cur), l, true);   // 票行内的标记（约定允许写在这里）
     continue;
   }
   if (cur === null) continue;
   if (/^#{1,6}\s/.test(l)) { cur = null; continue; }
+  // `ticket` 子命令打印的范围：票行起、到第一条顶格非票条目之前（解析口径不变，只管打印到哪）。
+  if (/^- \S/.test(l)) blockClosed = true;
+  else if (l.trim() !== '' && !blockClosed) tk.get(cur).end = li;
   if (!/^\s+\S/.test(l)) continue;
   collectRm(tk.get(cur), l, false);  // 缩进子项里的标记（只认行首 `- rm:`）
   const mb = /(?:^|\s)Blocked by:\s*(.+)$/.exec(l);
@@ -215,6 +223,8 @@ for (const l of lines) {
   const ml = /(?:^|\s)lane:\s*(\S+)/.exec(l);
   if (ml) tk.get(cur).lane = ml[1];
   if (/^\s*-\s*`?inserted:/.test(l)) tk.get(cur).inserted = true;
+  const mi = /^\s*-\s*`?idle:\s*(.*)$/.exec(l);
+  if (mi) tk.get(cur).idle = mi[1].replace(/`$/, '').trim() || '（未写理由）';
 }
 if (tk.size === 0) die('tickets.md 里没有 ticket 级行（`- [ ] T<n>`）');
 
@@ -353,6 +363,21 @@ function priorityOrder(included) {
   return { ranked, down };
 }
 
+// ── 子命令 `ticket`：原样打印一张票的票块（票行 + 其后的缩进子项）───────────────────
+// 存在理由：派发 prompt 原先整段内联票面，同一段文字每票进主 session 上下文三次（主 session
+// 读一次、实施与质量链 prompt 各抄一次），此后每轮重新计费。改成 prompt 里只给这条命令、子代理
+// 自己跑：主 session 仍读一次（它要据此写派发要点），省掉的是两次抄写；而且子代理拿到的永远是
+// 主 session 最后一次改过的版本（补过的 Touches、改过的 AC、写过的 rest:），不会有快照过期。
+// ⛔ 不给 tickets.md 路径的规矩不变：这条命令只吐一张票，整份台账（实测 1.7MB）进不了子代理。
+if (SUB === 'ticket') {
+  const want = process.argv.slice(3).filter((a) => /^T\d+$/.test(a));
+  if (want.length !== 1) die('用法：ticket T<n>（恰好一个票号）');
+  const t = tk.get(want[0]);
+  if (!t) die(`tickets.md 里找不到 ${want[0]} 的票行（\`- [ ] ${want[0]} …\`）`);
+  say(lines.slice(t.start, t.end + 1).join('\n'));
+  process.exit(0);
+}
+
 // ── 子命令 `missed`：报「本可以一起开、却没开」的票 ──────────────────────────
 // 存在理由：stage-3 主循环的准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，
 // 错的是**没有任何东西会在开树那一刻把「你还漏了哪几张」摆到主 session 眼前**。实测一条
@@ -407,7 +432,7 @@ if (SUB === 'missed') {
   if (asJson) {
     const open = order.filter((t) => !done.has(t));
     say(JSON.stringify({
-      live: [...live], eligible, down: Object.fromEntries(eligible.map((t) => [t, down.get(t)])), frozen: frozen.map((x) => x.t),
+      live: [...live], idle: [...live].filter((t) => tk.get(t).idle), eligible, down: Object.fromEntries(eligible.map((t) => [t, down.get(t)])), frozen: frozen.map((x) => x.t),
       freeze: activeFreeze.map((f) => ({ id: f.id, lift: f.lift, paths: f.paths, only: f.only, except: f.except, count: frozen.filter((x) => x.f === f).length })),
       open: open.length, done: done.size, total: order.length,
     }));
@@ -431,7 +456,13 @@ if (SUB === 'missed') {
     say(`⚠  这些在飞票在 tickets.md 里没有可解析的 \`Touches\` 行：${noTouch.join(' ')}`);
     say('   它们的写集进不了相交判断，于是清单会偏宽（可能列出实际会撞车的票）。');
   }
+  const idleLive = [...live].filter((t) => tk.get(t).idle);
   const liveDesc = live.size > 0 ? `${live.size} 张（${[...live].join(' ')}）` : '0 张';
+  if (idleLive.length > 0) {
+    say(`💤 其中闲置树 ${idleLive.length} 棵（票面有 \`idle:\`，不占名额、写集照样参与相交）：`
+      + idleLive.map((t) => `${t}（${tk.get(t).idle}）`).join('；'));
+    if (idleLive.length > 2) say('   ⚠️ 闲置树超过 2 棵：它们的写集一直挡着别的票、基线越放越旧——停下补票面，写 hold 让开发者裁（拆票 / 改依赖）。');
+  }
   const CRIT = '未勾 ∧ 全部 Blocked by 已勾 ∧ 写集与在飞票不相交 ∧ 彼此之间也不相交';
   if (eligible.length === 0) {
     // 无遗漏也必须响亮：静默会被读成「脚本没跑」，于是这条判据每轮都要人重新自己想一遍。

@@ -1035,6 +1035,31 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(sched(makeFlow(withIns), 'missed')).toContain('T7(插)(↓0) T3(↓2) T6(↓0)');
   });
 
+  it('ticket：原样打印票块（票行 + 缩进子项），到下一张票或顶格条目为止', () => {
+    const t = T('T1', false, 'src/a/', '  - AC1: x => `echo 1` => `1`\n  - rest: 还差 AC2\n')
+      + '- 顶格散文，不属于 T1\n  - 它的子项\n' + T('T2', false, 'src/b/');
+    const out = sched(makeFlow(t), 'ticket', 'T1');
+    expect(out).toContain('- [ ] T1 x');
+    expect(out).toContain('  - rest: 还差 AC2');
+    expect(out).not.toContain('顶格散文');
+    expect(out).not.toContain('T2');
+  });
+
+  it('idle：闲置树写集照算相交，missed --json 列出它；stop-guard 不催往闲置树派实施', () => {
+    const t = T('T1', true, 'src/a/')
+      + '- [ ] T2 x\n  - Blocked by: T4\n  - Touches: src/b/\n  - idle: 等 T4\n'
+      + T('T3', false, 'src/b/x.ts') + '- [ ] T4 x\n  - Blocked by: T5\n  - Touches: src/c/\n'
+      + '- [ ] T5 x\n  - Blocked by: T4\n  - Touches: src/d/\n';
+    const flowDir = makeFlow(t, ['T2']);
+    const j = JSON.parse(sched(flowDir, 'missed', '--json', 'T2').trim().split('\n').pop()!);
+    expect(j.idle).toEqual(['T2']);
+    expect(j.eligible).toEqual([]);   // T3 与闲置的 T2 写集相交，照样挡
+    const r = guard(flowDir, { wrap_up_pct: null });
+    expect(r.out).toContain('闲置 1（T2');
+    expect(r.out).not.toContain('派实施');
+    expect(r.out).toContain('没有一张够格');
+  });
+
   it('missed：台账里有依赖环时不崩，环上的票不算够格', () => {
     const t = T('T1', false, 'src/a/')
       + '- [ ] T2 x\n  - Blocked by: T3\n  - Touches: src/b/\n'

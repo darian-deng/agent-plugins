@@ -101,6 +101,8 @@ describe('flow 文档之间的指路不能断', () => {
         const hit =
           existsSync(join(FLOWS_DIR, doc.flow, 'references', name)) ||
           existsSync(join(FLOWS_DIR, doc.flow, 'stages', name)) ||
+          // 插件自带的代理定义（`agents/grill-impl.md` 等）：每次派发都一样的纪律住在那里，契约只留指针。
+          existsSync(join(FLOWS_DIR, '..', 'agents', name)) ||
           // `SKILL.md` 落在 skills/<name>/ 下，不在任何 flow 目录里——但它在本仓，所以查得了。
           // ⚠️ 必须查**这份文档点名的那个** skill，不能「任意一个 skills/*/ 下有 SKILL.md 就算命中」——
           // 仓里五个 skill 目录**全都**带 SKILL.md，那种写法下把 skills/comment/ 删掉测试照样全绿，
@@ -181,7 +183,7 @@ const SPLIT_STAGES: SplitStage[] = [
       // 所以红线改成「不许往下派」——同步既然拿不到，唯一可执行的形态就是自己顺序做完。
       ['子代理不许再往下派孙代理', /不许再往下派孙代理/],
       ['主 session 自己派子代理可以丢后台', /你自己派子代理反而可以丢后台/],
-      ['票面整段内联，不给 tickets.md 路径', /票面整段内联，不给\s*`tickets\.md`\s*路径/],
+      ['票面给取票面命令、不内联、不给 tickets.md 路径', /不内联、不给\s*`tickets\.md`\s*路径/],
       // 两段的复核判据方向相反：实施交付后树必须脏，质量链交付后必须干净。
       // 用错方向会永远判成「它还没停」，质量链永远派不出去——而这不报任何错。
       ['实施交付后复核树非空', /复核\s*`git -C <WT> status --porcelain`\s*\*{0,2}非空/],

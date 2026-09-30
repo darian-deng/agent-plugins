@@ -60,6 +60,10 @@ let sched;
 try { sched = JSON.parse(r.stdout.trim().split('\n').pop()); } catch (e) { fail('schedule.cjs 输出不是 JSON: ' + r.stdout.slice(0, 200)); }
 
 const eligible = sched.eligible || [];
+// 闲置树（票面 `idle:`，如在飞途中被补了依赖、或在等开发者）：开着但此刻无活可派。
+// 不排除它，守卫会把「无 impl:done」读成「该派实施」，催主 session 往一棵依赖未满足的树里派人。
+const idleTrees = (sched.idle || []).filter((t) => openTrees.includes(t));
+const activeTrees = openTrees.filter((t) => !idleTrees.includes(t));
 const frozen = sched.frozen || [];
 const freezeDesc = (sched.freeze || []).filter((f) => f.count > 0).map((f) => `${f.id} 冻 ${f.count} 张，解冻: ${f.lift || '未写'}`).join('；');
 const wrappingUp = facts.wrap_up_pct !== null && facts.wrap_up_pct !== undefined;
@@ -67,12 +71,13 @@ const holdPath = facts.hold_path || join(flowDir, 'state', 'hold');
 const signalPath = join(flowDir, 'state', 'signal');
 
 // 收尾期（context 过线）只收不派：没有树要收就让它停。
-if (wrappingUp && openTrees.length === 0) process.exit(0);
+if (wrappingUp && activeTrees.length === 0) process.exit(0);
 
 const lines = [];
 const factBits = [
   '在飞子代理 0',
-  `开着的树 ${openTrees.length}` + (openTrees.length ? `（${openTrees.join(' ')}）` : ''),
+  `开着的树 ${openTrees.length}` + (openTrees.length ? `（${openTrees.join(' ')}）` : '')
+    + (idleTrees.length ? `，其中闲置 ${idleTrees.length}（${idleTrees.join(' ')}，票面 idle:，不催）` : ''),
 ];
 if (!wrappingUp) {
   factBits.push(`够格未开 ${eligible.length}` + (eligible.length ? `（${eligible.join(' ')}）` : '') + `；未勾 ${sched.open}/${sched.total}`);
@@ -89,18 +94,18 @@ if (sched.open === 0) {
 } else if (wrappingUp) {
   lines.push(`context 已过收尾线：**只收不派**。开着的树按票面标记走完剩余段（派质量链 / 注释清理 / close / 记账），`
     + `然后重写交接段、结束回合。⛔ 不开新票。`);
-} else if (openTrees.length === 0 && eligible.length === 0 && frozen.length > 0) {
+} else if (activeTrees.length === 0 && eligible.length === 0 && frozen.length > 0) {
   lines.push(`够格 0 是因为冻结面（${freezeDesc}）。这是**等门期**，不是停点——按 \`freeze.md\` 的等门期工单做：`
     + `细化下一切片的粗票（补机器判据与 Touches）/ 为冻结票预落 AC 与 Touches 收窄 / 跑欠的收口测试 / 收口 candidates.md。`
     + `解冻条件是否已满足也核一遍——满足就在那条冻结面下写 \`- lifted: <日期>\` 然后开票。`
     + `真的一件都没有 → 用 Write 写 \`${holdPath}\`，一行写清冻结面 id 与解冻条件（等谁做什么）。`);
-} else if (openTrees.length === 0 && eligible.length === 0) {
+} else if (activeTrees.length === 0 && eligible.length === 0) {
   lines.push(`未勾的票没有一张够格（全部 Blocked by 未清）。可做的事：核对 Blocked by 是否成环或指向不存在的票；`
     + `按 execution-unit.md 跑 \`schedule.cjs\` 看依赖链；细化下一切片的粗票；跑欠的收口测试。`);
 } else {
   lines.push(`没有任何东西会在将来把你叫醒。二选一，都在**本回合**做完：`);
   const todo = [];
-  if (openTrees.length) todo.push(`开着的树（${openTrees.join(' ')}）→ 看票面已到哪段：无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账`);
+  if (activeTrees.length) todo.push(`开着的树（${activeTrees.join(' ')}）→ 看票面已到哪段：无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账`);
   if (eligible.length) todo.push(`够格票（${eligible.join(' ')}）→ 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步；并发上限见提示词）`);
   lines.push(`① **推进**：${todo.join('；')}。⛔ 写「下一轮我…」「我的下一步是…」然后停，不是推进——就是这类收尾触发了本条。`);
   lines.push(`② **确实在等开发者的人手动作**（安全红线拍板 / L1–L2 确认 / 他明确叫停；⛔ 真机验证不算——打 \`rm:pending\` 留 stage-4）→ 用 Write 写 \`${holdPath}\`，`

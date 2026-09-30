@@ -27,8 +27,27 @@ function parse(file: string): { front: Record<string, string>; body: string } {
 const files = readdirSync(AGENTS_DIR).filter(f => f.endsWith('.md'));
 
 describe('插件代理定义', () => {
-  it('至少有 grill-impl 与 grill-qc', () => {
-    expect(files).toEqual(expect.arrayContaining(['grill-impl.md', 'grill-qc.md']));
+  it('至少有 grill-impl、grill-qc、grill-comment', () => {
+    expect(files).toEqual(expect.arrayContaining(['grill-impl.md', 'grill-qc.md', 'grill-comment.md']));
+  });
+
+  // 每次派发都一样的纪律只留一份：写在代理定义里（子代理系统提示，确定送达），契约里只留指针。
+  // 实测「原样内联进 dispatch prompt」的规定下 27 份实施 prompt 只有 18 份带了注释纪律。
+  it('注释写时纪律只在 grill-impl 定义里，不再重复在 per-ticket-review.md', () => {
+    const { body } = parse('grill-impl.md');
+    const contract = readFileSync(join(__dirname, '..', '.ai-flow', 'grill-flow', 'references', 'per-ticket-review.md'), 'utf8');
+    for (const phrase of ['**默认不写。**', '本地四类 why', '硬预算（可数上限', '不写「进程指代」']) {
+      expect(body, phrase).toContain(phrase);
+      expect(contract, phrase).not.toContain(phrase);
+    }
+  });
+
+  it('grill-comment 是 sonnet，正文带三条硬约束与搬迁清单', () => {
+    const { front, body } = parse('grill-comment.md');
+    expect(front['model']).toBe('sonnet');
+    expect(body).toContain('ai-flow:comment');
+    expect(body).toContain('不要执行 typecheck / lint / 测试命令');
+    expect(body).toContain('零搬迁');
   });
 
   for (const f of files) {
