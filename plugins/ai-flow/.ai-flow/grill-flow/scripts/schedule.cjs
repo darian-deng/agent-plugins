@@ -97,6 +97,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + 'ticket T<n>：原样打印该票票块（派发 prompt 里给子代理的就是这条命令，代替内联票面）。\n'
     + 'brief T<n> <段>：打印派发简报（路径 / 回报落盘路径 / 票面 / 交接段 `### 派发纪律` 原文），子代理开工先跑它。\n'
     + 'mark T<n>：给票记账——每个 <子项> 追加成票下一行 `  - <子项>`；--drop <键> 先删掉该键的子项（键照写、精确匹配，如 idle: / qc:done）；--done 把 [ ] 勾成 [x]。\n'
+    + 'selfcheck：交接的机械自检（交接段只一份、有 `### 派发纪律`、切读命令的文件与起始图案都在、登记的树目录都在、已勾的票没有残留树），派冷读之前先跑。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
@@ -167,8 +168,8 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark'].includes(SUB)) {
-  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark', 'selfcheck'].includes(SUB)) {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark` / `selfcheck`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
 }
 
 const capIdx = process.argv.indexOf('--cap');
@@ -514,6 +515,60 @@ if (SUB === 'mark') (() => {
   }
 })();
 if (SUB === 'mark') process.exit(process.exitCode || 0);
+
+// ── 子命令 `selfcheck`：交接的机械自检，派冷读之前先跑 ────────────────────────
+// 存在理由：冷读要一个 fresh-context 子代理跑 5–6 分钟，而它报回来的问题里有一类是机械的——
+// 实测一次冷读报 9 条，其中「交接段写了两棵实际不存在的树」这种，脚本几秒就能查出来。先把
+// 这类清掉，冷读只剩语义问题，改一轮就够。只报不改；有问题退出码 1。
+if (SUB === 'selfcheck') {
+  const problems = [];
+  const hs = lines.map((l, i) => [l, i]).filter(([l]) => /^##\s+🔴\s+重入交接\s*$/.test(l));
+  if (hs.length !== 1) problems.push(`\`## 🔴 重入交接\` 有 ${hs.length} 份（只许一份）`);
+  const hStart = hs.length ? hs[0][1] : -1;
+  let hEnd = lines.length;
+  if (hStart !== -1) for (let i = hStart + 1; i < lines.length; i++) if (/^##\s/.test(lines[i])) { hEnd = i; break; }
+  const section = hStart === -1 ? [] : lines.slice(hStart, hEnd);
+  if (hStart !== -1 && !section.some((l) => /^###\s+派发纪律/.test(l))) problems.push('交接段里没有 `### 派发纪律` 小节（`brief` 靠它把纪律切给子代理）');
+  // 切读命令：文件在不在、起始图案有没有命中（read-section 零命中会退出 1，这里提前报）。
+  // 交接段自己会定义产物目录的简写（实测写的是 `<产物>`，handoff.md 用 `<产物目录>`），两种都认。
+  const artifactDir = join('docs', 'grill-flows', state.flow_id);
+  let checked = 0;
+  const skipped = [];
+  for (const l of section) {
+    // 图案用 shell 单引号；`'\''` 是单引号内嵌单引号的写法，先还原再匹配。
+    for (const m of l.matchAll(/read-section\.cjs\s+(?:--flow-dir\s+\S+\s+)?(\S+)\s+'((?:[^']|'\\'')+)'/g)) {
+      const rel = m[1].replace(/`/g, '').replace(/<产物(?:目录)?>\/?/, artifactDir + '/');
+      if (/[<>]/.test(rel)) { skipped.push(rel); continue; }   // 还带别的占位符（<FR> 等）不猜，但要报出来
+      checked++;
+      m[2] = m[2].replace(/'\\''/g, "'");
+      const abs = rel.startsWith('/') ? rel : join(projectRoot, rel);
+      if (!existsSync(abs)) { problems.push(`切读命令指向的文件不存在：${rel}`); continue; }
+      let re;
+      try { re = new RegExp(m[2], 'm'); } catch { problems.push(`切读命令的起始图案不是合法正则：${m[2]}`); continue; }
+      if (!re.test(readFileSync(abs, 'utf-8'))) problems.push(`切读命令零命中：${rel} '${m[2]}'`);
+    }
+  }
+  // 登记的树：目录要在；已勾的票不该还开着树（close 会删登记）。
+  const reg = join(flowDir, 'state', 'worktrees');
+  let regFiles = [];
+  try { regFiles = readdirSync(reg).filter((f) => f.startsWith(state.flow_id + '-') && f.endsWith('.json')); } catch { /* 没开过树 */ }
+  for (const f of regFiles) {
+    const name = f.slice(state.flow_id.length + 1, -5);
+    let p = null;
+    try { p = JSON.parse(readFileSync(join(reg, f), 'utf-8')).path || null; } catch { /* 半截 */ }
+    if (p && !existsSync(p)) problems.push(`${name}：登记在、树目录已不在（${p}）——删掉 state/worktrees/${f}，交接段别写它开着`);
+    else if (tk.get(name)?.done) problems.push(`${name}：票已勾选，树却还开着——漏了 close？`);
+  }
+  if (checked === 0 && hStart !== -1) problems.push('交接段里一条切读命令都没查到（入场表每格应给 `read-section.cjs` 命令；若用了别的占位符，写成 `<产物>`）');
+  if (problems.length) {
+    say(`❌ 交接机械自检：${problems.length} 处问题（修完再派冷读）；切读命令查了 ${checked} 条` + (skipped.length ? `、${skipped.length} 条带未知占位符没查` : ''));
+    for (const x of problems) say('  - ' + x);
+    process.exit(1);
+  }
+  say(`✅ 交接机械自检通过：交接段一份、有派发纪律、登记的树都在；切读命令查了 ${checked} 条全部命中`
+    + (skipped.length ? `，另有 ${skipped.length} 条带未知占位符没查（${[...new Set(skipped)].join(' ')}）` : '') + '。语义问题交给冷读。');
+  process.exit(0);
+}
 
 // ── 子命令 `missed`：报「本可以一起开、却没开」的票 ──────────────────────────
 // 存在理由：stage-3 主循环的准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，

@@ -5,6 +5,8 @@
 
 先看 `<FR>/state/hold` 在不在：在 ⇒ 上个 session 停在「等开发者的人手动作」，读它那一行；开发者在本 session 已开口则引擎已把它清掉、照常往下走。
 
+**开发者还没开口之前，只收不派**（开发者 2026-09-30 定）：`/clear` 前派出的代理可能在开发者说话之前把回报送进来，这会开启一个回合。那个回合只做收货——按 `subagent-lifecycle.md` §二 判首行、`mark` 记相位、把裁定写上票面——⛔ 不补派、不开新票、不 close。引擎在开发者开口前也不跑 Stop 守卫、不要求起看门狗。
+
 **交接段列为「在飞」的代理，先按本次怎么进来的判死活**（注入 context 里的 SessionStart 来源；也可查 `<FR>/state/flow.log` 最后一条 `SESSION source=`）：
 - `source=clear`：它们**还在跑**，回报会送到本 session。用 `ListAgents` 看（能列出上个 session 派的代理，状态 `running`）；宿主没给这个工具就按 `subagent-lifecycle.md` §三 的物理信号判（静默时长 + SendMessage 探针），判不清就当它还在跑。⛔ **还在跑的票不许重派**——两个代理同写一棵树的事故见 `subagent-lifecycle.md` §三。回报到了就按 §二 的首行判据照常收货、记账，派发时的形态与回报路径从交接段那一行取。
 - `source=startup` / `resume`（Claude Code 重启过）：它们**已随进程死掉**，一律按已死处理、按下面相位表续派。⛔ 别用「静默不到 30 分钟」推它还活着——实测一次重启后据此挂 Monitor 空等两个早已死掉的代理。

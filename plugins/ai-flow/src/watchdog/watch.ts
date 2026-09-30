@@ -112,6 +112,8 @@ for (;;) {
 
   const config = await loadFlowConfig(repoRoot, flowName).catch(() => null);
   if (!config) continue;
+  // Nothing drives the flow before the developer has spoken in this session (see stop-handler).
+  if (readWatchdog(state).last_user_prompt_at === null) continue;
 
   const w = readWatchdog(state);
   const lastStopAt = w.last_stop_at ? Date.parse(w.last_stop_at) : NaN;

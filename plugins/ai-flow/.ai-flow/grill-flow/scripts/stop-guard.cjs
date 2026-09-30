@@ -10,7 +10,7 @@
 //
 // 退出码协议：
 //   3 → 这次停下是停滞：stdout 整段作为续跑指令注入给模型（一回合只续一次，宿主保证不链式）。
-//   0 → 停下成立（收尾期无树可收 / 脚本判无事可做），引擎什么都不说。
+//   0 → 停下成立（名额已满 / 车道模式 / 脚本判无事可做），引擎什么都不说。
 //   其它 → 脚本故障：引擎记日志、不注入——坏掉的守卫绝不能凭空造回合。
 //
 // 存在理由（实测 0.80.2 十个 session）：主 session 以「我的下一步：立 T58…」「下一轮我把票
@@ -44,10 +44,18 @@ if (!flowId) fail('active.json 缺 flow_id');
 // ── 开着的树：state/worktrees/<flow_id>-T<n>.json（worktree.cjs open 登记、close 删除） ──
 const registry = join(flowDir, 'state', 'worktrees');
 const openTrees = [];
+// 登记残留：登记文件还在、树目录已经没了（手动删树、prune 过、close 半途失败）。不排除的话
+// 守卫会一直当它「开着待收」——实测两棵这样的残留让收尾分支永远判「还有树要收」、每回合续跑，
+// 主 session 两次把它们写进交接段又被冷读报「不存在」。
+const staleTrees = [];
 if (existsSync(registry)) {
   for (const f of readdirSync(registry)) {
     const m = new RegExp('^' + flowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(T\\d+)\\.json$').exec(f);
-    if (m) openTrees.push(m[1]);
+    if (!m) continue;
+    let p = null;
+    try { p = JSON.parse(readFileSync(join(registry, f), 'utf-8')).path || null; } catch { /* 半截文件：按开着算 */ }
+    if (p && !existsSync(p)) staleTrees.push(m[1]);
+    else openTrees.push(m[1]);
   }
 }
 
@@ -71,8 +79,23 @@ const wrappingUp = facts.wrap_up_pct !== null && facts.wrap_up_pct !== undefined
 const holdPath = facts.hold_path || join(flowDir, 'state', 'hold');
 const signalPath = join(flowDir, 'state', 'signal');
 
-// 收尾期（context 过线）只收不派：没有树要收就让它停。
-if (wrappingUp && activeTrees.length === 0) process.exit(0);
+// ── 收尾期（context 过线）：只写交接、写 hold，不推进 ──
+// 走到这里说明还没写 hold（有 hold 引擎不会跑本脚本）。0.89.1 之前这里是「只收不派，开着的树
+// 走完剩余段」：实测收尾因此拖到 20–59 分钟（等地板、派质量链、跑整仓回归），而写交接本身只要
+// 1–2 分钟；在飞代理与开着的树 /clear 后都由新 session 接（回报会送过去、相位表覆盖各段）。
+if (wrappingUp) {
+  const trees = openTrees.length ? `开着的树 ${openTrees.join(' ')}` : '没有开着的树';
+  process.stdout.write([
+    `${LABEL} context 已过收尾线，但 \`${holdPath}\` 还没写（引擎数的，不是开发者说的话）。${trees}`
+      + (facts.agents_in_flight ? `；有子代理在飞（${(facts.agent_tasks || []).join('；') || '未带描述'}）` : '')
+      + (staleTrees.length ? `；登记残留 ${staleTrees.join(' ')}（登记文件在、树目录已不在，别写进交接段当开着的树）` : '') + '。',
+    `**本回合**只做三件事：① 交接段写清每棵开着的树走到哪一段、每个在飞代理一行（格式见 \`handoff.md\`「/clear 会带走什么」）；`
+      + `② 用 Write 写 \`${holdPath}\`（一行：等开发者 /clear、在飞票号、下个 session 先读哪）；③ 告诉开发者可以 /clear（按 handoff.md 触发条件要冷读的，冷读改完再说）。`,
+    `⛔ 不派新代理、不 close、不等地板或整仓回归——它们都留给新 session。已经回来的回报照常裁决、把裁定写上票面（\`mark\`），但不派下一段。`,
+    ...(sched.open === 0 && openTrees.length === 0 ? [`全部票已勾、也没有开着的树：先用 Write 向 \`${signalPath}\` 写 \`done\` 推进 stage，再做上面三件事。`] : []),
+  ].join('\n') + '\n');
+  process.exit(CONTINUE);
+}
 
 // ── 有子代理在飞：只查名额用没用足 ──
 // 实测（0.88.2，一条 150+ 票的 flow）：回合结束时 6 个名额只占 4 个、5 张票够格，
@@ -89,7 +112,7 @@ if (facts.agents_in_flight) {
   // 催「重派正在跑的票」。车道模式不催补位，交给它自己的节奏。
   const laneRe = new RegExp('^' + flowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-R\\d+\\.json$');
   const laneMode = existsSync(registry) && readdirSync(registry).some((f) => laneRe.test(f));
-  if (laneMode || wrappingUp || sched.open === 0) process.exit(0);
+  if (laneMode || sched.open === 0) process.exit(0);
   const busy = new Set();
   for (const d of facts.agent_tasks || []) {
     const m = /^\s*(T\d+)\s*[·・:：]/.exec(d);
@@ -145,9 +168,6 @@ lines.push(`${LABEL} 回合结束时的机械事实（引擎数的，不是开�
 
 if (sched.open === 0) {
   lines.push(`全部票已勾。stage-3 的完成动作是用 Write 向 \`${signalPath}\` 写 \`done\`——现在就写，不要等开发者。`);
-} else if (wrappingUp) {
-  lines.push(`context 已过收尾线：**只收不派**。开着的树按票面标记走完剩余段（派质量链 / 注释清理 / close / 记账），`
-    + `然后重写交接段、结束回合。⛔ 不开新票。`);
 } else if (activeTrees.length === 0 && eligible.length === 0 && frozen.length > 0) {
   lines.push(`够格 0 是因为冻结面（${freezeDesc}）。这是**等门期**，不是停点——按 \`freeze.md\` 的等门期工单做：`
     + `细化下一切片的粗票（补机器判据与 Touches）/ 为冻结票预落 AC 与 Touches 收窄 / 跑欠的收口测试 / 收口 candidates.md。`

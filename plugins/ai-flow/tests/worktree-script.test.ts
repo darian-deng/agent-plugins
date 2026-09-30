@@ -973,7 +973,10 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
     writeFileSync(join(root, 'docs', 'grill-flows', 'f1', 'tickets.md'), tickets);
     for (const t of openTrees) {
-      writeFileSync(join(flowDir, 'state', 'worktrees', `f1-${t}.json`), JSON.stringify({ path: '/x', flow_id: 'f1', branch: `wt/f1-${t}` }));
+      // 树目录要真实存在：stop-guard 把「登记在、目录已不在」当登记残留排除掉。
+      const wt = join(root, 'wt', t);
+      mkdirSync(wt, { recursive: true });
+      writeFileSync(join(flowDir, 'state', 'worktrees', `f1-${t}.json`), JSON.stringify({ path: wt, flow_id: 'f1', branch: `wt/f1-${t}` }));
     }
     return flowDir;
   }
@@ -1110,7 +1113,7 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
   });
 
-  it('stop-guard：有代理在飞时，名额满 / 收尾期 → exit 0；树都有人跑、没有新票可开 → exit 0', () => {
+  it('stop-guard：有代理在飞时，名额满 → exit 0、收尾期只催交接；树都有人跑、没有新票可开 → exit 0', () => {
     const t = [1, 2, 3, 4, 5, 6, 7].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
     const full = makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
     const six = ['T1·实施', 'T2·质量链', 'T3·注释清理', 'T4·实施', 'T5·实施', 'T6·实施'];
@@ -1118,7 +1121,7 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     const none = makeFlow(T('T1', false, 'src/a/'), ['T1']);
     expect(guard(none, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
     const wrap = makeFlow(T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
-    expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).code).toBe(0);
+    expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).out).toContain('只做三件事');
   });
 
   it('brief：给路径、下一轮回报路径、票面与交接段「派发纪律」原文，不带别的小节', () => {
@@ -1127,7 +1130,7 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     mkdirSync(join(dir, 'state', 'reports'), { recursive: true });
     writeFileSync(join(dir, 'state', 'reports', 'T1.impl-1.md'), 'x');
     const impl = sched(dir, 'brief', 'T1', 'impl');
-    expect(impl).toContain('<WT>（项目根，与票面 Touches 同基准）= /x');
+    expect(impl).toMatch(/<WT>（项目根，与票面 Touches 同基准）= \S+\/wt\/T1\n/);
     expect(impl).toContain(join(dir, 'state', 'reports', 'T1.impl-2.md'));
     expect(impl).toContain('- [ ] T1 x');
     expect(impl).not.toContain('T2 x');
@@ -1156,10 +1159,10 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
 
   it('brief：车道模式按票面 wip:/lane: 找车道树；旁路 S<n> 不要票面', () => {
     const dir = makeFlow(T('T1', false, 'src/a/', '  - 📥 备注：之前误写成 wip: R1\n  - wip: R2\n'), ['R1', 'R2']);
-    expect(sched(dir, 'brief', 'T1', 'impl')).toContain('= /x（车道 R2）');
+    expect(sched(dir, 'brief', 'T1', 'impl')).toMatch(/\/wt\/R2（车道 R2）/);
     const side = makeFlow(T('T1', false, 'src/a/'), ['S1']);
     const out = sched(side, 'brief', 'S1', 'qc');
-    expect(out).toContain('<WT>（项目根，与票面 Touches 同基准）= /x');
+    expect(out).toMatch(/<WT>（项目根，与票面 Touches 同基准）= \S+\/wt\/S1\n/);
     expect(out).toContain('旁路修复不在台账里立票');
   });
 
@@ -1176,18 +1179,47 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(existsSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md.lock'))).toBe(false);
   });
 
+  it('selfcheck：交接段份数、派发纪律、切读命令命中、登记残留与已勾票残留树都查', () => {
+    const head = "# t\n\n## 🔴 重入交接\n\n### 派发纪律\n1. x\n\n- 切：`node <FD>/scripts/read-section.cjs --flow-dir <FR> <产物目录>/tickets.md '^## 票' '^## '`\n- 坏：`node <FD>/scripts/read-section.cjs --flow-dir <FR> <产物目录>/tickets.md '^## 不存在'`\n\n## 票\n\n";
+    const dir = makeFlow(head + T('T1', true, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
+    writeFileSync(join(dir, 'state', 'worktrees', 'f1-T2.json'), JSON.stringify({ path: '/nonexistent/wt/T2' }));
+    const out = sched(dir, 'selfcheck');
+    expect(out).toContain('3 处问题');
+    expect(out).toContain("切读命令零命中：docs/grill-flows/f1/tickets.md '^## 不存在'");
+    expect(out).toContain('T1：票已勾选，树却还开着');
+    expect(out).toContain('T2：登记在、树目录已不在');
+    // 真实交接段用的简写是 `<产物>`（不带「目录」、不带斜杠），图案里可能有 `'\''`
+    const ok = makeFlow("# t\n\n## 🔴 重入交接\n\n### 派发纪律\n1. x\n\n- `node <FD>/scripts/read-section.cjs --flow-dir <FR> <产物>tickets.md '^## 票' '^## '`\n- `node <FD>/scripts/read-section.cjs --flow-dir <FR> <产物>tickets.md 'it'\''s' EOF`\n\nit's\n\n## 票\n\n" + T('T1', false, 'src/a/'), ['T1']);
+    expect(sched(ok, 'selfcheck')).toContain('切读命令查了 2 条全部命中');
+    const none = makeFlow("# t\n\n## 🔴 重入交接\n\n### 派发纪律\n1. x\n\n## 票\n\n" + T('T1', false, 'src/a/'));
+    expect(sched(none, 'selfcheck')).toContain('一条切读命令都没查到');
+    expect(sched(makeFlow(T('T1', false, 'src/a/')), 'selfcheck')).toContain('有 0 份');
+  });
+
   it('missed --json 带上并发上限 cap（缺省 6，stop-guard 按它算空几个名额）', () => {
     const dir = makeFlow(T('T1', false, 'src/a/'));
     expect(JSON.parse(sched(dir, 'missed', '--json').trim().split('\n').pop()!).cap).toBe(6);
   });
 
-  it('stop-guard：收尾期无树可收 → exit 0（只收不派）；有树 → 只说收', () => {
-    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/');
-    expect(guard(makeFlow(t), { wrap_up_pct: 61 }).code).toBe(0);
-    const r = guard(makeFlow(t, ['T2']), { wrap_up_pct: 61 });
-    expect(r.code).toBe(3);
-    expect(r.out).toContain('只收不派');
-    expect(r.out).not.toContain('够格未开');
+  it('stop-guard：收尾期（还没写 hold）→ 只催写交接 + hold、告诉开发者，不催派 / close / 等', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/c/');
+    for (const facts of [{ wrap_up_pct: 61 }, { wrap_up_pct: 61, agents_in_flight: true, agent_tasks: ['T2·质量链'] }]) {
+      const r = guard(makeFlow(t, ['T2']), facts);
+      expect(r.code).toBe(3);
+      expect(r.out).toContain('只做三件事');
+      expect(r.out).toContain('开着的树 T2');
+      expect(r.out).toContain('不派新代理、不 close、不等地板或整仓回归');
+      expect(r.out).not.toContain('够格未开');
+    }
+    expect(guard(makeFlow(t, ['T2']), { wrap_up_pct: 61, agents_in_flight: true, agent_tasks: ['T2·质量链'] }).out).toContain('有子代理在飞（T2·质量链）');
+  });
+
+  it('stop-guard：登记在、树目录已不在的是登记残留，不算开着的树、并点名', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
+    writeFileSync(join(dir, 'state', 'worktrees', 'f1-T2.json'), JSON.stringify({ path: '/nonexistent/wt/T2', flow_id: 'f1' }));
+    const r = guard(dir, { wrap_up_pct: 61 });
+    expect(r.out).toContain('开着的树 T1；登记残留 T2');
+    expect(r.out).toContain('登记残留 T2');
   });
 
   it('stop-guard：全部已勾 → 提醒写 signal；无一张够格 → 提醒查依赖链，都是 exit 3', () => {

@@ -302,5 +302,16 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutp
       break;
   }
 
+  // `start` / `resume` are the developer speaking, but they run while no flow is active yet, so
+  // the watchdog stamp above never saw them — and the state they write starts with a blank
+  // watchdog. Stamp it here: until `last_user_prompt_at` is set, the Stop guard and the watcher
+  // stand down (nothing drives the flow before the developer has spoken), which would leave the
+  // freshly started / resumed flow unguarded until the developer said something else.
+  if (subCmd === 'start' || subCmd === 'resume') {
+    await patchActiveState(repoRoot, flowName, (cur) => ({
+      watchdog: { ...readWatchdog(cur), last_user_prompt_at: new Date().toISOString() },
+    })).catch(() => null);
+  }
+
   return resultToHookOutput(result!, flowName);
 }

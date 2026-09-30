@@ -60,6 +60,9 @@ function seedFlow(repoRoot: string, flowName: string, extra: Record<string, unkn
     current_stage: 'work',
     base_sha: 'abc',
     last_session_id: OWNER,
+    // The developer has spoken in this session (10 minutes ago). Nothing drives the flow before
+    // that — the tests for that gate override this with `last_user_prompt_at: null`.
+    watchdog: { ...emptyWatchdog(), last_user_prompt_at: new Date(Date.now() - 600_000).toISOString() },
     ...extra,
   });
 }
@@ -88,7 +91,8 @@ function armedWatchdog(over: Record<string, unknown> = {}) {
     agents_in_flight: false,
     bash_in_flight: false,
     bash_tasks: [],
-    last_user_prompt_at: null,
+    // The developer spoke earlier in this session. Tests that need "not yet" override it with null.
+    last_user_prompt_at: new Date(Date.now() - 600_000).toISOString(),
     watcher_seen: true,
     arm_asks: 1,
     nudges_this_stage: 0,
@@ -669,7 +673,7 @@ describe('state/hold', () => {
     // Measured live: a hand-back stamped last_user_prompt_at 14 s after arriving. The
     // host documents `source: "system"` for these but does not send the field.
     const repo = makeRepo();
-    seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog({ nudges_this_stage: 2 }) });
+    seedFlow(repo.repoRoot, 'test-flow', { watchdog: armedWatchdog({ nudges_this_stage: 2, last_user_prompt_at: null }) });
     writeHold(repo.repoRoot);
     for (const prompt of [
       'Another Claude session sent a message:\n<agent-message from="a2b4491b6e2ddbc0b">\n[Subagent hand-back] …',
@@ -706,7 +710,7 @@ describe('state/hold', () => {
 
   it('a wakeup nobody typed does not clear it', async () => {
     const repo = makeRepo();
-    seedFlow(repo.repoRoot, 'test-flow');
+    seedFlow(repo.repoRoot, 'test-flow', { watchdog: emptyWatchdog() });
     writeHold(repo.repoRoot);
     await handleUserPrompt(promptInput(repo.repoRoot, { source: 'schedule_wakeup' }));
     expect(readHold(repo.repoRoot, 'test-flow')).not.toBeNull();
@@ -814,7 +818,8 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
       last_session_id: OWNER,
       // A previous turn ended long ago and no developer prompt since: the turn that is
       // ending now was started by something else (a task notification, a continuation).
-      watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 60_000).toISOString(), last_user_prompt_at: null }),
+      // The developer spoke earlier in this session (2 minutes ago), not since the last turn end.
+      watchdog: armedWatchdog({ last_stop_at: new Date(Date.now() - 60_000).toISOString(), last_user_prompt_at: new Date(Date.now() - 120_000).toISOString() }),
     });
     return repo;
   }
@@ -836,6 +841,18 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
       background_tasks: [ourWatcher(repo.repoRoot, 'guarded-flow'), { id: 'd', type: 'shell', command: 'pnpm dev' }],
     }));
     expect(out?.additionalContext).toContain('bash=true');
+  });
+
+  it('before the developer has spoken in this session (a pre-/clear hand-back) → no guard, no arming ask', async () => {
+    const repo = guardedRepo();
+    writeActiveState(repo.repoRoot, 'guarded-flow', {
+      flow_id: 'guarded-flow-abc', flow_name: 'guarded-flow', requirement: 'x', current_stage: 'work', base_sha: 'abc',
+      last_session_id: OWNER, watchdog: emptyWatchdog(),
+    });
+    expect(await handleStop(stopInput(repo.repoRoot, { background_tasks: [{ id: 'a', type: 'subagent', description: 'T7·实施' }] }))).toBeNull();
+    const log = existsSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'))
+      ? readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8') : '';
+    expect(log).not.toContain('WATCHDOG_ARM_ASK');
   });
 
   it('a subagent in flight does not exempt — the guard gets the agents\' descriptions and decides (idle slots)', async () => {

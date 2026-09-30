@@ -48,6 +48,13 @@ describe('handleUserPrompt — routing', () => {
     expect(state).not.toBeNull();
   });
 
+  it('test-flow start → 记下「开发者已开口」，否则新 flow 在开发者再说一句话之前没有 Stop 守卫与看门狗', async () => {
+    const repo = makeRepo();
+    await handleUserPrompt(makeInput('test-flow start build feature X', repo.repoRoot));
+    const state = await readActiveState(repo.repoRoot, 'test-flow');
+    expect((state as { watchdog?: { last_user_prompt_at?: string | null } }).watchdog?.last_user_prompt_at).toBeTruthy();
+  });
+
   it('test-flow start with multiline requirement → routes to start handler', async () => {
     const repo = makeRepo();
     const multiline = 'test-flow start build feature X\nThis is a detailed description\nwith multiple lines of context';

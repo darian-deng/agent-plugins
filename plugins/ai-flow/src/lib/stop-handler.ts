@@ -94,6 +94,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
     const nowIso = new Date().toISOString();
     let willAsk = false;
     let developerTurn = false;
+    let developerYetToSpeak = false;
     const written = await patchActiveState(repoRoot, flowName, (cur) => {
       const w = readWatchdog(cur);
       // Decided against the previous stop, before this one overwrites it: the turn
@@ -101,6 +102,11 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
       developerTurn =
         w.last_user_prompt_at !== null &&
         (w.last_stop_at === null || Date.parse(w.last_user_prompt_at) > Date.parse(w.last_stop_at));
+      // SessionStart blanks the watchdog, so null = the developer has not typed anything in this
+      // session yet. Turns before that exist — a subagent dispatched before `/clear` hands back —
+      // and the developer decided (2026-09-30) that until they speak, such a turn only takes the
+      // delivery: no guard pushing the next dispatch, no watcher to nudge it later.
+      developerYetToSpeak = w.last_user_prompt_at === null;
       const next: WatchdogState = {
         ...w,
         last_stop_at: nowIso,
@@ -125,6 +131,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         // turn per ask, never a second stacked on top.
         !input.stop_hook_active &&
         !watcherSeen &&
+        !developerYetToSpeak &&
         w.arm_asks < MAX_ARM_ASKS;
       if (willAsk) next.arm_asks = w.arm_asks + 1;
       return { watchdog: next };
@@ -160,6 +167,7 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
       wd.enabled &&
       !input.stop_hook_active &&
       !developerTurn &&
+      !developerYetToSpeak &&
       readHold(repoRoot, flowName) === null &&
       !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)
     ) {
