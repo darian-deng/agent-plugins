@@ -14,8 +14,8 @@
 //
 // 三个数字的含义：
 //   - 最长依赖链 = 墙钟下限。再多的并行度也压不到它以下。
-//   - 一票一树 N 轮 = 每轮取「够格 ∧ 与本轮已选票写集不相交」的前 cap 张（与主循环同算法，
-//     同一份 tickets.md 每次都算出同一结果）。
+//   - 一票一树 N 轮 = 每轮按取票顺序（插票 → 下游链长降序 → 文件顺序，见 priorityOrder）取
+//     「够格 ∧ 与本轮已选票写集不相交」的前 cap 张（与主循环同算法，同一份 tickets.md 每次都算出同一结果）。
 //   - 一组一车道 N 轮 = 最长那条车道的票数（每轮各车道推进一票）。分组优先读票上的
 //     `lane:`；没有就按「`Touches` 相交 ∨ 有 `Blocked by` 关系」取连通分量。
 'use strict';
@@ -89,7 +89,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     + '      node ' + __filename + ' --flow-dir <项目>/.ai-flow/' + FLOW_NAME + ' rm [<票号>]\n'
     + '不带子命令：按主循环同一套准入算法，模拟「一票一树」与「一组一车道」两种执行单位各要几轮，谁少用谁。\n'
     + '--cap 是并发上限，缺省 4。判据与两种模式的代价见 references/execution-unit.md。\n'
-    + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票。只摆事实，不放行。\n'
+    + 'missed：给出当前在飞（已开 worktree）的票号，报「此刻同样够格同批开、却没开」的票，按取票顺序（插票 → 下游链长降序 → 文件顺序）排好。只摆事实，不放行。\n'
     + 'rm：报真机验证三态（`rm:none` / `rm:pending` / `rm:done`）的登记情况。带票号只报那一张，不带报全量分布。\n'
   );
   process.exit(0);
@@ -172,8 +172,8 @@ if (!Number.isInteger(cap) || cap < 1) die('--cap 要是正整数，收到: ' + 
 const lines = readFileSync(ticketsPath, 'utf-8').split('\n');
 // `done`：正则一直捕获着勾选状态（`m[1]`），却从没存下来——默认报告只关心「全量要跑几轮」，
 // 不关心跑到哪了。`missed` 要的正是「还没勾的里面谁够格」，所以这里把它落进来。
-const tk = new Map();   // T -> { blocked:[], touches:[], lane:null, done:bool, rmHits:[] }
-const order = [];       // 文件顺序 = 主循环的确定性 tiebreak
+const tk = new Map();   // T -> { blocked:[], touches:[], lane:null, done:bool, inserted:bool, rmHits:[] }
+const order = [];       // 文件顺序 = 取票顺序的最后一级 tiebreak（前两级见 priorityOrder）
 
 // ── 真机验证三态（`rm:none` / `rm:pending` / `rm:done`）───────────────────────
 // 约定是每票**有且仅有一个**，所以这里收集**全部**命中、不取第一个：把「一个都没写」
@@ -199,7 +199,7 @@ for (const l of lines) {
   const m = /^- \[([ xX])\] (T\d+)/.exec(l);
   if (m) {
     cur = m[2];
-    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', rmHits: [] });
+    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', inserted: false, rmHits: [] });
     order.push(cur);
     collectRm(tk.get(cur), l, true);   // 票行内的标记（约定允许写在这里）
     continue;
@@ -214,6 +214,7 @@ for (const l of lines) {
   if (mt) tk.get(cur).touches = mt[1].split(/[,\s]+/).filter((s) => s.length > 0);
   const ml = /(?:^|\s)lane:\s*(\S+)/.exec(l);
   if (ml) tk.get(cur).lane = ml[1];
+  if (/^\s*-\s*`?inserted:/.test(l)) tk.get(cur).inserted = true;
 }
 if (tk.size === 0) die('tickets.md 里没有 ticket 级行（`- [ ] T<n>`）');
 
@@ -316,6 +317,42 @@ function overlap(a0, b0) {
   return false;
 }
 
+// ── 取票顺序：执行期插票 → 下游依赖链长降序 → 文件顺序 ─────────────────────────
+// 存在理由：原来只按文件顺序贪心。实测一条 179 票的 flow 剩 40 张时，剩余最长依赖链
+// T136→T148→T129→T130→T131 的链头早就够格，却被文件里更靠前、写集与它相交的一张票挡住——
+// 链上的票只能一张接一张做，链头越晚开，整个 stage 的拖尾就越长。本脚本对那 40 张的模拟：
+// cap 4 从 20 轮降到 13 轮、cap 3 从 22 降到 15；按滚动补位 + 随机工时（lognormal / pareto
+// 重尾、工时与写集大小相关）各 300 次，墙钟均值省 10–18%，62 票与 179 票的历史 flow 全量
+// 省 5–23%，11–25 票的小 flow ≈0。均值恒为正，但单次可能更慢（重尾下最差 -29%）。
+// 第一级留给带 `inserted:` 的执行期插票：只按链长排，名额满时插进来的链尾票要排在全部
+// 链上票之后（同一份 40 票模拟里等待均值从 0.11 升到 0.69 个单票工时），而它优先的理由——
+// 发现它的 session 上下文还在——正是 mid-flight-ticket.md 要保住的。
+// ⛔ 仍是确定性排序：/clear 重入算得出同一顺序，所以「顺序不是决策」这条不变。
+function downstreamOf(included) {
+  const succ = new Map();
+  for (const t of included) succ.set(t, []);
+  for (const t of included) for (const b of tk.get(t).blocked) if (succ.has(b)) succ.get(b).push(t);
+  const memo = new Map();
+  const down = (t) => {
+    if (memo.has(t)) return memo.get(t);
+    memo.set(t, 0);   // 先置值再递归：真实台账里出现过依赖环，不防就是栈溢出，missed 与 stop-guard 一起崩
+    const d = Math.max(0, ...succ.get(t).map((s) => 1 + down(s)));
+    memo.set(t, d);
+    return d;
+  };
+  for (const t of included) down(t);
+  return memo;
+}
+function priorityOrder(included) {
+  const down = downstreamOf(included);
+  const idx = new Map(order.map((t, i) => [t, i]));
+  const ranked = order.filter((t) => included.has(t)).sort((x, y) =>
+    (Number(tk.get(y).inserted) - Number(tk.get(x).inserted))
+    || (down.get(y) - down.get(x))
+    || (idx.get(x) - idx.get(y)));
+  return { ranked, down };
+}
+
 // ── 子命令 `missed`：报「本可以一起开、却没开」的票 ──────────────────────────
 // 存在理由：stage-3 主循环的准入判据（依赖已满足 ∧ 写集与本批已选票不相交）本身没错，
 // 错的是**没有任何东西会在开树那一刻把「你还漏了哪几张」摆到主 session 眼前**。实测一条
@@ -347,8 +384,10 @@ if (SUB === 'missed') {
   // （`roundsPerTicket` 里那句 `batch.some(...)`），这里必须同口径，否则这条提示在教人违规。
   const eligible = [];
   const frozen = [];   // [{ t, f }]
-  for (const t of order) {
-    if (done.has(t) || live.has(t)) continue;
+  // 下游链长只数未勾票：已勾的前驱不再挡人，已勾的后继不再等人。
+  const { ranked, down } = priorityOrder(new Set(order.filter((t) => !done.has(t))));
+  for (const t of ranked) {
+    if (live.has(t)) continue;
     // 冻结面先于一切：被冻的票连「够格」两个字都不该出现在它旁边——上一版把它们列成够格，
     // 主 session 就得每轮自己记着「这几张其实不能开」，而那正是散文冻结令的失败形态。
     const fz = frozenBy(t);
@@ -368,7 +407,7 @@ if (SUB === 'missed') {
   if (asJson) {
     const open = order.filter((t) => !done.has(t));
     say(JSON.stringify({
-      live: [...live], eligible, frozen: frozen.map((x) => x.t),
+      live: [...live], eligible, down: Object.fromEntries(eligible.map((t) => [t, down.get(t)])), frozen: frozen.map((x) => x.t),
       freeze: activeFreeze.map((f) => ({ id: f.id, lift: f.lift, paths: f.paths, only: f.only, except: f.except, count: frozen.filter((x) => x.f === f).length })),
       open: open.length, done: done.size, total: order.length,
     }));
@@ -399,7 +438,9 @@ if (SUB === 'missed') {
     say(`✅ 无遗漏：在飞 ${liveDesc}，tickets.md 里没有别的票此刻够格同批开（${CRIT}）。`);
   } else {
     say(`📋 在飞 ${liveDesc}，另有 ${eligible.length} 张票此刻同样够格同批开（${CRIT}）：`);
-    say('   ' + eligible.join(' '));
+    say('   ' + eligible.map((t) => `${t}${tk.get(t).inserted ? '(插)' : ''}(↓${down.get(t)})`).join(' '));
+    say('   ↑ 已按取票顺序排好：带 `inserted:` 的执行期插票在前 → 下游依赖链长（↓，后面还串着几张）降序 → 文件顺序。');
+    say('     名额不够时**从左往右取**，⛔ 别按文件顺序或凭感觉挑。');
     // ⛔ 措辞必须是**有条件**的。`open` 每开一棵树都会跑这段，而一批要逐条 open：开第 1 棵
     // 时后两票还没在飞，它们必然出现在这张清单里 —— 把话写成无条件的「要么一并开、要么写
     // 理由」，happy path 上几乎每次都是假警报，而一条常年误报的红线会被训练成直接忽略。
@@ -518,12 +559,13 @@ function depth(t) {
 const lowerBound = Math.max(...[...tk.keys()].map(depth));
 
 // 一票一树：与主循环同算法
+const fullRanked = priorityOrder(new Set(tk.keys())).ranked;
 function roundsPerTicket(k) {
   const done = new Set();
   let r = 0;
   while (done.size < tk.size) {
     const batch = [];
-    for (const t of order) {
+    for (const t of fullRanked) {
       if (done.has(t) || batch.includes(t)) continue;
       if (tk.get(t).blocked.some((b) => tk.has(b) && !done.has(b))) continue;
       if (batch.some((o) => overlap(tk.get(t).touches, tk.get(o).touches))) continue;

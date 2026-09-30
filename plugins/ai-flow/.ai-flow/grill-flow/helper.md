@@ -43,7 +43,7 @@ worktree 并行有两种截然不同的用法，本 flow **都支持**，判据�
 **形态 A · 一个 flow，一个主 session，N 条车道 / N 棵票树**（stage-3 写的就是这个）。主 session 当调度器，实施与评审都在子代理里跑，worktree 由 `scripts/worktree.cjs` 开收。
 - 适用：几块**共享同一份 spec 与决策台账**，有跨块依赖或会撞同一批文件。
 - 拿到的：`Blocked by` 全局有序、机器门逐票核对（commit ↔ 票 ↔ 写集）、决策只在一处拍、/clear 可恢复。
-- 代价：**主 session 是并发瓶颈**——它要读每一份回报、做每一次裁决，并行度再高也过不了这个漏斗；子代理是一次性的（返回即销毁），所以跨票长驻的资源（车道）只能由主 session 持有。
+- 代价：**主 session 是并发瓶颈**——它要读每一份回报、做每一次裁决，并行度再高也过不了这个漏斗（所以实施 / 质量链的回报全文落 `state/reports/`、最终消息只回主 session 要据此动作的首屏，注释清理只回 ≤3 行 + 搬迁清单：回报曾是主 session 上下文里最大的一类，约 23%）；**取票顺序**是执行期插票（`inserted:`）→ 下游依赖链长降序 → 文件顺序，由 `schedule.cjs missed` 排好，链头不再被文件里靠前的相交票挡住；子代理是一次性的（返回即销毁），所以跨票长驻的资源（车道）只能由主 session 持有。
 
 **形态 B · 几个独立 flow，各自一个顶层 session，各占一个 worktree**（业界主流的「多终端并行」，本 flow 同样跑得起来）。在每个 worktree 里各跑一次 `grill-flow start <那一块的需求>`，各走完整 5 stage，最后把各自 stage-4 那笔 squash commit 合回来。
 - 机制依据（有测试锁着）：`state/` 被 gitignore，所以每个 worktree 里的 `active.json` 只可能是它自己起的那个 flow；引擎解析 flow 时**先看当前锚点自己有没有 active flow**，有就用它，只有没有时才映射回主检出。两种形态因此不会互相抢。

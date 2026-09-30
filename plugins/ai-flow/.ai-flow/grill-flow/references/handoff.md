@@ -134,8 +134,10 @@ findings、真机待验项、安全自检，从它留下的那笔 commit 里重�
 未提交改动时，「先把那棵树的状态摘进交接段」才替代得了等回报。
 
 🔴 **但回报并非不可挽回**：`/clear` 丢掉的子代理回报可以从磁盘原样找回，不必重建、也不必
-派人复审 —— 落点是 `~/.claude/projects/<把 cwd 的 / 换成 - 的目录名>/<session-id>.jsonl`，
-回报正文在 `task-notification` 的 `<result>` 里。实测一次质量链回报（含两条待裁 finding、
+派人复审 —— 先看 `<FR>/state/reports/T<n>.<impl|qc>-<k>.md`（实施 / 质量链代理的回报全文就落在这），
+没有再去 `~/.claude/projects/<把 cwd 的 / 换成 - 的目录名>/<session-id>.jsonl`：正文在
+`Another Claude session sent a message: <agent-message from=…>` 那条 user 消息里。⚠️ 别找
+`task-notification` 的 `<result>`——宿主现在只在那里放一句「report was delivered… not repeated here」的占位。实测一次质量链回报（含两条待裁 finding、
 `qc-metrics`、7 条真机项）就是这么全量恢复的。
 
 ### 冷读验证：按触发条件做，不是每次都做

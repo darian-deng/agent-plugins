@@ -1015,6 +1015,36 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(j).toMatchObject({ live: ['T2'], eligible: ['T4'], frozen: [], open: 3, done: 1, total: 4 });
   });
 
+  it('missed：取票顺序 = inserted 插票 → 下游依赖链长降序 → 文件顺序，贪心也按这个序挑', () => {
+    // T2 文件序靠前、与链头 T3 写集相交；T3 后面串着 T4→T5。按文件序会先取 T2、把 T3 挡掉。
+    const dep = (n: string, blocked: string, touches: string, extra = '') =>
+      `- [ ] ${n} x\n  - Blocked by: ${blocked}\n  - Touches: ${touches}\n${extra}`;
+    const t = T('T1', true, 'src/a/')
+      + dep('T2', 'T1', 'src/rec/a.ts')
+      + dep('T3', 'T1', 'src/rec/')
+      + dep('T4', 'T3', 'src/b/')
+      + dep('T5', 'T4', 'src/c/')
+      + dep('T6', 'T1', 'src/d/');
+    const j = JSON.parse(sched(makeFlow(t), 'missed', '--json').trim().split('\n').pop()!);
+    expect(j.eligible).toEqual(['T3', 'T6']);
+    expect(j.down).toEqual({ T3: 2, T6: 0 });
+    // 带 inserted: 的执行期插票排第一，哪怕它没有下游。
+    const withIns = t + dep('T7', 'T1', 'src/e/', '  - inserted: 2026-09-30\n');
+    const k = JSON.parse(sched(makeFlow(withIns), 'missed', '--json').trim().split('\n').pop()!);
+    expect(k.eligible).toEqual(['T7', 'T3', 'T6']);
+    expect(sched(makeFlow(withIns), 'missed')).toContain('T7(插)(↓0) T3(↓2) T6(↓0)');
+  });
+
+  it('missed：台账里有依赖环时不崩，环上的票不算够格', () => {
+    const t = T('T1', false, 'src/a/')
+      + '- [ ] T2 x\n  - Blocked by: T3\n  - Touches: src/b/\n'
+      + '- [ ] T3 x\n  - Blocked by: T2\n  - Touches: src/c/\n';
+    const out = sched(makeFlow(t), 'missed', '--json');
+    const j = JSON.parse(out.trim().split('\n').pop()!);
+    expect(j.eligible).toEqual(['T1']);
+    expect(sched(makeFlow(t))).toContain('依赖可能成环');
+  });
+
   it('stop-guard：有够格票 / 有树待收 → exit 3，文案带票号、hold 路径与两个选项', () => {
     const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/c/');
     const flowDir = makeFlow(t, ['T2']);
