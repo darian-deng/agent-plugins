@@ -217,6 +217,67 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     expect(r.stderr).toContain('反斜杠');
   });
 
+  describe('执行期插票的宽目录警告（只警告、不拦）', () => {
+    function repoWithDirs(tickets: string): string {
+      const flowDir = makeRepo(tickets);
+      const root = join(flowDir, '..', '..');
+      mkdirSync(join(root, 'src', 'a', '__tests__'), { recursive: true });
+      mkdirSync(join(root, 'docs', 'inv'), { recursive: true });
+      return flowDir;
+    }
+
+    it('未勾 + inserted: 的票写了已存在的 __tests__/ 或 docs/ 目录 → exit 0 且打 ⚠', () => {
+      const r = runGate(repoWithDirs(
+        '- [ ] T1 t\n  - inserted: 2026-10-01\n  - Blocked by: none\n  - Touches: src/a/x.ts src/a/__tests__/ docs/inv/\n'
+      ));
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain('⚠  1 张未勾插票');
+      expect(r.stderr).toContain('T1（src/a/__tests__/ docs/inv/）');
+    });
+
+    it('前面的旧票挂了硬断言，后面插票的警告照样打出来', () => {
+      // 硬断言遇错即退；插票按规定排在已勾票之后。警告若放在循环里，旧票一挂就一条也打不出。
+      const r = runGate(repoWithDirs(
+        '- [x] T1 t\n  - Blocked by: none\n  - Touches: ../x.ts\n'
+        + '- [ ] T2 t\n  - inserted: 2026-10-01\n  - Blocked by: none\n  - Touches: src/a/__tests__/\n'
+      ));
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('T2（src/a/__tests__/）');
+    });
+
+    it('锚点不是仓库根：仓库根碰巧有同名 docs 目录不算「已存在」，跨包路径按仓库根查', () => {
+      const git = mkdtempSync(join(tmpdir(), 'ai-flow-gate2-git-'));
+      tmpDirs.push(git);
+      execFileSync('git', ['init', '-q', git]);
+      mkdirSync(join(git, 'docs', 'net'), { recursive: true });                 // 仓库根的同名目录
+      mkdirSync(join(git, 'packages', 'p', '__tests__'), { recursive: true });  // 跨包测试目录
+      const anchor = join(git, 'apps', 'd');
+      const flowDir = join(anchor, '.ai-flow', 'grill-flow');
+      const docs = join(anchor, 'docs', 'grill-flows', 'f1');
+      mkdirSync(join(flowDir, 'state'), { recursive: true });
+      mkdirSync(docs, { recursive: true });
+      writeFileSync(join(flowDir, 'state', 'active.json'), JSON.stringify({ flow_id: 'f1' }));
+      writeFileSync(join(docs, 'spec.md'), '## Problem\np\n## User Stories\n1. us\n## Testing Decisions\nseam\n## 方案审查\n已审查，无阻塞项\n');
+      writeFileSync(join(docs, 'tech-design.html'), '<html><body>ok</body></html>\n<!--READABILITY-REVIEWED-->\n');
+      writeFileSync(join(docs, 'tickets.md'),
+        '- [ ] T1 t\n  - inserted: 2026-10-01\n  - Blocked by: none\n  - Touches: docs/net/ packages/p/__tests__/\n');
+      const r = runGate(flowDir);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toContain('packages/p/__tests__/');
+      expect(r.stderr).not.toContain('docs/net/');
+    });
+
+    it('stage-2 原始票、已勾插票、本票新建（磁盘上还没有）的目录 → 不警告', () => {
+      const r = runGate(repoWithDirs(
+        '- [ ] T1 t\n  - Blocked by: none\n  - Touches: src/a/__tests__/\n'
+        + '- [x] T2 t\n  - inserted: 2026-10-01\n  - Blocked by: none\n  - Touches: src/a/__tests__/\n'
+        + '- [ ] T3 t\n  - inserted: 2026-10-01\n  - Blocked by: none\n  - Touches: src/b/__tests__/\n'
+      ));
+      expect(r.code).toBe(0);
+      expect(r.stderr).not.toContain('⚠');
+    });
+  });
+
   /**
    * 可读性审查锚。与 VIEWER 那两个占位锚方向相反：那两个「有 = 注入没跑」，这个「无 = 审查没跑」。
    *

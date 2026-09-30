@@ -350,14 +350,27 @@ const freeze = [];   // [{ id, lift, paths:[], only:[], except:[], lifted:false,
     else if (kv[1] === '解冻') ent.lift = kv[2].trim();
   }
 }
+// 写集相交：目录前缀也算相交（`src/a/` 与 `src/a/b.ts` 是同一处）。这里只做前缀比较、
+// 不展开 glob——判断「能不能同批」时把 `src/*.ts` 与 `src/x.ts` 算作相交是收紧方向。
+const norm = (g) => g.replace(/\/+$/, '').replace(/\/\*+$/, '');
+// 带通配的项按「第一个带通配的段之前」那一截目录比。只用 norm 时，段中间的通配
+// （`tests/*.test.ts`、`src/a/**/x.ts`）原样参与字符串前缀比较，和 `tests/b.test.ts` 永远对不上，
+// 于是两张实际同写一个文件的票被判成不相交、一起开出去——stage-2 的写法示例里就有这种形态。
+// 截成目录会多判一些相交（收紧方向），不会漏判。通配在首段（`*.ts`）→ 空串 = 与一切相交。
+const scope = (g) => {
+  const n = norm(g);
+  const i = n.search(/[*?]/);
+  return i === -1 ? n : n.slice(0, Math.max(0, n.lastIndexOf('/', i)));
+};
+const hit = (x, y) => {
+  const nx = scope(x), ny = scope(y);
+  return nx === '' || ny === '' || nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/');
+};
 const activeFreeze = freeze.filter((f) => !f.lifted && (f.paths.length > 0 || f.only.length > 0));
 function pathsOverlap(touches, paths) {
   const real = touches.filter((x) => !NONE.test(x));
   if (real.length === 0) return false;
-  for (const x of real) for (const y of paths) {
-    const nx = norm(x), ny = norm(y);
-    if (nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/')) return true;
-  }
+  for (const x of real) for (const y of paths) if (hit(x, y)) return true;
   return false;
 }
 /** 冻住 t 的那条冻结面，或 null。 */
@@ -393,17 +406,11 @@ const generated = new Set();
   }
 }
 
-// 写集相交：目录前缀也算相交（`src/a/` 与 `src/a/b.ts` 是同一处）。这里只做前缀比较、
-// 不展开 glob——判断「能不能同批」时把 `src/*.ts` 与 `src/x.ts` 算作相交是收紧方向。
-const norm = (g) => g.replace(/\/+$/, '').replace(/\/\*+$/, '');
 const NONE = /^(none|无|-|—)$/i;
 function overlap(a0, b0) {
   if (a0.some((x) => NONE.test(x)) || b0.some((x) => NONE.test(x))) return true;   // 预估不了 → 只能独占
   const a = a0.filter((x) => !generated.has(x)), b = b0.filter((x) => !generated.has(x));
-  for (const x of a) for (const y of b) {
-    const nx = norm(x), ny = norm(y);
-    if (nx === ny || nx.startsWith(ny + '/') || ny.startsWith(nx + '/')) return true;
-  }
+  for (const x of a) for (const y of b) if (hit(x, y)) return true;
   return false;
 }
 

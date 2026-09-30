@@ -177,6 +177,56 @@ if (idxs.length === 0) {
   process.exit(FAIL);
 }
 const known = new Set(nums);
+
+// 执行期插票（未勾 + `inserted:`）把**已存在的**测试目录 / docs 目录写成整目录：只警告、不拦。
+// 2026-09-21-mthu 实测 98 张插票里 50 张这么写——收窄条款写在 stage-2.md，插票的主 session 读不到它；
+// 宽声明让这张票和一大片票判成相交，名额空着也开不出去。
+// 不拦：写成整目录不破坏并行安全，只损失并行度；而这道门对全文件跑，拦了会让插一张票就被旧票挡住。
+// 单独先扫一遍、排在下面的硬断言之前：那些断言遇错即退，而插票在已勾票之后，前面任何一张旧票
+// 格式有毛病，放在循环里的警告就一条也打不出来（实测那份台账就是这样）。
+{
+  const gitTop = (() => {
+    try {
+      return execFileSync('git', ['-C', projectRoot, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch { return projectRoot; }
+  })();
+  // 基准按首段判：首段在锚点下存在 → 锚点相对，只看锚点（仓库根碰巧有同名目录不算，
+  // 否则本票要在锚点下新建的 `docs/x/` 会因为仓库根有 `docs/x/` 被误报）；否则按仓库根相对。
+  const existingDir = (rel) => {
+    const first = rel.split('/')[0];
+    let base = gitTop;
+    try { statSync(join(projectRoot, first)); base = projectRoot; } catch { /* 首段不在锚点下 */ }
+    try { return statSync(join(base, rel)).isDirectory(); } catch { return false; }
+  };
+  const hits = [];
+  for (let k = 0; k < idxs.length; k++) {
+    const start = idxs[k];
+    if (!/^- \[ \]/.test(lines[start])) continue;
+    const end = k + 1 < idxs.length ? idxs[k + 1] : lines.length;
+    const sub = [];
+    for (let i = start + 1; i < end; i++) {
+      if (/^#{1,6}\s/.test(lines[i])) break;
+      if (/^\s+\S/.test(lines[i])) sub.push(lines[i]);
+    }
+    if (!sub.some((l) => /^\s+[-*]?\s*inserted:/.test(l))) continue;
+    const tl = sub.map((l) => /^\s+[-*]?\s*Touches:\s*(\S[^\n]*)$/.exec(l)).find(Boolean);
+    if (!tl) continue;
+    const wide = tl[1].trim().split(/[,，\s]+/).filter((x) => {
+      if (!x.endsWith('/')) return false;
+      const d = x.replace(/\/+$/, '');
+      if (!/(^|\/)(__tests__|tests?)$/.test(d) && !/^docs\/./.test(d)) return false;
+      return existingDir(d);
+    });
+    if (wide.length > 0) hits.push(nums[k] + '（' + wide.join(' ') + '）');
+  }
+  // 一行说完：这道门每插一张票跑一次，旧的宽声明会反复出现，逐票一段会把新票那条淹掉。
+  if (hits.length > 0) {
+    process.stderr.write('⚠  ' + hits.length + ' 张未勾插票的 "Touches" 把已存在的测试 / docs 目录写成了整目录：' + hits.join('；')
+      + '\n    建议写到文件（新测试文件的名字由你定，定了写进来）；见 references/mid-flight-ticket.md 的「插完立刻回写 tickets.md」一节。\n');
+  }
+}
 const deps = new Map();   // T<n> -> [T<m>...]
 for (let k = 0; k < idxs.length; k++) {
   const start = idxs[k];

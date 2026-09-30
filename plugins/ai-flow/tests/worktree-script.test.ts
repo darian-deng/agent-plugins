@@ -1106,6 +1106,19 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(j).toMatchObject({ live: ['T2'], eligible: ['T4'], frozen: [], open: 3, done: 1, total: 4 });
   });
 
+  it('missed：段中间带通配的 Touches 按通配前那截目录判相交（不再当成字面串漏判）', () => {
+    // 旧版只剥尾部 `/*`：`tests/*.test.ts` 与 `tests/b.test.ts` 字符串前缀对不上 → 判不相交、一起开出去。
+    const t = T('T1', false, 'tests/*.test.ts') + T('T2', false, 'tests/b.test.ts')
+      + T('T3', false, 'src/a/**/x.ts') + T('T4', false, 'src/a/deep/x.ts')
+      + T('T5', false, '*.config.ts') + T('T6', false, 'lib/z.ts');
+    const j1 = JSON.parse(sched(makeFlow(t), 'missed', '--json', 'T1', 'T3').trim().split('\n').pop()!);
+    expect(j1.eligible).not.toContain('T2');
+    expect(j1.eligible).not.toContain('T4');
+    // 通配在首段 = 与一切相交。
+    const j2 = JSON.parse(sched(makeFlow(t), 'missed', '--json', 'T5').trim().split('\n').pop()!);
+    expect(j2.eligible).toEqual([]);
+  });
+
   it('missed：取票顺序 = inserted 插票 → 下游依赖链长降序 → 文件顺序，贪心也按这个序挑', () => {
     // T2 文件序靠前、与链头 T3 写集相交；T3 后面串着 T4→T5。按文件序会先取 T2、把 T3 挡掉。
     const dep = (n: string, blocked: string, touches: string, extra = '') =>
