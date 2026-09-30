@@ -11,6 +11,7 @@ import {
   markBasePath,
   holdPath,
   readHold,
+  isWrapUpHold,
   readSignal,
   nextStage,
   isForeignCheckout,
@@ -121,7 +122,7 @@ export async function handlePostTool(
     await appendLog(repoRoot, flowName, session_id, `HOLD_SET stage=${state.current_stage} ${(held.split('\n')[0] ?? '').slice(0, 200)}`);
     return {
       additionalContext:
-        `[ai-flow] state/hold 已登记，停滞自检与 Stop 守卫不再催。开发者下一条输入会自动清掉它。` +
+        `[ai-flow] state/hold 已登记，停滞自检与 Stop 守卫不再催。开发者下一条输入会自动清掉它；首行以 \`wrap-up:\` 开头的，/clear 时也会清掉。` +
         (held.trim() === '' ? `\n⚠️ 内容是空的——写一行：等谁做什么、为什么只能他做、等到之后下一步是什么。` : ''),
     };
   }
@@ -320,6 +321,17 @@ export async function handlePostTool(
     ? docsList
     : `仓库里的交接文档（本 stage 没有配 docs_paths，自己选一个与需求相关的文档落盘，并在告知开发者时说清落点）`;
 
+  // A hold already in place without the wrap-up prefix names something the developer is
+  // waiting on (they stopped all progress, or some other hand-only step). Overwriting it with a
+  // `wrap-up:` hold would let the coming `/clear` clear that too, so say keep it.
+  const existingHold = readHold(repoRoot, flowName);
+  const holdStep = existingHold !== null && !isWrapUpHold(existingHold)
+    ? `收尾做完**别覆盖**已有的 \`${holdPath(repoRoot, flowName)}\`（它写的是「${(existingHold.split('\n')[0] ?? '').slice(0, 80)}」，/clear 后要继续挡着），` +
+      `需要补一句就接在原文下一行——`
+    : `收尾做完先用 Write 写 \`${holdPath(repoRoot, flowName)}\`（一行，以 \`wrap-up:\` 开头：等开发者 /clear，下个 session 先读哪。` +
+      `/clear 时引擎只清带这个前缀的 hold；只有开发者叫停了整体推进才别带前缀、让它活过 /clear——` +
+      `某件事在等他拍板不算，那件事按本 flow 的规则登记（grill-flow：\`freeze.md\` 冻结面），hold 照带前缀）——`;
+
   return {
     additionalContext:
       `[ai-flow] Context 已达 ${pct}%（收尾阈值 ${wrapUpAt}%）。\n\n` +
@@ -345,7 +357,7 @@ export async function handlePostTool(
       `请开发者在它们回报之前别退出、别重启 Claude Code。\n\n` +
       `**往 ${landing} 里只写后来的 session 重建不出来的东西**：哪棵树/哪条车道在做哪票、` +
       `哪些子代理还在飞（在哪棵树上）、当前测试基线、以及你已经拍了但还没落盘的决策。\n\n` +
-      `收尾做完先用 Write 写 \`${holdPath(repoRoot, flowName)}\`（一行：等开发者 /clear，下个 session 先读哪）——` +
+      holdStep +
       `不写的话引擎会在回合结束时继续催你推进；再告知开发者可以 /clear。并且**现在**就向开发者输出一条醒目提醒` +
       `（用 > 引用块或加粗）："⚠️ Context 已达 ${pct}%，我开始做收尾交接，完成后你可以 /clear。"`,
   };

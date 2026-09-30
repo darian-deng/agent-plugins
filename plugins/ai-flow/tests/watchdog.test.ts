@@ -844,13 +844,16 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
     expect(out?.additionalContext).toContain('bash=true');
   });
 
-  it('before the developer has spoken in this session (a pre-/clear hand-back) → no guard, no arming ask', async () => {
+  it('before the developer has spoken in this session (a pre-/clear hand-back) → the guard runs, but no arming ask', async () => {
     const repo = guardedRepo();
     writeActiveState(repo.repoRoot, 'guarded-flow', {
       flow_id: 'guarded-flow-abc', flow_name: 'guarded-flow', requirement: 'x', current_stage: 'work', base_sha: 'abc',
       last_session_id: OWNER, watchdog: emptyWatchdog(),
     });
-    expect(await handleStop(stopInput(repo.repoRoot, { background_tasks: [{ id: 'a', type: 'subagent', description: 'T7·实施' }] }))).toBeNull();
+    const out = await handleStop(stopInput(repo.repoRoot, { background_tasks: [{ id: 'a', type: 'subagent', description: 'T7·实施' }] }));
+    expect(out?.additionalContext).toContain(STOP_GUARD_LABEL);
+    expect(out?.additionalContext).toContain('dev=false');
+    expect(out?.additionalContext).not.toContain('停滞自检');
     const log = existsSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'))
       ? readFileSync(join(repo.repoRoot, '.ai-flow', 'guarded-flow', 'state', 'flow.log'), 'utf-8') : '';
     expect(log).not.toContain('WATCHDOG_ARM_ASK');

@@ -8,6 +8,9 @@ import {
   isGatePending,
   nextStage,
   appendLog,
+  clearHold,
+  readHold,
+  isWrapUpHold,
   activeJsonPath,
   gcRegistry,
   isForeignCheckout,
@@ -206,6 +209,18 @@ export async function handleSessionStart(
     }
     return patch;
   });
+  // A wrap-up ends with a hold that says "waiting for the developer to /clear". This
+  // `/clear` is that event, so the hold is spent. Left in place it kept the Stop guard off
+  // in every turn a pre-/clear subagent's hand-back started, until the developer happened
+  // to type: measured once at 6.6 minutes with the slots draining from 5 to 1.
+  // Only a hold marked as exactly that (WRAP_UP_HOLD_PREFIX) — one that also says "the
+  // developer stopped dispatching" is written without it and outlives the `/clear`. Only
+  // `clear`: a compact stays in the same session, and nobody has defined a handover there.
+  const held = input.source === 'clear' ? readHold(repoRoot, flowName) : null;
+  if (held !== null && isWrapUpHold(held)) {
+    clearHold(repoRoot, flowName);
+    await appendLog(repoRoot, flowName, session_id, `HOLD_CLEARED_BY_CLEAR ${(held.split('\n')[0] ?? '').slice(0, 200)}`);
+  }
   // (Re)bind this session to the anchor. Covers flows started before bindings
   // existed, and re-anchors after a session takeover / resume.
   bindSession(session_id, repoRoot, flowName);

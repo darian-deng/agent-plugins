@@ -102,9 +102,11 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         w.last_user_prompt_at !== null &&
         (w.last_stop_at === null || Date.parse(w.last_user_prompt_at) > Date.parse(w.last_stop_at));
       // SessionStart blanks the watchdog, so null = the developer has not typed anything in this
-      // session yet. Turns before that exist — a subagent dispatched before `/clear` hands back —
-      // and the developer decided (2026-09-30) that until they speak, such a turn only takes the
-      // delivery: no guard pushing the next dispatch, no watcher to nudge it later.
+      // session yet. Turns before that exist — a subagent dispatched before `/clear` hands back.
+      // Such a turn is not asked to start the watcher (a timer waking the fresh session before
+      // the developer is back is what they objected to), but the stage guard does run: the
+      // developer's "continue" from before `/clear` still stands, and gating the guard too left
+      // the slots draining for 6.6 minutes until they typed again (0.90.1).
       developerYetToSpeak = w.last_user_prompt_at === null;
       prevContinuation = w.last_continuation;
       const next: WatchdogState = {
@@ -154,8 +156,8 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
 
     // ─── Stage stop guard ────────────────────────────────────────────────────────
     // Only when nothing mechanical explains the stop: no gate is waiting on the
-    // developer, no hold names what is waited for, and the developer has spoken in this
-    // session. Shell tasks do not exempt — the guard's most frequent target is a session
+    // developer, and no hold names what is waited for (a wrap-up's `wrap-up:` hold is cleared
+    // by the `/clear` it waits for, see session-handler). Shell tasks do not exempt — the guard's most frequent target is a session
     // that "left a dev instance running" and stopped, and the script sees
     // `bash_in_flight` to weigh it itself.
     //
@@ -180,7 +182,6 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
       guard &&
       wd.enabled &&
       (!input.stop_hook_active || prevContinuation === 'arm') &&
-      !developerYetToSpeak &&
       readHold(repoRoot, flowName) === null &&
       !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)
     ) {

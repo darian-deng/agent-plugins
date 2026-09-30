@@ -791,6 +791,65 @@ describe('grill-flow worktree.cjs', () => {
       return run(anchor, 'close', 'f1', ticket, '--keep');
     }
 
+    it('close 成功（拆树）→ 报一行名额：空几个、够格未开哪几张，刚合入那张不算够格', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const f = join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md');
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, '- [ ] T1 标题\n  - Blocked by: none\n  - Touches: src/one.txt\n  - rm:none — x\n'
+        + '- [ ] T2 下一张\n  - Blocked by: none\n  - Touches: src/two.txt\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'docs: ledger');
+      expect(run(anchor, 'open', 'f1', 'T1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-T1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      const out = run(anchor, 'close', 'f1', 'T1');
+      expect(out.code).toBe(0);
+      expect(out.stdout).toContain('名额：开着的树 0/6，空 6；够格未开 1 张（T2');
+      expect(out.stdout).toContain('就开树派实施');
+    });
+
+    it('close 报名额：已合入未勾的票不算够格；车道模式不报', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const f = join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md');
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, '- [ ] T1 标题\n  - Blocked by: none\n  - Touches: src/one.txt\n  - rm:none — x\n'
+        + '- [ ] T2 早先合入没勾\n  - Blocked by: none\n  - Touches: src/two.txt\n'
+        + '- [ ] T3 真够格\n  - Blocked by: none\n  - Touches: src/three.txt\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'docs: ledger');
+      git(repo, 'branch', 'wt/f1-T2');   // close 保留分支、树已拆 = 已合入待记账
+      expect(run(anchor, 'open', 'f1', 'T1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-T1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      const out = run(anchor, 'close', 'f1', 'T1');
+      expect(out.code).toBe(0);
+      expect(out.stdout).toContain('够格未开 1 张（T3');
+      expect(out.stdout).toContain('已合入待记账：T1 T2');
+    });
+
+    it('close 报名额：有车道 R<n> 登记时不报（在飞票记在 wip:，按树数会误报够格）', () => {
+      const { repo, anchor, lanes } = makeRepo({ anchorRel: '', anchorLock: true });
+      const f = join(repo, 'docs', 'grill-flows', 'f1', 'tickets.md');
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, '- [ ] T1 标题\n  - Blocked by: none\n  - Touches: src/one.txt\n  - rm:none — x\n'
+        + '- [ ] T2 下一张\n  - Blocked by: none\n  - Touches: src/two.txt\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'docs: ledger');
+      expect(run(anchor, 'open', 'f1', 'R1', '--install', 'true').code).toBe(0);
+      expect(run(anchor, 'open', 'f1', 'T1', '--install', 'true').code).toBe(0);
+      const wt = join(lanes, 'f1-T1');
+      writeFileSync(join(wt, 'src', 'one.txt'), 'one\n');
+      git(wt, 'add', '-A');
+      git(wt, 'commit', '-q', '-m', 'feat(T1): one');
+      const out = run(anchor, 'close', 'f1', 'T1');
+      expect(out.code).toBe(0);
+      expect(out.stdout).not.toContain('名额：');
+    });
+
     it('票面没有真机三态标记 → close 拒，并把三态原样列出来', () => {
       const out = closeRmCase('- [ ] T1 标题\n');
       expect(out.code).not.toBe(0);
@@ -1151,6 +1210,9 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(r.out).toContain('收口测试只挡 close');
     expect(r.out).toContain('这回合是开发者起的');
     expect(r.out).toContain('不写 hold');   // 等他回答不写 hold：hold 会连带关掉名额检查
+    expect(r.out).toContain('先派发，再处理开发者消息里的其它事');
+    // 非开发者回合不加这句。
+    expect(guard(open2, { agents_in_flight: true, agent_tasks: ['T1·实施', 'T2·质量链'] }).out).not.toContain('先派发，再处理');
     expect(r.out).not.toContain('没有任何东西会在将来把你叫醒');
     // 没有代理在飞也走同一段：两棵开着的树没人跑 → 占名额并点名。
     const idle = guard(open2, { developer_turn: true, agents_in_flight: false, agent_tasks: [] });
@@ -1242,6 +1304,9 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(guard(none, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
     const wrap = makeFlow(T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
     expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).out).toContain('只做三件事');
+    expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).out).toContain('以 `wrap-up:` 开头');
+    // 交接文档的收尾清单也得教这个前缀，否则 /clear 清不掉收尾 hold、新 session 又会空等。
+    expect(readFileSync(join(PLUGIN_ROOT, '.ai-flow', 'grill-flow', 'references', 'handoff.md'), 'utf-8')).toContain('「wrap-up: 等开发者 /clear');
   });
 
   it('brief：给路径、下一轮回报路径、票面与交接段「派发纪律」原文，不带别的小节', () => {
@@ -1297,6 +1362,14 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('  - qc:done');
     expect(readFileSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md'), 'utf-8')).toContain('qc-metrics: diff=1');
     expect(existsSync(join(dir, '..', '..', 'docs', 'grill-flows', 'f1', 'tickets.md.lock'))).toBe(false);
+  });
+
+  it('mark：写下 impl:done / cm:done、解除 idle: 时说下一段是什么', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/', '  - idle: 等 PD25\n'));
+    expect(sched(dir, 'mark', 'T1', '--drop', 'idle:')).toContain('解除闲置：按票面相位续派');
+    expect(sched(dir, 'mark', 'T1', 'impl:done — 3 文件')).toContain('下一段：派质量链');
+    expect(sched(dir, 'mark', 'T1', 'cm:done — 零改动')).toContain('下一段：close T1');
+    expect(sched(dir, 'mark', 'T1', 'rest: 还差 AC2')).not.toContain('下一段');
   });
 
   it('mark：--drop 漏了冒号 → 不代删，但点名票块里那个带冒号的键；`qc` 不会被提示成 `qc:done`', () => {

@@ -133,7 +133,7 @@ node <FD>/scripts/worktree.cjs --flow-dir <FR> status <flow_id>
 node <FD>/scripts/worktree.cjs --flow-dir <FR> close <flow_id> T<n>
 ```
 
-它跑一组前置断言 → `git merge --ff-only` → 拆 worktree、保留分支，并报出「哪些兄弟车道过期了」。断言失败时它会说清哪一条、怎么处置，**先照它说的做**；没覆盖的失败形态在 `recovery.md`。
+它跑一组前置断言 → `git merge --ff-only` → 拆 worktree、保留分支，并报出「哪些兄弟车道过期了」和此刻的名额（空几个、够格哪几张）——有空有票就先开树派实施，再记账。断言失败时它会说清哪一条、怎么处置，**先照它说的做**；没覆盖的失败形态在 `recovery.md`。
 
 **几张票同时等 close**：按 close 顺序逐张走「sync → 地板 → close」，地板只给**下一张**跑——前一张 close 之后其余票都要重新 sync，提前跑的地板作废（实测一次白跑 134 秒）。
 

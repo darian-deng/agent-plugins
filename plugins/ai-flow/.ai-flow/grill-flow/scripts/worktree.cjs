@@ -81,7 +81,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { existsSync, lstatSync, mkdirSync, unlinkSync, readFileSync, writeFileSync, statSync, realpathSync } = require('fs');
+const { existsSync, lstatSync, mkdirSync, unlinkSync, readFileSync, writeFileSync, statSync, realpathSync, readdirSync } = require('fs');
 const { createHash } = require('crypto');
 const { join, dirname, basename, relative, resolve } = require('path');
 
@@ -1089,7 +1089,52 @@ if (cmd === 'close') {
   }
   say(`已拆除 ${wtPath}（分支 ${branch} 保留——stage-3 的重入相位表要靠它区分「已交付未回合」；`
     + `stage-4 收尾 squash 后统一删）`);
+  slotLine(ticket);
   process.exit(installFailed ? 1 : 0);
+}
+
+// close 腾出名额的那一刻报一行名额（与 stop-guard 同口径：开着、非 idle、非残留的树都占名额，
+// 等合入、没人跑的也算）。实测一次长回合里 T177 合入后 6 分钟才开新票：守卫只在回合结束时数，
+// 而名额恰好是在 close 这一刻空出来的。只摆事实、不放行，判据归 schedule.cjs。
+function slotLine(closed) {
+  try {
+    const esc = flowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('^' + esc + '-(T\\d+)\\.json$');
+    const entries = existsSync(registryDir()) ? readdirSync(registryDir()) : [];
+    // 车道模式（有 R<n> 长驻树）：在飞票记在票面 wip: 上，这里按 T<n> 树数会把在飞票当成够格——
+    // 和 stop-guard 同样不报。
+    if (entries.some((f) => new RegExp('^' + esc + '-R\\d+\\.json$').test(f))) return;
+    const open = [];
+    for (const f of entries) {
+      const m = re.exec(f);
+      if (!m) continue;
+      let p = null;
+      try { p = JSON.parse(readFileSync(join(registryDir(), f), 'utf-8')).path || null; } catch { /* 半截：按开着算 */ }
+      if (p && !existsSync(p)) continue;   // 登记残留
+      open.push(m[1]);
+    }
+    const out = execFileSync(process.execPath, [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'missed', '--json', ...open],
+      { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    const j = JSON.parse(out.trim().split('\n').pop());
+    const idle = (j.idle || []).filter((t) => open.includes(t));
+    const active = open.filter((t) => !idle.includes(t));
+    const cap = j.cap || 6;
+    const free = cap - active.length;
+    // 已合入、还没记账勾选的票（刚合入这张，或之前连着 close 没勾的）missed 仍当够格——
+    // 它们的票分支还在（close 保留分支）而树已拆，按这个排掉。
+    const merged = new Set([closed]);
+    const refs = gitQuiet(['for-each-ref', '--format=%(refname:short)', `refs/heads/wt/${flowId}-*`]);
+    if (refs.ok) for (const r of refs.out.split('\n')) { const m = /-(T\d+)$/.exec(r.trim()); if (m) merged.add(m[1]); }
+    const unbooked = [...merged].filter((t) => (j.eligible || []).includes(t));
+    const fresh = (j.eligible || []).filter((t) => !open.includes(t) && !merged.has(t));
+    say(`\n名额：开着的树 ${active.length}/${cap}` + (active.length ? `（${active.join(' ')}；等合入、没人跑的也占）` : '')
+      + `，空 ${Math.max(0, free)}；够格未开 ${fresh.length} 张` + (fresh.length ? `（${fresh.join(' ')}，按取票顺序）` : '') + '。'
+      + (unbooked.length ? ` 已合入待记账：${unbooked.join(' ')}（先 \`mark <票号> --done\` 勾掉，stage-3 第 6 步）。` : '')
+      + (free > 0 && fresh.length ? ` → 记完账**就开树派实施**（开一棵派一棵），落决策、下一张 close 放在它们后面。` : ''));
+  } catch (e) {
+    const why = String((e && (e.stderr || e.message)) || e).trim().split('\n')[0];
+    say(`（名额探测跳过：${why}；要看就跑 node ${join(__dirname, 'schedule.cjs')} --flow-dir ${flowDir} missed <开着的票号…>）`);
+  }
 }
 
 die('未知子命令: ' + cmd + '（只支持 open / sync / close / status）');

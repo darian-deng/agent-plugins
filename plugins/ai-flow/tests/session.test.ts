@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync } from 
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { handleSessionStart } from '../src/lib/session-handler.js';
-import { readActiveState } from '../src/lib/state.js';
+import { readActiveState, holdPath, readHold } from '../src/lib/state.js';
 import { createFlowTestRepo, writeActiveState, writeSignal, MINIMAL_CONFIG, GATED_CONFIG } from './fixtures/helpers.js';
 import type { SessionStartInput } from '../src/lib/types.js';
 
@@ -147,6 +147,27 @@ describe('handleSessionStart', () => {
     await handleSessionStart(makeInput(repo.repoRoot, 'new-session'));
     const state = await readActiveState(repo.repoRoot, 'test-flow');
     expect(state!.context_wrap_up.at_pct).toBeNull();
+  });
+
+  it('/clear clears only a `wrap-up:` hold; an unprefixed hold, a compact and a startup keep it', async () => {
+    const cases: Array<[string, 'clear' | 'compact' | 'startup', boolean]> = [
+      ['wrap-up: 等开发者 /clear；新 session 先读交接段', 'clear', false],
+      ['开发者要求本轮不再派发；等开发者 /clear', 'clear', true],
+      ['wrap-up: 等开发者 /clear', 'compact', true],
+      ['wrap-up: 等开发者 /clear', 'startup', true],
+    ];
+    for (const [text, source, kept] of cases) {
+      const repo = makeRepo();
+      writeActiveState(repo.repoRoot, 'test-flow', {
+        flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'build', current_stage: 'work', base_sha: 'abc',
+        last_session_id: null, context_wrap_up: { at_pct: 61 },
+      });
+      const p = holdPath(repo.repoRoot, 'test-flow');
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, text);
+      await handleSessionStart(makeInput(repo.repoRoot, `after-${source}`, { source }));
+      expect({ text, source, kept: readHold(repo.repoRoot, 'test-flow') !== null }).toEqual({ text, source, kept });
+    }
   });
 
   it('same session → context_wrap_up NOT reset', async () => {

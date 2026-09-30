@@ -73,8 +73,8 @@ flow 的**定义**（`config.json` 的默认值、每个阶段的 AI 提示词 `
 - **每个 stage 最多催 3 次**，开发者一说话或阶段推进就清零。无人值守时这是唯一的上界。
 - **只作用于真正在执行的那个 session**：非 owner session、同仓库另一检出的 session、子代理，一律不参与。等 approve、有子代理在飞、回合还没结束，都不算停滞。**只剩 shell 任务在跑**（dev server、定时 `sleep`）不算免死金牌：阈值放宽到 6 倍（默认 30 分钟）后照催——常驻进程永远不会把 session 叫醒。
 - **`/clear` 之后它会自己换班**：宿主进程跨 `/clear` 存活，上一个 session 起的自检进程会发现 owner 变了、打印一行重新武装的命令后退出；引擎只把**本 session** 起的那个算作「已武装」（0.80.x 把继承来的算作已武装，结果一个 flow 六天十个 session 零催醒）。
-- **合法的停下要落成文件**：确实在等开发者的人手动作（安全红线拍板、只有他能做的真机步骤）→ 主 session 用 Write 写 `.ai-flow/{flow-name}/state/hold` 一行说明。有它就不催、Stop 守卫也不续跑；开发者下一条输入自动清掉。唤醒文案不再提供「回一行说在等他、然后结束回合」这个出口。
-- **Stop 守卫（stage 级 `stop_guard`）**：一个回合结束时若无子代理在飞、无 gate、无 hold、且这回合不是开发者起的，引擎调用该 stage 配置的脚本；脚本以 exit 3 + stdout 让模型直接续跑（grill-flow stage-3 的 `stop-guard.cjs` 报「够格未开 N 张 / 开着的树 M 棵」），exit 0 放行，其它退出码只记日志。
+- **合法的停下要落成文件**：确实在等开发者的人手动作（安全红线拍板、只有他能做的真机步骤）→ 主 session 用 Write 写 `.ai-flow/{flow-name}/state/hold` 一行说明。有它就不催、Stop 守卫也不续跑；开发者下一条输入自动清掉。收尾时写的、首行以 `wrap-up:` 开头的 hold 只是在等 `/clear`，`/clear` 时引擎就清掉它，新 session 收到回报照常推进。唤醒文案不再提供「回一行说在等他、然后结束回合」这个出口。
+- **Stop 守卫（stage 级 `stop_guard`）**：一个回合结束时若无 gate、无 hold，引擎调用该 stage 配置的脚本（有子代理在飞、开发者起的回合也调，脚本据此只报名额；开发者本 session 还没开口时也调，只是不要求起看门狗）；脚本以 exit 3 + stdout 让模型直接续跑（grill-flow stage-3 的 `stop-guard.cjs` 报「够格未开 N 张 / 开着的树 M 棵」），exit 0 放行，其它退出码只记日志。
 - **关掉**：`config.json` 里 `"watchdog": { "enabled": false }`，或环境变量 `AI_FLOW_WATCHDOG=0`（Stop 守卫一并关闭）；`"idle_minutes"` 改阈值（默认 5）。
 - **有没有生效是看得见的**：`{flow-name} status` 会报「已武装 / 未武装」以及本 stage 已催几次。沉默既可能是「一切正常」也可能是「它死了」，这一行是唯一能分辨的地方。
 

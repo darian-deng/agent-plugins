@@ -1,9 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { handlePostTool } from '../src/lib/posttool-handler.js';
 import { handlePreTool } from '../src/lib/pretool-handler.js';
-import { readActiveState, signalPath, markBasePath } from '../src/lib/state.js';
+import { readActiveState, signalPath, markBasePath, holdPath, isWrapUpHold } from '../src/lib/state.js';
 import { execSync } from 'child_process';
 import { createFlowTestRepo, writeActiveState, MINIMAL_CONFIG, BLOCKING_CONFIG, GATED_CONFIG, NO_ESCAPE_CONFIG } from './fixtures/helpers.js';
 import type { PostToolInput } from '../src/lib/types.js';
@@ -168,6 +168,27 @@ describe('handlePostTool', () => {
     const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 75));
     expect(out).not.toBeNull();
     expect(out!.additionalContext).toMatch(/context|75/i);
+    // The prefix is what lets the coming /clear clear this hold; drop it and 0.90.1 silently stops working.
+    expect(out!.additionalContext).toContain('以 `wrap-up:` 开头');
+  });
+
+  it('wrap-up with a developer\'s unprefixed hold already in place → keep it, do not overwrite with wrap-up:', async () => {
+    const repo = makeRepo();
+    writeActiveState(repo.repoRoot, 'test-flow', {
+      flow_id: 'test-flow-abc', flow_name: 'test-flow', requirement: 'test', current_stage: 'work', base_sha: 'abc',
+    });
+    const p = holdPath(repo.repoRoot, 'test-flow');
+    mkdirSync(join(p, '..'), { recursive: true });
+    writeFileSync(p, '开发者要求本轮不再派发');
+    const out = await handlePostTool(makeInput(repo.repoRoot, 'Write', 75));
+    expect(out!.additionalContext).toContain('别覆盖');
+    expect(out!.additionalContext).toContain('开发者要求本轮不再派发');
+    expect(out!.additionalContext).not.toContain('以 `wrap-up:` 开头');
+  });
+
+  it('isWrapUpHold: first non-blank line starts with wrap-up: (BOM / leading blanks / case tolerated); anything else is kept', () => {
+    for (const yes of ['wrap-up: 等 /clear', '\n\n  wrap-up: x', 'WRAP-UP: x', '\uFEFFwrap-up: x']) expect(isWrapUpHold(yes)).toBe(true);
+    for (const no of ['wrap-up：x', '**wrap-up:** x', '> wrap-up: x', '等 /clear\nwrap-up: x', '开发者叫停派发']) expect(isWrapUpHold(no)).toBe(false);
   });
 
   it('wrap-up state saved in active.json after triggering', async () => {

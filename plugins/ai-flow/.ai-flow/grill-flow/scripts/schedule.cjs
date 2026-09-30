@@ -588,6 +588,12 @@ if (SUB === 'mark') (() => {
     writeFileSync(tmp, L.join('\n'));
     renameSync(tmp, ticketsPath);
     say(`✅ ${t}：+${adds.length} 条` + (removed ? `，删 ${removed} 条（${drops.join(' ')}）` : '') + (done ? '，已勾选' : ''));
+    // 记下一段交付的那一刻就说下一段是什么：实测一次质量链回来 5 分钟后才派注释清理、
+    // 解除 idle 4 分钟后才续派——中间主 session 在串行做 close / 记账 / 落决策。
+    const key = (a) => a.replace(/^`/, '').split(/[\s—`]/)[0];
+    if (adds.some((a) => key(a) === 'impl:done')) say(`→ 下一段：派质量链（prompt 第一段 \`node ${__filename} --flow-dir ${flowDir} brief ${t} qc\`），先派再做别的。`);
+    if (adds.some((a) => key(a) === 'cm:done')) say(`→ 下一段：close ${t}（单独一条命令；收口在跑时会被拒，等它结束）。`);
+    if (drops.includes('idle:') && removed) say(`→ ${t} 解除闲置：按票面相位续派（无 impl:done → 实施；有 → 质量链），先派再做别的。`);
     if (drops.length && !removed) {
       say(`⚠️ --drop ${drops.join(' ')} 一条都没删到：票块里没有这个键的子项（写在票行本身的不算；键要照写，带冒号的如 \`idle:\`）——核对一下键名。`
         + (hints.length ? `票块里有 ${hints.map((k) => `\`${k}:\``).join(' ')} 子项，要删它就重跑 \`mark ${t} ${hints.map((k) => `--drop ${k}:`).join(' ')}\`。` : ''));

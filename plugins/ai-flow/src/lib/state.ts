@@ -826,6 +826,20 @@ export function readHold(repoRoot: string, flowName: string): string | null {
   try { return readFileSync(p, 'utf-8').trim(); } catch { return null; }
 }
 
+/**
+ * First-line prefix of the hold a wrap-up writes when the only thing it waits for is the
+ * developer's `/clear`. SessionStart(clear) clears such a hold, and only such a hold: a
+ * wrap-up hold can also carry "the developer stopped all progress", which must survive the
+ * `/clear` (a single pending ruling does not — the flow parks that item, e.g. grill-flow's
+ * freeze surface). Unprefixed = kept, the fail-safe side.
+ */
+export const WRAP_UP_HOLD_PREFIX = 'wrap-up:';
+
+export function isWrapUpHold(content: string): boolean {
+  const first = content.split('\n').find((l) => l.trim() !== '') ?? '';
+  return first.trim().toLowerCase().startsWith(WRAP_UP_HOLD_PREFIX);
+}
+
 /** Remove `state/hold`. Returns what it said, or null when there was none. */
 export function clearHold(repoRoot: string, flowName: string): string | null {
   const content = readHold(repoRoot, flowName);
