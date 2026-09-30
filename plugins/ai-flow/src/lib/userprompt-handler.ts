@@ -13,6 +13,7 @@ import { handleHelp } from './commands/help.js';
 import { resolveActiveFlow, findRepoRoot, patchActiveState, readSignal, isGatePending, activeJsonPath, readActiveState, isForeignCheckout, appendLog, clearHold } from './state.js';
 import type { UserPromptInput, HookOutput, UserPromptOutput } from './types.js';
 import { readWatchdog, isLegacyCronTick, isDeveloperPrompt, WATCHDOG_LABEL } from './watchdog.js';
+import { installSubagentStatusline } from './statusline-install.js';
 
 function makeOutput(additionalContext?: string, permissionDecision?: 'allow' | 'deny', reason?: string): HookOutput {
   const o: UserPromptOutput = {
@@ -48,6 +49,10 @@ function resultToHookOutput(result: { action: string; reason?: string; additiona
 
 export async function handleUserPrompt(input: UserPromptInput): Promise<HookOutput> {
   const { cwd, prompt, session_id } = input;
+  // Also refreshed here, not only at SessionStart: `/reload-plugins` swaps the hooks but
+  // fires no SessionStart, so a `/clear` that ran on the old version left the old panel
+  // script in place for the whole session (measured). A no-op when the content matches.
+  installSubagentStatusline();
   // Resolve the active flow by session binding first (cwd-independent), then
   // walk up from cwd. Active flow gives us repoRoot directly; otherwise walk up
   // to find .ai-flow (handles "no active flow yet" — e.g. a `<flow> start`).

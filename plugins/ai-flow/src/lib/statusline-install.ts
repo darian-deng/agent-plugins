@@ -15,7 +15,8 @@ import { claudeDir } from './session-registry.js';
  * config dir.
  *
  * Runs on every SessionStart, flow or not — a session that later starts a flow needs the
- * script already in place. Writes only when the content differs, via tmp + rename so a
+ * script already in place — and on every UserPromptSubmit, because `/reload-plugins`
+ * fires no SessionStart. Writes only when the content differs, via tmp + rename so a
  * panel refresh never runs half a file. Best-effort: a failure costs the panel rows, never
  * the session.
  */

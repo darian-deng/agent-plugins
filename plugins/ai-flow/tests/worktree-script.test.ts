@@ -1084,23 +1084,39 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(r.out).toMatch(/② \*\*确实在等开发者的人手动作\*\*/);
   });
 
-  it('stop-guard：有代理在飞、名额没满、有够格票 → exit 3，点名空几个、补哪几张', () => {
+  it('stop-guard：有代理在飞、名额没满、有够格票 → exit 3，点名空几个、补哪几张；同票多段只算一张', () => {
     const t = T('T1', false, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/c/') + T('T4', false, 'src/d/');
     const dir = makeFlow(t, ['T1']);
-    const r = guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施', '整理清单（不是票）'] });
+    const r = guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施', 'T1·注释清理', '整理清单（不是票）'] });
     expect(r.code).toBe(3);
     expect(r.out).toContain('有代理在跑的票 1 张（T1），上限 6，空 5 个');
     expect(r.out).toContain('够格未开 3 张（T2 T3 T4');
-    expect(r.out).toContain('本回合**就补上：T2 T3 T4');
+    expect(r.out).toContain('本回合**再补上：T2 T3 T4');
   });
 
-  it('stop-guard：有代理在飞时，名额满 / 没有够格票 / 收尾期 → exit 0，不催推进开着的树', () => {
+  it('stop-guard：开着却没代理在跑的树占名额、先点名推进它，不把名额借给新票', () => {
+    const t = [1, 2, 3, 4, 5, 6, 7].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
+    const dir = makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
+    const r = guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施', 'T2·实施', 'T3·实施', 'T4·实施', 'T5·质量链'] });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('开着却没代理在跑的树 1 棵（T6），上限 6，空 0 个');
+    expect(r.out).toContain('先推进没人跑的树（T6）');
+    expect(r.out).not.toContain('再补上');
+  });
+
+  it('stop-guard：车道模式有代理在飞 → exit 0（不催「重派在飞票」）', () => {
+    const t = T('T1', false, 'src/a/', '  - wip: R1\n') + T('T2', false, 'src/b/');
+    const dir = makeFlow(t, ['R1']);
+    expect(guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
+  });
+
+  it('stop-guard：有代理在飞时，名额满 / 收尾期 → exit 0；树都有人跑、没有新票可开 → exit 0', () => {
     const t = [1, 2, 3, 4, 5, 6, 7].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
     const full = makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
     const six = ['T1·实施', 'T2·质量链', 'T3·注释清理', 'T4·实施', 'T5·实施', 'T6·实施'];
     expect(guard(full, { agents_in_flight: true, agent_tasks: six }).code).toBe(0);
     const none = makeFlow(T('T1', false, 'src/a/'), ['T1']);
-    expect(guard(none, { agents_in_flight: true, agent_tasks: [] }).code).toBe(0);
+    expect(guard(none, { agents_in_flight: true, agent_tasks: ['T1·实施'] }).code).toBe(0);
     const wrap = makeFlow(T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
     expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).code).toBe(0);
   });

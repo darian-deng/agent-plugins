@@ -6,6 +6,8 @@ import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
 import { PLUGIN_ROOT } from '../src/lib/flow-paths.js';
 import { developerStatusLine } from '../src/lib/format.js';
+import { handleUserPrompt } from '../src/lib/userprompt-handler.js';
+import type { UserPromptInput } from '../src/lib/types.js';
 import {
   installSubagentStatusline, statuslineInstallDir, STATUSLINE_SCRIPT,
 } from '../src/lib/statusline-install.js';
@@ -136,6 +138,16 @@ describe('installSubagentStatusline', () => {
       env: { ...process.env, CLAUDE_PROJECT_DIR: root }, encoding: 'utf-8',
     });
     expect(JSON.parse(out.stdout.trim()).content).toBe('grill-flow stage-2 ｜ x');
+  });
+
+  it('UserPromptSubmit 也会刷新（/reload-plugins 不触发 SessionStart）', async () => {
+    const dest = join(statuslineInstallDir(), STATUSLINE_SCRIPT);
+    mkdirSync(statuslineInstallDir(), { recursive: true });
+    writeFileSync(dest, '// 旧版本');
+    const root = mkdtempSync(join(tmpdir(), 'ai-flow-sl-up-'));
+    dirs.push(root);
+    await handleUserPrompt({ hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: root, prompt: 'hi' } as UserPromptInput);
+    expect(readFileSync(dest, 'utf-8')).toBe(readFileSync(SCRIPT, 'utf-8'));
   });
 
   it('插件里没有脚本 → 什么也不做、不抛', () => {

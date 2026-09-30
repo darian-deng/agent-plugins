@@ -284,6 +284,9 @@ describe('the nudge carries its own replacement', () => {
     expect(ownerChangeReady({ watchdog: emptyWatchdog() })).toBe(false);
     expect(ownerChangeReady({ watchdog: { ...emptyWatchdog(), last_activity_at: new Date().toISOString() } })).toBe(false);
     expect(ownerChangeReady({ watchdog: { ...emptyWatchdog(), last_user_prompt_at: new Date().toISOString() } })).toBe(true);
+    // A hand-back turn already made the new session arm its own: handing over now would
+    // talk it into a second one.
+    expect(ownerChangeReady({ watchdog: { ...emptyWatchdog(), last_user_prompt_at: new Date().toISOString(), watcher_seen: true } })).toBe(false);
     expect(ownerChangeReady(null)).toBe(false);
   });
 

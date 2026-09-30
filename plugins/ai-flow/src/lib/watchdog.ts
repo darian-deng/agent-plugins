@@ -578,9 +578,16 @@ export function watcherOwnership(
  * developer typed stamps `last_user_prompt_at` (a hand-back or task notification does
  * not), so null means nobody has come back yet — and a wake then would start the flow
  * moving before the developer did. See the owner-changed branch in `watch.ts`.
+ *
+ * And never once the new owner has a watcher of its own (`watcher_seen`, stamped by
+ * Stop from the live task list): a subagent hand-back can start a turn in the new
+ * session before the developer speaks, its Stop asks for arming, the model arms — and
+ * a hand-over printed after that would talk it into arming a second one.
  */
 export function ownerChangeReady(state: { watchdog?: Partial<WatchdogState> } | null): boolean {
-  return state !== null && readWatchdog(state).last_user_prompt_at !== null;
+  if (state === null) return false;
+  const w = readWatchdog(state);
+  return w.last_user_prompt_at !== null && !w.watcher_seen;
 }
 
 /**

@@ -42,7 +42,7 @@
 ## 派发时带什么（主 session 机械拼装，只给指针不灌全文）
 
 - **代理类型：`subagent_type: "ai-flow:grill-impl"`**（opus，effort 跟随开发者配置；定义里禁掉了 `Agent` 工具）。⛔ 别用 `general-purpose` + `model: "opus"` 代替：模型只该在代理定义里写一处，而且那样拿回了派孙代理的工具。⛔ 也别同时传 `model` 参数，它会覆盖定义文件头里的模型。
-- **`description` 以 `T<n>·实施` 开头**（续做轮写 `T<n>·续做`）：代理面板第一行的「在跑 N 张票」靠这个前缀数票号；前缀不对只是少数一张，不影响流程。
+- **`description` 以 `T<n>·实施` 开头**（续做轮写 `T<n>·续做`）：代理面板第一行的「在跑 N 张票」和 Stop 守卫的「名额空几个」都靠这个前缀数票号；漏写会让守卫少数一张、催你多开一张而超过上限。
 - **spec 只切相关段**，不塞整份 spec.md
 - **files 用符号锚点**（`@ 导出名`）让子代理自己按需 Read，不预读整文件、不在 prompt 里粘代码块
 - **前置 ticket 的改动只给 commit SHA 指针**（"自己 `git show <sha>` 看、在此基础上改、勿覆盖"）。`git show` 走共享 object DB，在任何 worktree 里都能读

@@ -74,29 +74,52 @@ const signalPath = join(flowDir, 'state', 'signal');
 // 收尾期（context 过线）只收不派：没有树要收就让它停。
 if (wrappingUp && activeTrees.length === 0) process.exit(0);
 
-// ── 有子代理在飞：只查「名额空着、够格票没开」 ──
-// 在飞的代理会把你叫醒，所以这里不催「推进开着的树」——那些树的下一段在它们的代理回报时
-// 自然会做；而按 description 认不出票号的代理（前缀没按约定写）会被当成「树上没人」，
-// 这时催派就是在教人往一棵有人的树里再派一个。够格票是还没开树的票，不存在这个风险。
+// ── 有子代理在飞：只查名额用没用足 ──
 // 实测（0.88.2，一条 150+ 票的 flow）：回合结束时 6 个名额只占 4 个、5 张票够格，
 // 连着几个回合没有任何东西问一句——原先引擎在「有代理在飞」时直接跳过本脚本。
+// 两类没用足：① 开着、没标 idle:、却没代理在跑的树——它的下一段迟早要派，所以它占名额，
+// 并且先点名推进它（不算进去，名额会先借给新票，等它派下一段时同时在跑的就超过上限）；
+// ② 名额还空、够格票没开。
+// ⚠️ ① 的风险：代理的 description 没带 `T<n>·` 前缀，它的树会被当成「没人跑」。三段派发
+// 约定都要求这个前缀（per-ticket-review.md / quality-chain.md），文案里也写明「其实有代理在跑
+// 就别重派、点明是哪个」——宁可让主 session 多核对一次，也不让名额静默空着。
 if (facts.agents_in_flight) {
-  if (wrappingUp || sched.open === 0 || eligible.length === 0) process.exit(0);
+  // 车道模式（登记里有 `<flow_id>-R<n>` 的长驻树）：名额是车道、在飞票记在票面 `wip:` 上，
+  // 这里的「开树补位」话术不适用，而且 openTrees 只认 T<n> ⇒ 在飞票会被当成够格——实测会
+  // 催「重派正在跑的票」。车道模式不催补位，交给它自己的节奏。
+  const laneRe = new RegExp('^' + flowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-R\\d+\\.json$');
+  const laneMode = existsSync(registry) && readdirSync(registry).some((f) => laneRe.test(f));
+  if (laneMode || wrappingUp || sched.open === 0) process.exit(0);
   const busy = new Set();
   for (const d of facts.agent_tasks || []) {
     const m = /^\s*(T\d+)\s*[·・:：]/.exec(d);
     if (m) busy.add(m[1]);
   }
+  // 占名额的 = 有代理在跑的票 ∪ 开着、没标 idle:、此刻却没人跑的树（下一段迟早要派，
+  // 不算进去就会先把名额借给新票，等它派下一段时同时在跑的就超过上限）。
+  const stalled = activeTrees.filter((t) => !busy.has(t));
+  const occupied = new Set([...busy, ...stalled]);
   const cap = sched.cap || 6;
-  const free = cap - busy.size;
-  if (free <= 0) process.exit(0);
-  const take = eligible.slice(0, free);
+  const free = cap - occupied.size;
+  const fresh = eligible.filter((t) => !busy.has(t) && !openTrees.includes(t));
+  if (stalled.length === 0 && (free <= 0 || fresh.length === 0)) process.exit(0);
+  const take = fresh.slice(0, Math.max(0, free));
+  const out = [
+    `${LABEL} 回合结束时名额没用足（引擎数的，不是开发者说的话）：有代理在跑的票 ${busy.size} 张`
+      + (busy.size ? `（${[...busy].join(' ')}）` : '')
+      + (stalled.length ? `，开着却没代理在跑的树 ${stalled.length} 棵（${stalled.join(' ')}）` : '')
+      + `，上限 ${cap}，空 ${Math.max(0, free)} 个；够格未开 ${fresh.length} 张` + (fresh.length ? `（${fresh.join(' ')}，已按取票顺序排好）` : '') + '。',
+  ];
+  if (stalled.length) {
+    out.push(`**本回合**先推进没人跑的树（${stalled.join(' ')}）：看票面到哪段——无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账。`
+      + `（它的代理其实还在跑、只是 description 没带 \`T<n>·\` 前缀 → 别重派，在回复里点明是哪个代理。）`);
+  }
+  if (take.length) {
+    out.push(`**本回合**再补上：${take.join(' ')} → 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步）。`
+      + `⛔ 别等在飞的代理回来再一起开——它们回来之前这 ${free} 个名额一直空着。`);
+  }
   process.stdout.write([
-    `${LABEL} 回合结束时名额没占满（引擎数的，不是开发者说的话）：有代理在跑的票 ${busy.size} 张`
-      + (busy.size ? `（${[...busy].join(' ')}）` : '') + `，上限 ${cap}，空 ${free} 个；`
-      + `够格未开 ${eligible.length} 张（${eligible.join(' ')}，已按取票顺序排好）。`,
-    `**本回合**就补上：${take.join(' ')} → 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步）。`
-      + `⛔ 别等在飞的代理回来再一起开——它们回来之前这 ${free} 个名额一直空着。`,
+    ...out,
     `票数按在飞代理 description 的 \`T<n>·\` 前缀认；某个在跑的代理没按这个前缀写就会被漏数——`
       + `真满了就在回复里说明哪几个代理占着名额，然后结束回合。`
       + `某张够格票确实要等开发者拍板才能开，按 \`freeze.md\` 给它登记冻结面（冻住的票不再算够格）；整体停派才用 Write 写 \`${holdPath}\`。`,

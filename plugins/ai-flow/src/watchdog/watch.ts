@@ -54,6 +54,10 @@ if (!repoRoot || !flowName) {
 }
 
 const startedAt = Date.now();
+// Latched the first time the new owner is seen with a watcher of its own. After that this
+// process never hands over: the new owner's watcher exits on every nudge and is re-armed a
+// turn later, and a hand-over landing in that gap would talk the session into a second one.
+let superseded = false;
 
 for (;;) {
   await sleep(WATCHER_POLL_MS);
@@ -83,7 +87,8 @@ for (;;) {
   // the watchdog for the new session, so `last_user_prompt_at` stays null until then
   // (a subagent hand-back or task notification does not stamp it). Until that, stay
   // silent: nothing should drive the flow before the developer is back.
-  if (ownership === 'owner-changed' && !ownerChangeReady(state)) continue;
+  if (ownership === 'owner-changed' && readWatchdog(state).watcher_seen) superseded = true;
+  if (ownership === 'owner-changed' && (superseded || !ownerChangeReady(state))) continue;
   if (ownership === 'owner-changed') {
     await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {});
     process.stdout.write(

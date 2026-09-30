@@ -169,7 +169,9 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         session_id,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
-        agents_in_flight: agentsInFlight,
+        // Subagents only: a session cron also wakes the session (so it counts toward the
+        // watchdog's `agents_in_flight` above), but it is not a ticket in flight.
+        agents_in_flight: inFlight.agents,
         agent_tasks: inFlight.agentTasks,
         hold_path: holdPath(repoRoot, flowName),
         wrap_up_pct: state.context_wrap_up.at_pct,
