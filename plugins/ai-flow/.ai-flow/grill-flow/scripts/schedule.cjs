@@ -434,7 +434,7 @@ if (SUB === 'missed') {
     say(JSON.stringify({
       live: [...live], idle: [...live].filter((t) => tk.get(t).idle), eligible, down: Object.fromEntries(eligible.map((t) => [t, down.get(t)])), frozen: frozen.map((x) => x.t),
       freeze: activeFreeze.map((f) => ({ id: f.id, lift: f.lift, paths: f.paths, only: f.only, except: f.except, count: frozen.filter((x) => x.f === f).length })),
-      open: open.length, done: done.size, total: order.length,
+      open: open.length, done: done.size, total: order.length, cap,
     }));
     process.exit(0);
   }

@@ -142,17 +142,23 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
     }
 
     // ─── Stage stop guard ────────────────────────────────────────────────────────
-    // Only when nothing mechanical explains the stop: no subagent will wake the
-    // session, no gate is waiting on the developer, no hold names what is waited for,
-    // and the developer did not start this turn. Shell tasks do not exempt — the
-    // guard's most frequent target is a session that "left a dev instance running"
-    // and stopped, and the script sees `bash_in_flight` to weigh it itself.
+    // Only when nothing mechanical explains the stop: no gate is waiting on the
+    // developer, no hold names what is waited for, and the developer did not start this
+    // turn. Shell tasks do not exempt — the guard's most frequent target is a session
+    // that "left a dev instance running" and stopped, and the script sees
+    // `bash_in_flight` to weigh it itself.
+    //
+    // Subagents in flight do not exempt either, since 0.88.3. They used to: a subagent
+    // will wake the session, so the stop looked explained. But "something will wake me"
+    // is not "every slot is busy" — measured on a live flow, turns ended with 4 of 6
+    // slots running and 5 tickets eligible, and nothing asked why, because the one
+    // mechanism that counts eligible work was switched off by the agents still running.
+    // The script gets their descriptions and decides whether the stop left capacity idle.
     const guard = config && getStageConfig(config, state.current_stage).stop_guard;
     if (
       guard &&
       wd.enabled &&
       !input.stop_hook_active &&
-      !agentsInFlight &&
       !developerTurn &&
       readHold(repoRoot, flowName) === null &&
       !isGatePending(readSignal(repoRoot, flowName), config, state.current_stage)
@@ -163,6 +169,8 @@ export async function handleStop(input: StopInput): Promise<{ additionalContext:
         session_id,
         bash_in_flight: inFlight.bash,
         bash_tasks: inFlight.bashTasks,
+        agents_in_flight: agentsInFlight,
+        agent_tasks: inFlight.agentTasks,
         hold_path: holdPath(repoRoot, flowName),
         wrap_up_pct: state.context_wrap_up.at_pct,
         last_assistant_message: (input.last_assistant_message ?? '').slice(-4000),

@@ -2,8 +2,9 @@
 // grill-flow stage-3 的 Stop 守卫：主 session 一个回合结束、而**没有任何东西会在将来把它叫醒**
 // 时，由引擎（`src/lib/stop-handler.ts`）调用，回答一个问题——「此刻有没有本可以推进的工作」。
 //
-// 引擎只在这些机械条件全成立时才跑本脚本：无子代理在飞、无待批 gate、无 `state/hold`、
+// 引擎只在这些机械条件全成立时才跑本脚本：无待批 gate、无 `state/hold`、
 // 且这回合不是开发者起的（他刚说过话的回合交给停滞自检的 5 分钟规则，别打断他读回答）。
+// 有子代理在飞时也跑（0.88.3 起）：那时只问一件事——名额空着、够格票却没开（见文件末尾）。
 // 引擎看得见的事实放在环境变量 `AI_FLOW_STOP_FACTS`（JSON），本脚本补上它看不见的：
 // tickets.md 里还有几张票够格、state/worktrees 里还开着几棵树。
 //
@@ -72,6 +73,36 @@ const signalPath = join(flowDir, 'state', 'signal');
 
 // 收尾期（context 过线）只收不派：没有树要收就让它停。
 if (wrappingUp && activeTrees.length === 0) process.exit(0);
+
+// ── 有子代理在飞：只查「名额空着、够格票没开」 ──
+// 在飞的代理会把你叫醒，所以这里不催「推进开着的树」——那些树的下一段在它们的代理回报时
+// 自然会做；而按 description 认不出票号的代理（前缀没按约定写）会被当成「树上没人」，
+// 这时催派就是在教人往一棵有人的树里再派一个。够格票是还没开树的票，不存在这个风险。
+// 实测（0.88.2，一条 150+ 票的 flow）：回合结束时 6 个名额只占 4 个、5 张票够格，
+// 连着几个回合没有任何东西问一句——原先引擎在「有代理在飞」时直接跳过本脚本。
+if (facts.agents_in_flight) {
+  if (wrappingUp || sched.open === 0 || eligible.length === 0) process.exit(0);
+  const busy = new Set();
+  for (const d of facts.agent_tasks || []) {
+    const m = /^\s*(T\d+)\s*[·・:：]/.exec(d);
+    if (m) busy.add(m[1]);
+  }
+  const cap = sched.cap || 6;
+  const free = cap - busy.size;
+  if (free <= 0) process.exit(0);
+  const take = eligible.slice(0, free);
+  process.stdout.write([
+    `${LABEL} 回合结束时名额没占满（引擎数的，不是开发者说的话）：有代理在跑的票 ${busy.size} 张`
+      + (busy.size ? `（${[...busy].join(' ')}）` : '') + `，上限 ${cap}，空 ${free} 个；`
+      + `够格未开 ${eligible.length} 张（${eligible.join(' ')}，已按取票顺序排好）。`,
+    `**本回合**就补上：${take.join(' ')} → 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步）。`
+      + `⛔ 别等在飞的代理回来再一起开——它们回来之前这 ${free} 个名额一直空着。`,
+    `票数按在飞代理 description 的 \`T<n>·\` 前缀认；某个在跑的代理没按这个前缀写就会被漏数——`
+      + `真满了就在回复里说明哪几个代理占着名额，然后结束回合。`
+      + `某张够格票确实要等开发者拍板才能开，按 \`freeze.md\` 给它登记冻结面（冻住的票不再算够格）；整体停派才用 Write 写 \`${holdPath}\`。`,
+  ].join('\n') + '\n');
+  process.exit(CONTINUE);
+}
 
 const lines = [];
 const factBits = [

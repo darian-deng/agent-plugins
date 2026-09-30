@@ -34,6 +34,7 @@ import {
   watcherCommand,
   ownerChangedText,
   watcherOwnership,
+  ownerChangeReady,
   type WatchdogState,
 } from '../lib/watchdog.js';
 
@@ -74,6 +75,15 @@ for (;;) {
   // for the new owner, which `Stop` would otherwise spend the next turn end asking
   // for. Nine of nine measured `/clear`s were followed by a developer prompt within
   // 65 seconds, so the wake usually lands inside a turn already running.
+  //
+  // "Usually" was not enough: a developer who ran `/reload-plugins` after `/clear` got
+  // the wake 18 seconds in, before saying anything, and the new session read "arm a
+  // watcher, then carry on with the work in hand" as licence to start dispatching. So
+  // the exit now waits for the new owner's developer to speak — SessionStart blanked
+  // the watchdog for the new session, so `last_user_prompt_at` stays null until then
+  // (a subagent hand-back or task notification does not stamp it). Until that, stay
+  // silent: nothing should drive the flow before the developer is back.
+  if (ownership === 'owner-changed' && !ownerChangeReady(state)) continue;
   if (ownership === 'owner-changed') {
     await appendLog(repoRoot, flowName, sessionId, `WATCHDOG_OWNER_CHANGED new_owner=${state.last_session_id}`).catch(() => {});
     process.stdout.write(

@@ -18,6 +18,7 @@ import {
   watcherOwnership,
   isDeveloperPrompt,
   ownerChangedText,
+  ownerChangeReady,
   BASH_IDLE_MULTIPLIER,
   WATCHER_MARKER,
   MAX_ARM_ASKS,
@@ -278,6 +279,14 @@ describe('the nudge carries its own replacement', () => {
     expect(text).not.toMatch(/回一行说清在等什么，然后结束回合/);
   });
 
+  it('an inherited watcher hands over only after the new owner\'s developer has spoken', () => {
+    // /clear then /reload-plugins, no prompt yet: SessionStart blanked the watchdog.
+    expect(ownerChangeReady({ watchdog: emptyWatchdog() })).toBe(false);
+    expect(ownerChangeReady({ watchdog: { ...emptyWatchdog(), last_activity_at: new Date().toISOString() } })).toBe(false);
+    expect(ownerChangeReady({ watchdog: { ...emptyWatchdog(), last_user_prompt_at: new Date().toISOString() } })).toBe(true);
+    expect(ownerChangeReady(null)).toBe(false);
+  });
+
   it('the owner-changed exit hands the NEW session its own arming command', () => {
     const text = ownerChangedText('test-flow', watcherCommand('/repo', 'test-flow', 'test-flow-abc', 'new-sess'));
     expect(text).toContain('--session "new-sess"');
@@ -303,11 +312,11 @@ describe('own watcher vs inherited watcher', () => {
       { id: '3', type: 'monitor' },
       { id: '4', type: 'dream' },
     ]);
-    expect(c).toEqual({ agents: false, bash: true, bashTasks: ['timer'] });
+    expect(c).toEqual({ agents: false, bash: true, bashTasks: ['timer'], agentTasks: [] });
     expect(classifyInFlight([{ id: '5', type: 'local_agent' }]).agents).toBe(true);
     expect(classifyInFlight([{ id: '6', type: 'subagent' }]).agents).toBe(true);
     // Older client without `type`: a command means shell, otherwise a subagent.
-    expect(classifyInFlight([{ id: '7', command: 'pnpm dev' }])).toEqual({ agents: false, bash: true, bashTasks: ['pnpm dev'] });
+    expect(classifyInFlight([{ id: '7', command: 'pnpm dev' }])).toEqual({ agents: false, bash: true, bashTasks: ['pnpm dev'], agentTasks: [] });
     expect(classifyInFlight([{ id: '8' }]).agents).toBe(true);
   });
 });
@@ -791,7 +800,7 @@ describe('stage stop guard', () => {
 const f = JSON.parse(process.env.AI_FLOW_STOP_FACTS || '{}');
 if (process.env.GUARD_MODE === 'crash') { process.stderr.write('boom'); process.exit(1); }
 if (process.env.GUARD_MODE === 'pass') process.exit(0);
-process.stdout.write('${STOP_GUARD_LABEL} 够格未开 2 张 stage=' + f.stage + ' bash=' + f.bash_in_flight + ' hold=' + f.hold_path);
+process.stdout.write('${STOP_GUARD_LABEL} 够格未开 2 张 stage=' + f.stage + ' bash=' + f.bash_in_flight + ' agents=' + f.agents_in_flight + ':' + (f.agent_tasks || []).join('|') + ' hold=' + f.hold_path);
 process.exit(${STOP_GUARD_CONTINUE_EXIT});
 `;
   function guardedRepo() {
@@ -826,11 +835,12 @@ process.exit(${STOP_GUARD_CONTINUE_EXIT});
     expect(out?.additionalContext).toContain('bash=true');
   });
 
-  it('a subagent in flight → no guard (it will wake the session)', async () => {
+  it('a subagent in flight does not exempt — the guard gets the agents\' descriptions and decides (idle slots)', async () => {
     const repo = guardedRepo();
-    expect(await handleStop(input(repo.repoRoot, {
-      background_tasks: [ourWatcher(repo.repoRoot, 'guarded-flow'), { id: 'a', type: 'subagent' }],
-    }))).toBeNull();
+    const out = await handleStop(input(repo.repoRoot, {
+      background_tasks: [ourWatcher(repo.repoRoot, 'guarded-flow'), { id: 'a', type: 'subagent', description: 'T7·实施' }],
+    }));
+    expect(out?.additionalContext).toContain('agents=true:T7·实施');
   });
 
   it('a hold → no guard', async () => {

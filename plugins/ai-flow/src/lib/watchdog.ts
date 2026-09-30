@@ -416,11 +416,13 @@ export interface InFlight {
   bash: boolean;
   /** Descriptions (or commands) of the shell tasks counted, for the nudge to name. */
   bashTasks: string[];
+  /** Descriptions of the subagents counted — a stage's stop guard reads ticket ids off them. */
+  agentTasks: string[];
 }
 
 /** Sort the session's background tasks into what will wake it and what may not. */
 export function classifyInFlight(tasks: BackgroundTaskEntry[]): InFlight {
-  const out: InFlight = { agents: false, bash: false, bashTasks: [] };
+  const out: InFlight = { agents: false, bash: false, bashTasks: [], agentTasks: [] };
   for (const t of tasks) {
     const type = t.type ?? (t.command !== undefined ? 'shell' : 'subagent');
     if (BASH_TASK_TYPES.has(type)) {
@@ -429,6 +431,7 @@ export function classifyInFlight(tasks: BackgroundTaskEntry[]): InFlight {
       out.bashTasks.push((t.description || t.command || t.id || 'shell task').slice(0, 120));
     } else if (AGENT_TASK_TYPES.has(type)) {
       out.agents = true;
+      out.agentTasks.push((t.description || t.id || 'agent').slice(0, 120));
     }
   }
   return out;
@@ -567,6 +570,17 @@ export function watcherOwnership(
   if (flowId && state.flow_id !== flowId) return 'foreign-flow';
   if (sessionId && state.last_session_id !== null && state.last_session_id !== sessionId) return 'owner-changed';
   return 'ours';
+}
+
+/**
+ * Whether an inherited watcher may hand over now: only once the new owner's developer
+ * has spoken. SessionStart blanks the watchdog for a new session, and only a prompt the
+ * developer typed stamps `last_user_prompt_at` (a hand-back or task notification does
+ * not), so null means nobody has come back yet — and a wake then would start the flow
+ * moving before the developer did. See the owner-changed branch in `watch.ts`.
+ */
+export function ownerChangeReady(state: { watchdog?: Partial<WatchdogState> } | null): boolean {
+  return state !== null && readWatchdog(state).last_user_prompt_at !== null;
 }
 
 /**

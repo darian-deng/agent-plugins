@@ -1084,6 +1084,32 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(r.out).toMatch(/② \*\*确实在等开发者的人手动作\*\*/);
   });
 
+  it('stop-guard：有代理在飞、名额没满、有够格票 → exit 3，点名空几个、补哪几张', () => {
+    const t = T('T1', false, 'src/a/') + T('T2', false, 'src/b/') + T('T3', false, 'src/c/') + T('T4', false, 'src/d/');
+    const dir = makeFlow(t, ['T1']);
+    const r = guard(dir, { agents_in_flight: true, agent_tasks: ['T1·实施', '整理清单（不是票）'] });
+    expect(r.code).toBe(3);
+    expect(r.out).toContain('有代理在跑的票 1 张（T1），上限 6，空 5 个');
+    expect(r.out).toContain('够格未开 3 张（T2 T3 T4');
+    expect(r.out).toContain('本回合**就补上：T2 T3 T4');
+  });
+
+  it('stop-guard：有代理在飞时，名额满 / 没有够格票 / 收尾期 → exit 0，不催推进开着的树', () => {
+    const t = [1, 2, 3, 4, 5, 6, 7].map((n) => T(`T${n}`, false, `src/m${n}/`)).join('');
+    const full = makeFlow(t, ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']);
+    const six = ['T1·实施', 'T2·质量链', 'T3·注释清理', 'T4·实施', 'T5·实施', 'T6·实施'];
+    expect(guard(full, { agents_in_flight: true, agent_tasks: six }).code).toBe(0);
+    const none = makeFlow(T('T1', false, 'src/a/'), ['T1']);
+    expect(guard(none, { agents_in_flight: true, agent_tasks: [] }).code).toBe(0);
+    const wrap = makeFlow(T('T1', false, 'src/a/') + T('T2', false, 'src/b/'), ['T1']);
+    expect(guard(wrap, { agents_in_flight: true, agent_tasks: ['T1·实施'], wrap_up_pct: 61 }).code).toBe(0);
+  });
+
+  it('missed --json 带上并发上限 cap（缺省 6，stop-guard 按它算空几个名额）', () => {
+    const dir = makeFlow(T('T1', false, 'src/a/'));
+    expect(JSON.parse(sched(dir, 'missed', '--json').trim().split('\n').pop()!).cap).toBe(6);
+  });
+
   it('stop-guard：收尾期无树可收 → exit 0（只收不派）；有树 → 只说收', () => {
     const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b/');
     expect(guard(makeFlow(t), { wrap_up_pct: 61 }).code).toBe(0);
