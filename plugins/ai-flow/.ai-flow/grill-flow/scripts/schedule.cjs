@@ -189,9 +189,14 @@ if (!existsSync(ticketsPath)) die('缺 tickets.md: ' + ticketsPath);
 // 未知子命令是死而不是「当没写、照打报告」：`mised` 这种手滑若静默降级成一份 25 票的调度
 // 报表，调用方拿到的是一份看起来正常、却答非所问的输出——那比响亮失败难发现得多。
 const SUB = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
-if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark', 'selfcheck', 'collect'].includes(SUB)) {
-  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark` / `selfcheck` / `collect`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
+if (SUB !== null && !['missed', 'rm', 'ticket', 'brief', 'mark', 'selfcheck', 'collect', 'intake'].includes(SUB)) {
+  die('未知子命令: ' + SUB + '（只支持 `missed` / `rm` / `ticket` / `brief` / `mark` / `selfcheck` / `collect` / `intake`；不带子命令 = 那份全量调度报告，跑 --help 看用法）');
 }
+
+// 票面子项里写成 `Touches` 却不是 `Touches:` 的行（解析处与 gate-stage-2.cjs 同口径）。
+const TOUCHES_VARIANT = /^\s+[-*]?\s*`?Touches(?!:)[^:：\n]{0,20}[:：]/;
+// 只拦里面像是写了路径的（含 `/` 或带扩展名）：`Touches 说明：（按落点回报）` 这类纯备注行不含文件，放过。
+const TOUCHES_PATHISH = /[:：].*(\/|\.[a-z]{1,5}\b)/;
 
 // ── collect：收口测试期间持锁，让 close 等它 ──────────────────────────────────
 // 收口在主工作树跑，而 close 的 ff 会改动正在被测的文件（假红 / 假绿）。0.90.0 之前的规则是
@@ -283,7 +288,7 @@ for (let li = 0; li < lines.length; li++) {
   const m = /^- \[([ xX])\] (T\d+)/.exec(l);
   if (m) {
     cur = m[2];
-    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', inserted: false, idle: null, start: li, end: li, rmHits: [] });
+    tk.set(cur, { blocked: [], touches: [], lane: null, done: m[1] !== ' ', inserted: false, idle: null, start: li, end: li, rmHits: [], reason: null, opened: false, staged: false, badTouches: [] });
     order.push(cur);
     blockClosed = false;
     collectRm(tk.get(cur), l, true);   // 票行内的标记（约定允许写在这里）
@@ -300,9 +305,22 @@ for (let li = 0; li < lines.length; li++) {
   if (mb) tk.get(cur).blocked = (mb[1].match(/T\d+/g) || []);
   const mt = /(?:^|\s)Touches:\s*(.+)$/.exec(l);
   if (mt) tk.get(cur).touches = mt[1].split(/[,\s]+/).filter((s) => s.length > 0);
+  // `Touches 追加：` / `Touches：`（全角冒号）/ `Touches (补):` 这类变体上面那条不认，里面的文件静默不进写集，
+  // 并行准入就按缺了这几项的写集算（实测一张票两项写在 `Touches 追加` 行，调度器零命中）。下面 intakeBlocked 挡它。
+  if (TOUCHES_VARIANT.test(l) && TOUCHES_PATHISH.test(l)) tk.get(cur).badTouches.push(l.trim());
   const ml = /(?:^|\s)lane:\s*(\S+)/.exec(l);
   if (ml) tk.get(cur).lane = ml[1];
   if (/^\s*-\s*`?inserted:/.test(l)) tk.get(cur).inserted = true;
+  const mr = /^\s*-\s*`?立票理由[:：]\s*(.*)$/.exec(l);
+  if (mr) tk.get(cur).reason = mr[1].replace(/`$/, '').trim();   // 同 idle:：整行包反引号时去掉收尾那个
+  // 已经开工的标记（实施 / 质量链 / 注释清理记过账）：守卫只管「还没开」的那一刻，开工后再拦只会卡住收尾。
+  // ⛔ 不认 `batch:` / `with:` / `lane:`：stage-3 让主 session **先落 batch: 再开树**，认它们就等于开树前一步自己豁免了自己。
+  // `wip: R<n>`：车道模式里已派进那条车道、正在实施（还没有 impl: 记账），同样算开工。
+  if (/^\s*-\s*`?(impl|qc|qc-metrics|cm|wip):/.test(l)) tk.get(cur).opened = true;
+  // `batch:` / `with:`：已排进批次、马上（或已经）开树。守卫**不**拿它豁免（上一条），但并票候选要排除它——
+  // 四查的并进目标只能是**未开树**的票（边界 1：往在飞 / 已开树的票里塞活会和它的实施并发写同一棵树）。
+  // `lane:` 同理：排进了一条车道，那棵长驻树随时会轮到它。
+  if (/^\s*-\s*`?(batch|with|lane):/.test(l)) tk.get(cur).staged = true;
   const mi = /^\s*-\s*`?idle:\s*(.*)$/.exec(l);
   if (mi) tk.get(cur).idle = mi[1].replace(/`$/, '').trim() || '（未写理由）';
 }
@@ -414,6 +432,102 @@ function overlap(a0, b0) {
   return false;
 }
 
+// ── 立票守卫（references/mid-flight-ticket.md「立票前四查」）──────────────────────
+// 一张票的固定开销约 17 万 token、两个子代理、一次 sync 与一次 close（2026-09-21-mthu 实测），
+// 与改动大小无关；而「立票前先查能不能并进别的票」原先只活在散文里，执行期一天插 17 张、
+// 其中 7 张 diff 预估 < 30 行。所以它成了票面字段：执行期插票（`inserted:`）在**开树之前**
+// 必须带一行 `- 立票理由：四查未中（①… ②… ③… ④…）` 或 `- 立票理由：例外（隐私 | 数据安全 | 安全红线：…）`，
+// 缺了就和冻结面一样**不算够格**——`missed` 不列它、`worktree.cjs open` 拒开它。
+// 只管「未勾 ∧ 未开工」：开工 = 票面已有 `impl:` / `qc:` / `qc-metrics:` / `cm:` 记账（`batch:` / `with:` 不算，
+// 见解析处），开工后理由已经无从补救，拦它只会让收尾卡住。启用前就在台账里的旧插票用
+// `intake-guard-since: T<n>`（tickets.md 任一行，建议写在 `## 冻结面` 段首）豁免：票号 < n 的不查。
+// 没写这一行 = 全部未开工插票都查。
+// ⛔ 判据只查**形状**（四个圈号都在 / 例外写明三类之一），不判理由真假——真假由周期收敛复核，
+// 而候选提示（下面 intakeHints）把「该看哪几张」摆到写理由的人眼前，不靠他自己想起来。
+// 「三查未中」照收：早期文本只有 ①②③、叫「三查」，票面已经这样写的不必为改一个字重写；但圈号必须四个。
+const INTAKE_SINCE = (() => {
+  for (const l of lines) { const m = /intake-guard-since:\s*`?T(\d+)/.exec(l); if (m) return Number(m[1]); }
+  return null;
+})();
+const REASON_OK = /^(?:[三四]查未中[^①]*①\s*[^\s②]+.*②\s*[^\s③]+.*③\s*[^\s④]+.*④\s*[^\s)）]+.*|例外[（(](?:隐私|数据安全|安全红线)[：:].+[)）])$/;
+const REASON_SHAPE = '要么「四查未中（①… ②… ③… ④…）」四个圈号各跟一句为什么不中，要么「例外（隐私 | 数据安全 | 安全红线：…）」';
+function intakeBlocked(t, live) {
+  const r = tk.get(t);
+  if (r.done || r.opened) return null;
+  // 不限插票、不吃 intake-guard-since 豁免：写集读不全对哪张未开工的票都是并行安全问题。
+  if (r.badTouches.length) return BAD_TOUCHES + '（' + r.badTouches.join(' ｜ ') + '）——把这些文件并进那一行 `Touches:`（半角冒号）、删掉变体行';
+  if (!r.inserted) return null;
+  if (INTAKE_SINCE !== null && Number(t.slice(1)) < INTAKE_SINCE) return null;
+  if (r.reason === null) return '缺 `立票理由：`';
+  if (!REASON_OK.test(r.reason)) return '`立票理由：` 形状不对（' + REASON_SHAPE + '）';
+  if (/^例外/.test(r.reason)) return null;
+  // 候选点名：下面 intakeHints 摆出来的每张候选，理由里都得出现它的票号（写一句为什么不并）。
+  // 这是机器能查的唯一一点「真的看过历史」：只查形状时，「①无 ②无」能在一张明摆着的候选旁边过门。
+  // 它查不了理由对不对，也补不了提示漏掉的真目标（实测一张票的正确宿主不共写任何文件）。
+  // 只要求点名**比本票早立**的候选：后插进来的票写理由时自己会看到本票（对称），回头再拦本票只会让一条写好的理由反复失效。
+  const miss = intakeHints(t, live, true).map((h) => h.o).filter((o) => !new RegExp('\\b' + o + '\\b').test(r.reason));
+  if (miss.length) return '`立票理由：` 没点名候选 ' + miss.join(' ') + '（逐张写一句为什么不并；能并就并）';
+  return null;
+}
+// 候选提示：只提示、不判（「同一域 / 同一不变量」「耦合」都是语义判断，文件交集给不出来）。
+// 汇聚文件 = 多张票都写、只经它相交**不算耦合**的文件（mid-flight-ticket.md 四查 ②）：生成物、
+// tickets.md `## 汇聚文件` 段登记的（台账 / 清单 / 测试替身这类，叫什么因项目而异，⛔ 不在脚本里写死文件名），
+// 以及被 > HOT 张未开树票声明的高频文件。
+// 实测（一天 17 张插票的回放）直接按 Touches 相交提示，平均每张新票命中 19 张未开票，
+// 高频文件（启动装配总表 27 张、rpc 命令表 13 张、架构总文档 9 张）把真候选淹没。
+//   ① 与本票共写一个**少见**文件（声明它的未开树票 ≤ RARE 张）。
+//   ② 与本票有共同的**未勾**前置，且共写一个**非汇聚**文件。只同前置、或只经汇聚文件相交的不列：
+//      按「经公共文件相交也算相交」列出来，一张门禁脚本票会被提示并进两张同前置的票（只经架构总文档相交），
+//      而它实际与其中一张并行做完。
+//   ## 汇聚文件
+//   - docs/<台账>.md
+// 写法同 `## 生成物`（锚点相对；以 `/` 结尾的是目录，其下全算）。只影响候选提示，不影响并行准入。
+const hubs = [];
+{
+  let inHub = false;
+  for (const l of lines) {
+    if (/^#{1,6}\s/.test(l)) { inHub = /^##\s/.test(l) && /汇聚文件/.test(l); continue; }
+    if (!inHub) continue;
+    const mh = /^-\s+`?([^`\s]+)`?/.exec(l);
+    if (mh) hubs.push(mh[1]);
+  }
+}
+// 只认「就是它 / 在它下面」：⛔ 不用 hit()——它双向，会把声明了宽目录 `src/main/` 的票也算成只写汇聚文件。
+const isHub = (f) => generated.has(f) || hubs.some((h) => norm(f) === norm(h) || norm(f).startsWith(norm(h) + '/'));
+const RARE = 3, HOT = 6;
+// 对方声明的是**宽目录**（≤3 段，如 `src/main/platform/`）而本票落在它下面时不算共写：那是
+// 「预估不了」的另一种写法，按它提示等于把那张票列成所有人的候选（实测两张这样的票各占 6 张新票的提示位）。
+const segs = (p) => norm(p).split('/').length;
+const sameSpot = (mine, theirs) => hit(mine, theirs) && !(norm(mine).startsWith(norm(theirs) + '/') && segs(theirs) <= 3);
+function intakePool(t, live, olderOnly = false) {
+  return order.filter((o) => o !== t && !(olderOnly && Number(o.slice(1)) > Number(t.slice(1))) && !(live && live.has(o)) && !tk.get(o).done && !tk.get(o).opened && !tk.get(o).staged);
+}
+function intakeHints(t, live, olderOnly = false) {
+  const me = tk.get(t);
+  const pool = intakePool(t, live, olderOnly);
+  const own = me.touches.filter((f) => !NONE.test(f) && !isHub(f));
+  const holders = (f) => pool.filter((o) => tk.get(o).touches.some((y) => !isHub(y) && sameSpot(f, y))).length;
+  const freq = new Map(own.map((f) => [f, holders(f)]));
+  const rare = own.filter((f) => freq.get(f) <= RARE);
+  const plain = own.filter((f) => freq.get(f) <= HOT);   // 非汇聚
+  const out = [];
+  for (const o of pool) {
+    const r = tk.get(o);
+    const shares = (fs) => fs.filter((f) => r.touches.some((y) => !isHub(y) && sameSpot(f, y)));
+    const files = shares(rare);
+    const pre = me.blocked.filter((b) => tk.has(b) && !tk.get(b).done && r.blocked.includes(b));
+    const coup = pre.length > 0 ? shares(plain) : [];
+    if (files.length === 0 && coup.length === 0) continue;
+    const bits = [];
+    if (files.length) bits.push('①共写少见文件 ' + files.join(' '));
+    if (coup.length) bits.push('②同前置 ' + pre.join(',') + '、共写非汇聚文件 ' + coup.join(' '));
+    out.push({ o, rank: (coup.length ? 2 : 0) + (files.length ? 1 : 0), s: `${o}（${bits.join('；')}）` });
+  }
+  return out.sort((x, y) => y.rank - x.rank).slice(0, 5);
+}
+const BAD_TOUCHES = '有调度器读不到的 `Touches` 变体行';
+const NO_HINT = '（没有共写少见文件、也没有同前置且共写非汇聚文件的未开树票——①② 仍要人判：同不变量 / 前改后才好改不一定体现在文件上）';
+
 // ── 取票顺序：执行期插票 → 下游依赖链长降序 → 文件顺序 ─────────────────────────
 // 存在理由：原来只按文件顺序贪心。实测一条 179 票的 flow 剩 40 张时，剩余最长依赖链
 // T136→T148→T129→T130→T131 的链头早就够格，却被文件里更靠前、写集与它相交的一张票挡住——
@@ -448,6 +562,44 @@ function priorityOrder(included) {
     || (down.get(y) - down.get(x))
     || (idx.get(x) - idx.get(y)));
   return { ranked, down };
+}
+
+// ── 子命令 `intake`：一张票过没过立票守卫（`worktree.cjs open` 开树前调它）──────────────
+// 机器可解析行 `INTAKE-STATE <票号> ok|blocked`，契约同 `RM-STATE`：改形状要同步改 worktree.cjs。
+// 退出码恒 0（判定在那一行里）；只有用法错 / 票不存在才 die——那是调用方的错，open 照 fail-open 处理。
+if (SUB === 'intake') {
+  const t = process.argv[3];
+  if (!/^T\d+$/.test(t || '')) die('用法：intake T<n>');
+  if (!tk.has(t)) die(`tickets.md 里找不到 ${t} 的票行`);
+  // 同 rm：台账取自 active.json，调用方要开的若是另一条 flow 的票，这里判的就是别人的同号票。
+  if (expectFlowId && expectFlowId !== state.flow_id) {
+    say(`INTAKE-STATE ${t} flowmismatch`);
+    say(`要开的是 flow \`${expectFlowId}\` 的票，当前活跃 flow 是 \`${state.flow_id}\`，本守卫判不了。`);
+    process.exit(0);
+  }
+  // 在飞集合与 `missed` 同口径（stop-guard 传给 missed 的就是登记着、目录还在的树）：
+  // 不传的话已开树但票面还没 batch: 的票会被列成候选，`missed` 说够格、open 却拒开。
+  const live = new Set();
+  const reg = join(flowDir, 'state', 'worktrees');
+  if (existsSync(reg)) {
+    const re = new RegExp('^' + String(state.flow_id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(T\\d+)\\.json$');
+    for (const f of readdirSync(reg)) {
+      const m = re.exec(f);
+      if (!m || m[1] === t || !tk.has(m[1])) continue;
+      try { const p = JSON.parse(readFileSync(join(reg, f), 'utf-8')).path; if (p && existsSync(p)) live.add(m[1]); } catch { /* 坏登记当不在飞 */ }
+    }
+  }
+  const why = intakeBlocked(t, live);
+  say(`INTAKE-STATE ${t} ${why ? 'blocked' : 'ok'}`);
+  if (why) {
+    say(`${t}：${why}`);
+    // 写法问题与并不并无关，补完 Touches 再判；这时摆候选只是噪声。
+    if (!why.startsWith(BAD_TOUCHES)) {
+      const h = intakeHints(t, live);
+      say(h.length ? `先看能否并进：${h.map((x) => x.s).join('；')}` : NO_HINT);
+    }
+  }
+  process.exit(0);
 }
 
 // ── 子命令 `ticket`：原样打印一张票的票块（票行 + 其后的缩进子项）───────────────────
@@ -731,6 +883,7 @@ if (SUB === 'missed') {
   // （`roundsPerTicket` 里那句 `batch.some(...)`），这里必须同口径，否则这条提示在教人违规。
   const eligible = [];
   const frozen = [];   // [{ t, f }]
+  const intake = [];   // [{ t, why }]：立票守卫没过的执行期插票
   // 下游链长只数未勾票：已勾的前驱不再挡人，已勾的后继不再等人。
   const { ranked, down } = priorityOrder(new Set(order.filter((t) => !done.has(t))));
   for (const t of ranked) {
@@ -742,6 +895,10 @@ if (SUB === 'missed') {
     // 与主循环同一口径：只看**本 tickets.md 里存在**的前驱。指向别处（已删的票、别的
     // flow）的 Blocked by 永远勾不上，按它挡就等于把票永久冻住。
     if (tk.get(t).blocked.some((b) => tk.has(b) && !done.has(b))) continue;
+    // 立票守卫排在冻结面与前驱之后：只列「本来就够格、只差这一条」的票。排在前面时，冻着 / 等前驱的票
+    // 也进这一栏，stop-guard 就会说「够格 0 是因为立票守卫」，盖掉等门期 / hold 的提示，补完理由仍开不了。
+    const ib = intakeBlocked(t, live);
+    if (ib) { intake.push({ t, why: ib }); continue; }
     // 在飞集合为空时不做相交过滤：没有在飞票就无从相交。判据用 `live.size` 而不是
     // `liveTouches.length` —— 在飞票存在、但它们的 `Touches` 解析不出来（执行期插的票不过
     // stage-2 那道门）时 `liveTouches` 也是空数组，用长度判就会把**所有**票放行，包括
@@ -755,6 +912,7 @@ if (SUB === 'missed') {
     const open = order.filter((t) => !done.has(t));
     say(JSON.stringify({
       live: [...live], idle: [...live].filter((t) => tk.get(t).idle), eligible, down: Object.fromEntries(eligible.map((t) => [t, down.get(t)])), frozen: frozen.map((x) => x.t),
+      intake: intake.map((x) => x.t),
       freeze: activeFreeze.map((f) => ({ id: f.id, lift: f.lift, paths: f.paths, only: f.only, except: f.except, count: frozen.filter((x) => x.f === f).length })),
       open: open.length, done: done.size, total: order.length, cap,
     }));
@@ -767,6 +925,14 @@ if (SUB === 'missed') {
       say(`❄️  冻结面 ${f.id}（解冻: ${f.lift || '（未写解冻条件——补上，否则没人知道什么时候能开）'}）冻住 ${mine.length} 张：${mine.join(' ')}`);
     }
     say('   这些票**不算够格**，下面的清单已经排除它们。解冻条件满足 → 在那条冻结面下加 `- lifted: <日期>`。');
+  }
+  if (intake.length > 0) {
+    say(`🚫 立票守卫：${intake.length} 张票**不算够格**（执行期插票没过「立票前四查」，或 \`Touches\` 写法调度器读不到；references/mid-flight-ticket.md「立票前四查」）——每张的原因见下：`);
+    for (const { t, why } of intake) {
+      const h = why.startsWith(BAD_TOUCHES) ? null : intakeHints(t, live);
+      say(`   ${t}：${why}` + (h === null ? '' : h.length ? `\n      先看能否并进：${h.map((x) => x.s).join('；')}` : `\n      ${NO_HINT}`));
+    }
+    say('   并进 ⇒ 在目标票加 `📥` + 一条 AC、删掉这张；本票收回 / 本票等在飞票合入后续派 ⇒ 删掉这张；四查都不中 ⇒ 这张票加一行 `- 立票理由：四查未中（①… ②… ③… ④…）`，四个圈号逐条写为什么不中、上面列出的候选逐张点名。启用本守卫之前就已立好的旧插票 ⇒ tickets.md 加一行 `intake-guard-since: T<下一个新票号>` 豁免。');
   }
   if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（missed 后面只认 T<n> 形态的票号）`);
   if (unknown.length > 0) {

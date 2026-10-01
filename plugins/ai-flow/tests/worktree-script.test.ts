@@ -1133,10 +1133,62 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(j.eligible).toEqual(['T3', 'T6']);
     expect(j.down).toEqual({ T3: 2, T6: 0 });
     // 带 inserted: 的执行期插票排第一，哪怕它没有下游。
-    const withIns = t + dep('T7', 'T1', 'src/e/', '  - inserted: 2026-09-30\n');
+    const withIns = t + dep('T7', 'T1', 'src/e/', '  - inserted: 2026-09-30\n  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n');
     const k = JSON.parse(sched(makeFlow(withIns), 'missed', '--json').trim().split('\n').pop()!);
     expect(k.eligible).toEqual(['T7', 'T3', 'T6']);
     expect(sched(makeFlow(withIns), 'missed')).toContain('T7(插)(↓0) T3(↓2) T6(↓0)');
+  });
+
+  it('立票守卫：插票缺理由 / 形状不对 / 没点名候选都不算够格，四查写全且点名才放行', () => {
+    const base = T('T1', true, 'src/a/') + T('T2', false, 'src/rare/x.ts');
+    const ins = (reason: string) => base + T('T9', false, 'src/rare/x.ts', '  - inserted: 2026-10-01\n' + reason);
+    const j = (t: string) => JSON.parse(sched(makeFlow(t), 'missed', '--json').trim().split('\n').pop()!);
+    expect(j(ins('')).intake).toEqual(['T9']);
+    expect(sched(makeFlow(ins('')), 'intake', 'T9')).toMatch(/INTAKE-STATE T9 blocked[\s\S]*缺 `立票理由：`[\s\S]*T2（①共写少见文件 src\/rare\/x.ts/);
+    // 只写了三个圈号：早期「三查」形状，④ 缺了不放。
+    expect(j(ins('  - 立票理由：三查未中（①无 ②无 ③无）\n')).intake).toEqual(['T9']);
+    expect(j(ins('  - 立票理由：例外（赶时间：x）\n')).intake).toEqual(['T9']);
+    // 四个圈号齐但没点名摆在眼前的候选 T2。
+    expect(sched(makeFlow(ins('  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n')), 'intake', 'T9')).toContain('没点名候选 T2');
+    const ok = ins('  - 立票理由：四查未中（① T2 是另一条不变量 ②无 ③无 ④无）\n');
+    expect(j(ok).intake).toEqual([]);
+    expect(j(ok).eligible).toContain('T9');
+    expect(j(ins('  - 立票理由：例外（隐私：泄露用户邮箱）\n')).intake).toEqual([]);
+    // 已开工（有 impl: 记账）的不再拦；intake-guard-since 以下的旧票豁免。
+    expect(j(ins('  - impl:done\n')).intake).toEqual([]);
+    expect(j('intake-guard-since: T10\n' + ins('')).intake).toEqual([]);
+  });
+
+  it('立票守卫：只要求点名比本票早立的候选；车道里在飞 / 排队的票不当候选；冻着或等前驱的不进守卫栏；反引号包住的例外照收', () => {
+    const j = (t: string) => JSON.parse(sched(makeFlow(t), 'missed', '--json').trim().split('\n').pop()!);
+    const r9 = '  - inserted: 2026-10-01\n  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n';
+    // 后插的 T10 共写同一少见文件：T9 那条已写好的理由不因它失效（T10 自己要点名 T9）。
+    const later = T('T1', true, 'src/a/') + T('T9', false, 'src/rare/x.ts', r9) + T('T10', false, 'src/rare/x.ts', '  - inserted: 2026-10-02\n');
+    expect(sched(makeFlow(later), 'intake', 'T9')).toContain('INTAKE-STATE T9 ok');
+    for (const m of ['  - wip: R1\n', '  - lane: R1\n']) {
+      const lane = T('T1', true, 'src/a/') + T('T2', false, 'src/rare/x.ts', m) + T('T9', false, 'src/rare/x.ts', r9);
+      expect(sched(makeFlow(lane), 'intake', 'T9')).toContain('INTAKE-STATE T9 ok');
+    }
+    const waiting = T('T1', false, 'src/a/') + `- [ ] T9 x\n  - Blocked by: T1\n  - Touches: src/z.ts\n  - inserted: 2026-10-01\n`;
+    expect(j(waiting).intake).toEqual([]);
+    expect(j(T('T1', true, 'src/a/') + T('T9', false, 'src/z.ts', '  - inserted: 2026-10-01\n  - `立票理由：例外（隐私：泄露邮箱）`\n')).intake).toEqual([]);
+  });
+
+  it('立票守卫：`## 汇聚文件` 登记的文件不产生并进候选', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'docs/ledger.md')
+      + T('T9', false, 'docs/ledger.md', '  - inserted: 2026-10-01\n  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n');
+    expect(sched(makeFlow(t), 'intake', 'T9')).toContain('没点名候选 T2');
+    expect(sched(makeFlow(t + '\n## 汇聚文件\n- docs/ledger.md\n'), 'intake', 'T9')).toContain('INTAKE-STATE T9 ok');
+  });
+
+  it('`Touches` 变体行写了路径 → 任何未开工票都不算够格（不限插票）；纯备注变体不拦', () => {
+    const t = T('T1', true, 'src/a/') + T('T2', false, 'src/b.ts', '  - Touches 追加：src/c.ts\n');
+    const out = sched(makeFlow(t), 'intake', 'T2');
+    expect(out).toContain('INTAKE-STATE T2 blocked');
+    expect(out).toContain('读不到的 `Touches` 变体行');
+    expect(out).not.toContain('先看能否并进');
+    const note = T('T1', true, 'src/a/') + T('T2', false, 'src/b.ts', '  - Touches 说明：（新，或按落点回报）\n');
+    expect(sched(makeFlow(note), 'intake', 'T2')).toContain('INTAKE-STATE T2 ok');
   });
 
   it('ticket：原样打印票块（票行 + 缩进子项），到下一张票或顶格条目为止', () => {

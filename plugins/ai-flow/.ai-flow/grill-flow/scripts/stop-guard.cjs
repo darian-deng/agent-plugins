@@ -77,6 +77,8 @@ const eligible = sched.eligible || [];
 const idleTrees = (sched.idle || []).filter((t) => openTrees.includes(t));
 const activeTrees = openTrees.filter((t) => !idleTrees.includes(t));
 const frozen = sched.frozen || [];
+// 立票守卫没过的插票（缺 `立票理由：`）：不算够格，但补理由 / 并票是主 session 现在就能做的活，不是停点。
+const intake = sched.intake || [];
 const freezeDesc = (sched.freeze || []).filter((f) => f.count > 0).map((f) => `${f.id} 冻 ${f.count} 张，解冻: ${f.lift || '未写'}`).join('；');
 const wrappingUp = facts.wrap_up_pct !== null && facts.wrap_up_pct !== undefined;
 const holdPath = facts.hold_path || join(flowDir, 'state', 'hold');
@@ -182,6 +184,7 @@ const factBits = [
 if (!wrappingUp) {
   factBits.push(`够格未开 ${eligible.length}` + (eligible.length ? `（${eligible.join(' ')}）` : '') + `；未勾 ${sched.open}/${sched.total}`);
   if (frozen.length) factBits.push(`冻结面冻住 ${frozen.length}（${freezeDesc}）`);
+  if (intake.length) factBits.push(`立票守卫挡住 ${intake.length}（${intake.join(' ')}）`);
 }
 if (facts.bash_in_flight) {
   const names = (facts.bash_tasks || []).slice(0, 3).join('；');
@@ -191,6 +194,9 @@ lines.push(`${LABEL} 回合结束时的机械事实（引擎数的，不是开�
 
 if (sched.open === 0) {
   lines.push(`全部票已勾。stage-3 的完成动作是用 Write 向 \`${signalPath}\` 写 \`done\`——现在就写，不要等开发者。`);
+} else if (activeTrees.length === 0 && eligible.length === 0 && intake.length > 0) {
+  lines.push(`够格 0 里有 ${intake.length} 张是被立票守卫挡住的（${intake.join(' ')}；原因逐张见 \`schedule.cjs missed\`：缺 \`立票理由：\`，或有读不到的 \`Touches\` 变体行——后者把文件并进 \`Touches:\` 行即可）。缺理由的逐张走 \`mid-flight-ticket.md\`「立票前四查」：`
+    + `跑 \`schedule.cjs missed\` 看每张的并进候选 → 能并就并进目标票（\`📥\` + AC）并删掉这张，本票收回 / 本票等在飞票合入后续派也删掉这张，四查都不中才补 \`- 立票理由：四查未中（①… ②… ③… ④…）\`。`);
 } else if (activeTrees.length === 0 && eligible.length === 0 && frozen.length > 0) {
   lines.push(`够格 0 是因为冻结面（${freezeDesc}）。这是**等门期**，不是停点——按 \`freeze.md\` 的等门期工单做：`
     + `细化下一切片的粗票（补机器判据与 Touches）/ 为冻结票预落 AC 与 Touches 收窄 / 跑欠的收口测试 / 收口 candidates.md。`
@@ -203,6 +209,7 @@ if (sched.open === 0) {
   lines.push(`没有任何东西会在将来把你叫醒。二选一，都在**本回合**做完：`);
   const todo = [];
   if (activeTrees.length) todo.push(`开着的树（${activeTrees.join(' ')}）→ 看票面已到哪段：无 impl:done → 派实施；有 impl:done 无 qc:done → 派质量链；有 qc:done → 注释清理 / close / 记账`);
+  if (intake.length) todo.push(`立票守卫挡住的插票（${intake.join(' ')}）→ 走四查：并进候选票 / 本票收回 / 等在飞票后续派，或补 \`立票理由：\``);
   if (eligible.length) todo.push(`够格票（${eligible.join(' ')}）→ 先落 \`batch:\` + \`with:\` 再开树、派实施（stage-3 第 2–3 步；并发上限见提示词）`);
   lines.push(`① **推进**：${todo.join('；')}。⛔ 写「下一轮我…」「我的下一步是…」然后停，不是推进——就是这类收尾触发了本条。`);
   lines.push(`② **确实在等开发者的人手动作**（安全红线拍板 / L1–L2 确认 / 他明确叫停；⛔ 真机验证不算——打 \`rm:pending\` 留 stage-4）→ 用 Write 写 \`${holdPath}\`，`

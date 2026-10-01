@@ -532,6 +532,25 @@ if (cmd === 'open') {
   if (baseRef && !gitQuiet(['rev-parse', '--verify', '--quiet', baseRef + '^{commit}']).ok) {
     die(`--base 给的 ${baseRef} 不是一个有效 commit。`);
   }
+  // 立票守卫（references/mid-flight-ticket.md「立票前四查」）：执行期插票缺 `立票理由：` 就不开树。
+  // 放在 `git worktree add` 之前：拒开时磁盘与分支都还没动，照提示补完票面重跑即可。
+  // 判据归 `schedule.cjs intake` 所有（⛔ 不在这里写第二份解析器，理由同下面 `rm` 那段）；
+  // 工具坏了（子进程失败 / 没有 INTAKE-STATE 行）fail-open 打一行，规则被违反（blocked）fail-closed。
+  if (/^T\d+$/.test(ticket)) {
+    let iOut = null, iWhy = null;
+    try {
+      iOut = execFileSync(process.execPath, [join(__dirname, 'schedule.cjs'), '--flow-dir', flowDir, 'intake', ticket, '--flow-id', flowId],
+        { cwd: repoRoot, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    } catch (e) { iWhy = String((e && (e.stderr || e.message)) || e).trim().split('\n')[0]; }
+    const iv = iOut ? ((/^INTAKE-STATE\s+\S+\s+(\S+)/m.exec(iOut) || [])[1] || null) : null;
+    if (iv === 'blocked') {
+      die(`${ticket} 没过立票守卫，拒绝开树（磁盘与分支都没动）：\n    `
+        + iOut.split('\n').filter((l) => l && !l.startsWith('INTAKE-STATE')).join('\n    ')
+        + (/读不到的 `Touches` 变体行/.test(iOut) ? '' : `\n    能并就并进目标票（\`📥\` + 一条 AC）并删掉 ${ticket}；本票收回 / 本票等在飞票合入后续派 ⇒ 删掉 ${ticket}；四查都不中就补一行 \`- 立票理由：四查未中（①… ②… ③… ④…）\` 后重跑。`));
+    }
+    if (iv === 'flowmismatch') say(`⚠️  ${ticket} 不属于当前活跃 flow，立票守卫判不了，本次照常开树。`);
+    if (iv === null) say(`⚠️  立票守卫没能跑起来，本次照常开树：${iWhy || '`schedule.cjs intake` 的输出里没有 INTAKE-STATE 行'}`);
+  }
   const add = gitQuiet(['worktree', 'add', wtPath, '-b', branch, ...(baseRef ? [baseRef] : [])]);
   if (!add.ok) die('git worktree add 失败:\n' + add.out);
   registerWorktree(wtPath, branch);

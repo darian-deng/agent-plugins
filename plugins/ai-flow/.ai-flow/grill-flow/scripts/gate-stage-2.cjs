@@ -281,6 +281,17 @@ for (let k = 0; k < idxs.length; k++) {
 
   // 同样要求缩进 + **非空值**：`Touches:` 后面空着能过存在性检查，而 stage-3 的 ⑥ 要求
   // 有值（`Touches:\s*(.+)$`），拿不到就静默跳过该票——门看着在把关、实际是空操作。
+  // `Touches 追加：` / `Touches：`（全角冒号）这类变体：下面那条和 schedule.cjs 都不认，里面的文件静默不进写集。
+  // 正则与 schedule.cjs 的 TOUCHES_VARIANT / TOUCHES_PATHISH 同口径。
+  // 只拦写了路径的（含 `/` 或扩展名）：`Touches 说明：（按落点回报）` 这类纯备注放过。
+  // 只查未勾票：已勾的写集已经被 stage-3 断言⑥ 按实际改动核过，回头逼人改已关的票没有收益。
+  const variant = /^\s*[-*]\s*\[ \]/.test(lines[start]) ? block.split('\n').filter((l) => /^\s+[-*]?\s*`?Touches(?!:)[^:：\n]{0,20}[:：]/.test(l) && /[:：].*(\/|\.[a-z]{1,5}\b)/.test(l)) : [];
+  if (variant.length) {
+    err(self + ' 有调度器读不到的 "Touches" 变体行: ' + variant.map((l) => l.trim()).join(' ｜ ')
+      + '\n    怎么改：把这些文件并进同一票那一行 `Touches:`（半角冒号、紧跟 Touches），删掉变体行。'
+      + '只认 `Touches:`——变体行里的文件不参与并行准入的相交计算。');
+    process.exit(FAIL);
+  }
   const mt = /^\s+[-*]?\s*Touches:\s*(\S[^\n]*)$/m.exec(block);
   if (!mt) {
     err('ticket 缺可解析的 "Touches" 声明（要写成该 ticket 行的**缩进**子项、且必须有值）: ' + head

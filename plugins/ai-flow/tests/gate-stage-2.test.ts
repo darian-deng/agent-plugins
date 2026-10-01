@@ -65,6 +65,18 @@ describe('grill-flow gate-stage-2.cjs — 依赖图与写集声明', () => {
     expect(r.stderr).toContain('Touches');
   });
 
+  it('`Touches 追加：` / 全角冒号这类变体行写了路径 → 拦下；纯备注变体放过', () => {
+    // 变体行里的文件 schedule.cjs 读不到，并行准入按缺了它们的写集算。
+    for (const v of ['  Touches 追加：src/c.ts\n', '  Touches： src/c/\n']) {
+      const r = runGate(makeRepo('- [ ] T1 first\n  Blocked by: none\n  Touches: src/a.ts\n' + v));
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('变体行');
+    }
+    expect(runGate(makeRepo('- [ ] T1 first\n  Blocked by: none\n  Touches: src/a.ts\n  Touches 说明：按落点回报\n')).code).toBe(0);
+    // 已勾的票不追溯：它的写集已经在 stage-3 按实际改动核过。
+    expect(runGate(makeRepo('- [x] T1 first\n  Blocked by: none\n  Touches: src/a.ts\n  Touches 追加：src/c.ts\n')).code).toBe(0);
+  });
+
   it('缺 Blocked by → 拦下', () => {
     const flowDir = makeRepo('- [ ] T1 first\n  Touches: src/a.ts\n');
     const r = runGate(flowDir);
