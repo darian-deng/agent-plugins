@@ -439,16 +439,23 @@ function overlap(a0, b0) {
 // 必须带一行 `- 立票理由：四查未中（①… ②… ③… ④…）` 或 `- 立票理由：例外（隐私 | 数据安全 | 安全红线：…）`，
 // 缺了就和冻结面一样**不算够格**——`missed` 不列它、`worktree.cjs open` 拒开它。
 // 只管「未勾 ∧ 未开工」：开工 = 票面已有 `impl:` / `qc:` / `qc-metrics:` / `cm:` 记账（`batch:` / `with:` 不算，
-// 见解析处），开工后理由已经无从补救，拦它只会让收尾卡住。启用前就在台账里的旧插票用
-// `intake-guard-since: T<n>`（tickets.md 任一行，建议写在 `## 冻结面` 段首）豁免：票号 < n 的不查。
-// 没写这一行 = 全部未开工插票都查。
+// 见解析处），开工后理由已经无从补救，拦它只会让收尾卡住。
+// `intake-guard-since: T<n>`（tickets.md 任一行，第一次插票时写上，见 mid-flight-ticket.md「插完立刻回写」）：
+// 票号 ≥ n 的未开工票**不论有没有 `inserted:`** 一律查（实测一条 flow 里约三成执行期插票漏写 `inserted:`，
+// 按标记判就整个绕过守卫），票号 < n 的不查。没写这一行时不知道 stage-2 切到第几号，只能退回按 `inserted:` 判。
 // ⛔ 判据只查**形状**（四个圈号都在 / 例外写明三类之一），不判理由真假——真假由周期收敛复核，
 // 而候选提示（下面 intakeHints）把「该看哪几张」摆到写理由的人眼前，不靠他自己想起来。
 // 「三查未中」照收：早期文本只有 ①②③、叫「三查」，票面已经这样写的不必为改一个字重写；但圈号必须四个。
+const INTAKE_SINCE_LINE = /^(?:<!--\s*|[-*]\s+)?`?intake-guard-since:\s*`?T(\d+)/;
 const INTAKE_SINCE = (() => {
-  for (const l of lines) { const m = /intake-guard-since:\s*`?T(\d+)/.exec(l); if (m) return Number(m[1]); }
+  // 只认顶格的那一行（可包在 `<!-- -->` 里、可写成列表项）：它现在会**打开**对 stage-2 票的检查，
+  // 票面叙述 / 交接段里顺嘴提到的 `intake-guard-since: T3` 若也算，T3 起的普通票全会被拦。
+  for (const l of lines) { const m = INTAKE_SINCE_LINE.exec(l); if (m) return Number(m[1]); }
   return null;
 })();
+// 「执行期插票」的口径（取票优先级、`(插)` 标注、守卫共用）：带 `inserted:`，或票号 ≥ 下界（漏写标记也算）。
+// 取并集而不是按下界替换：下界之前带标记的旧插票照样优先取，只是守卫豁免它们（下面 intakeBlocked）。
+const isInserted = (t) => tk.get(t).inserted || (INTAKE_SINCE !== null && Number(t.slice(1)) >= INTAKE_SINCE);
 const REASON_OK = /^(?:[三四]查未中[^①]*①\s*[^\s②]+.*②\s*[^\s③]+.*③\s*[^\s④]+.*④\s*[^\s)）]+.*|例外[（(](?:隐私|数据安全|安全红线)[：:].+[)）])$/;
 const REASON_SHAPE = '要么「四查未中（①… ②… ③… ④…）」四个圈号各跟一句为什么不中，要么「例外（隐私 | 数据安全 | 安全红线：…）」';
 function intakeBlocked(t, live) {
@@ -456,7 +463,7 @@ function intakeBlocked(t, live) {
   if (r.done || r.opened) return null;
   // 不限插票、不吃 intake-guard-since 豁免：写集读不全对哪张未开工的票都是并行安全问题。
   if (r.badTouches.length) return BAD_TOUCHES + '（' + r.badTouches.join(' ｜ ') + '）——把这些文件并进那一行 `Touches:`（半角冒号）、删掉变体行';
-  if (!r.inserted) return null;
+  if (!isInserted(t)) return null;
   if (INTAKE_SINCE !== null && Number(t.slice(1)) < INTAKE_SINCE) return null;
   if (r.reason === null) return '缺 `立票理由：`';
   if (!REASON_OK.test(r.reason)) return '`立票理由：` 形状不对（' + REASON_SHAPE + '）';
@@ -558,7 +565,7 @@ function priorityOrder(included) {
   const down = downstreamOf(included);
   const idx = new Map(order.map((t, i) => [t, i]));
   const ranked = order.filter((t) => included.has(t)).sort((x, y) =>
-    (Number(tk.get(y).inserted) - Number(tk.get(x).inserted))
+    (Number(isInserted(y)) - Number(isInserted(x)))
     || (down.get(y) - down.get(x))
     || (idx.get(x) - idx.get(y)));
   return { ranked, down };
@@ -932,7 +939,7 @@ if (SUB === 'missed') {
       const h = why.startsWith(BAD_TOUCHES) ? null : intakeHints(t, live);
       say(`   ${t}：${why}` + (h === null ? '' : h.length ? `\n      先看能否并进：${h.map((x) => x.s).join('；')}` : `\n      ${NO_HINT}`));
     }
-    say('   并进 ⇒ 在目标票加 `📥` + 一条 AC、删掉这张；本票收回 / 本票等在飞票合入后续派 ⇒ 删掉这张；四查都不中 ⇒ 这张票加一行 `- 立票理由：四查未中（①… ②… ③… ④…）`，四个圈号逐条写为什么不中、上面列出的候选逐张点名。启用本守卫之前就已立好的旧插票 ⇒ tickets.md 加一行 `intake-guard-since: T<下一个新票号>` 豁免。');
+    say('   并进 ⇒ 在目标票加 `📥` + 一条 AC、删掉这张；本票收回 / 本票等在飞票合入后续派 ⇒ 删掉这张；四查都不中 ⇒ 这张票加一行 `- 立票理由：四查未中（①… ②… ③… ④…）`，四个圈号逐条写为什么不中、上面列出的候选逐张点名。' + (INTAKE_SINCE === null ? '启用本守卫之前就已立好的旧插票 ⇒ tickets.md 顶格加一行 `intake-guard-since: T<n>` 豁免票号 < n 的（见 mid-flight-ticket.md「插完立刻回写」）。' : '⛔ 别为了放行去调大 `intake-guard-since`：那等于把这些票的四查整个跳过。'));
   }
   if (ignored.length > 0) say(`⚠  已忽略非票号参数：${ignored.join(' ')}（missed 后面只认 T<n> 形态的票号）`);
   if (unknown.length > 0) {
@@ -957,7 +964,7 @@ if (SUB === 'missed') {
     say(`✅ 无遗漏：在飞 ${liveDesc}，tickets.md 里没有别的票此刻够格同批开（${CRIT}）。`);
   } else {
     say(`📋 在飞 ${liveDesc}，另有 ${eligible.length} 张票此刻同样够格同批开（${CRIT}）：`);
-    say('   ' + eligible.map((t) => `${t}${tk.get(t).inserted ? '(插)' : ''}(↓${down.get(t)})`).join(' '));
+    say('   ' + eligible.map((t) => `${t}${isInserted(t) ? '(插)' : ''}(↓${down.get(t)})`).join(' '));
     say('   ↑ 已按取票顺序排好：带 `inserted:` 的执行期插票在前 → 下游依赖链长（↓，后面还串着几张）降序 → 文件顺序。');
     say('     名额不够时**从左往右取**，⛔ 别按文件顺序或凭感觉挑。');
     // ⛔ 措辞必须是**有条件**的。`open` 每开一棵树都会跑这段，而一批要逐条 open：开第 1 棵

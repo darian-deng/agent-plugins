@@ -1174,6 +1174,22 @@ describe('grill-flow schedule.cjs rm / missed --json 与 stop-guard.cjs', () => 
     expect(j(T('T1', true, 'src/a/') + T('T9', false, 'src/z.ts', '  - inserted: 2026-10-01\n  - `立票理由：例外（隐私：泄露邮箱）`\n')).intake).toEqual([]);
   });
 
+  it('立票守卫：写了 intake-guard-since 就按票号认插票，漏写 inserted: 也照查', () => {
+    const j = (t: string) => JSON.parse(sched(makeFlow(t), 'missed', '--json').trim().split('\n').pop()!);
+    const t = T('T1', true, 'src/a/') + T('T8', false, 'src/b.ts') + T('T9', false, 'src/c.ts');
+    // 没有这一行：不知道 stage-2 切到几号，只按 inserted: 认，两张都不查。
+    expect(j(t).intake).toEqual([]);
+    // since T9：T9 没写 inserted: 也被查；T8 在下界之下不查。
+    expect(j('intake-guard-since: T9\n' + t).intake).toEqual(['T9']);
+    expect(j('intake-guard-since: T9\n' + t).eligible).toContain('T8');
+    // 下界之前带 inserted: 的旧插票：守卫豁免，但取票照样优先。
+    const old = T('T1', true, 'src/a/') + T('T8', false, 'src/b.ts', '  - inserted: 2026-09-01\n') + T('T9', false, 'src/c.ts', '  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n');
+    expect(sched(makeFlow('intake-guard-since: T9\n' + old), 'missed')).toContain('T8(插)');
+    // 票面叙述 / HTML 注释外的缩进行里提到它不算；注释里顶格的照认（现有台账就这么写）。
+    expect(j(t + '  - 备注：intake-guard-since: T8 的含义见文档\n').intake).toEqual([]);
+    expect(j('<!-- intake-guard-since: T9 -->（说明）\n' + t).intake).toEqual(['T9']);
+  });
+
   it('立票守卫：`## 汇聚文件` 登记的文件不产生并进候选', () => {
     const t = T('T1', true, 'src/a/') + T('T2', false, 'docs/ledger.md')
       + T('T9', false, 'docs/ledger.md', '  - inserted: 2026-10-01\n  - 立票理由：四查未中（①无 ②无 ③无 ④无）\n');

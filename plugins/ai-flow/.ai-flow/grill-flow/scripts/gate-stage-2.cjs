@@ -200,6 +200,8 @@ const known = new Set(nums);
     try { statSync(join(projectRoot, first)); base = projectRoot; } catch { /* 首段不在锚点下 */ }
     try { return statSync(join(base, rel)).isDirectory(); } catch { return false; }
   };
+  // 与 schedule.cjs 的 INTAKE_SINCE_LINE 同口径（只认顶格那一行）。
+  const SINCE = (() => { for (const l of lines) { const m = /^(?:<!--\s*|[-*]\s+)?`?intake-guard-since:\s*`?T(\d+)/.exec(l); if (m) return Number(m[1]); } return null; })();
   const hits = [];
   for (let k = 0; k < idxs.length; k++) {
     const start = idxs[k];
@@ -210,7 +212,8 @@ const known = new Set(nums);
       if (/^#{1,6}\s/.test(lines[i])) break;
       if (/^\s+\S/.test(lines[i])) sub.push(lines[i]);
     }
-    if (!sub.some((l) => /^\s+[-*]?\s*inserted:/.test(l))) continue;
+    // 插票口径同 schedule.cjs isInserted：带 `inserted:`，或票号 ≥ 顶格的 `intake-guard-since: T<n>`。
+    if (!sub.some((l) => /^\s+[-*]?\s*inserted:/.test(l)) && !(SINCE !== null && Number((/T(\d+)/.exec(lines[start]) || [])[1]) >= SINCE)) continue;
     const tl = sub.map((l) => /^\s+[-*]?\s*Touches:\s*(\S[^\n]*)$/.exec(l)).find(Boolean);
     if (!tl) continue;
     const wide = tl[1].trim().split(/[,，\s]+/).filter((x) => {
