@@ -8,6 +8,22 @@
 - 不得以「顺手」「完整」「流程需要」为理由自行触发 git commit / git push
 - 测试通过 ≠ 可以提交，提交时机由开发者决定
 
+### push 报 403 `Permission denied to dariandeng`
+
+开发者的机器登录了两个 GitHub 账号：`dariandeng`（`gh` 当前生效）和 `darian-deng`（本仓库属主）。`git push` 走 `osxkeychain` 里的 `dariandeng` 凭据，所以被拒。这不是 non-fast-forward，rebase 解决不了。
+
+得到开发者明确要求 push 后，用 `darian-deng` 的 token 临时推，不要改全局登录状态、不要改 remote、不要把 token 打出来：
+
+```bash
+git pull --rebase origin main
+git -c credential.helper= \
+    -c 'credential.helper=!f() { echo username=darian-deng; echo "password=$(gh auth token --user darian-deng)"; }; f' \
+    push origin main
+```
+
+- 先 `pull --rebase`：CI 会在每次 push 后追加 `build(ai-flow): compile dist/ [auto]` 提交。
+- 本地 pre-push 钩子会跑全量测试，耗时约半分钟，属正常。
+
 ## 思维纪律
 
 **不要自信，要正确。暴露权衡，不要假装确定。**
