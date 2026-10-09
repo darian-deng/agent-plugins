@@ -16,7 +16,7 @@
 ## 生成方式
 
 两步，职责分离：
-1. **配图**：dispatch 一个 sonnet 子代理，手写 mermaid（`.mmd`）→ `mmdc` 渲染 SVG 写盘（见下「配图」）。`diagram/` 已有 SVG 则复用、不重画（/clear 重入安全）。
+1. **配图**：dispatch 一个 haiku 子代理（`model: "haiku"`，试点），手写 mermaid（`.mmd`）→ `mmdc` 渲染 SVG 写盘（见下「配图」）。派发报模型不可用就改 `model: "sonnet"` 重派。`diagram/` 已有 SVG 则复用、不重画（/clear 重入安全）。
 2. **组装**：主 session 读 spec.md + 本契约，**增量组装**自包含单文件 HTML，把 SVG 内联进图位。
 
 ## 文档结构（按此顺序）
@@ -54,7 +54,7 @@
 
 ## 配图（mermaid + mmdc，图优先）
 
-一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ `mmdc` 渲染 SVG 写盘。子代理只产 SVG，不组装 HTML，不再 spawn 下级子代理。
+一个 **haiku 子代理**（试点）手写 mermaid（`.mmd`）→ `mmdc` 渲染 SVG 写盘。子代理只产 SVG，不组装 HTML，不再 spawn 下级子代理。
 
 - **图优先（有预算）**：优先现状落位图 + 1–2 张核心数据流/时序图；其余仅当纯文字讲不清才追加，同信息不重复画。
 - **怎么画**：读真实 spec.md，手写 mermaid（`flowchart`/`sequenceDiagram`/`stateDiagram-v2` 按图义选）。⚠️ **下面命令里的主题文件路径由主 session 在派发 prompt 里给成绝对路径**——配图子代理没有 stage 提示词，`{{flow_def}}` 到它手上不会展开，照字面跑会读不到配置、非零退出，再被误判进「语法错」分支。⚠️ **那个绝对路径要从注入 context 顶部 `[ai-flow:paths]` 的 `flow_def:` 行现取,不要从上文里抄**——它带插件版本号,插件一升级就变,跨升级恢复的 session 上文里那个已经失效。**主题与布局走现成配置文件，不用 `-t` 内置主题**（`-t neutral` 出的是默认灰盒 + 曲线走线；配置文件给的是白底墨边 + 正交直角走线，同内容实测紧凑约一半）：

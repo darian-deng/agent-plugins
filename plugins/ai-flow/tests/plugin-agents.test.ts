@@ -9,7 +9,7 @@ const AGENTS_DIR = join(__dirname, '..', 'agents');
 /**
  * 插件代理只指定模型家族：版本交给宿主的别名解析，effort 交给开发者的全局配置。
  * 定义文件头里写了 `effort:` 就会覆盖开发者的配置（实测：定义不写时子代理与主 session 同档）。
- * grill-qc 还要在正文里把模型原样交给 `qc-metrics`，那一处与文件头靠手工同步。
+ * grill-qc 回报给 `qc-metrics` 的 `model=` 取系统提示里的实际模型名，不与文件头绑定。
  */
 
 function parse(file: string): { front: Record<string, string>; body: string } {
@@ -60,8 +60,9 @@ describe('插件代理定义', () => {
     });
   }
 
-  it('grill-qc 正文交给 qc-metrics 的 model= 与文件头一致', () => {
-    const { front, body } = parse('grill-qc.md');
-    expect(body).toContain(`model=${front['model']}`);
+  it('grill-qc 回报的 model= 取系统提示里的实际模型名，不写死家族别名', () => {
+    const { body } = parse('grill-qc.md');
+    expect(body).toContain('照抄你系统提示里给的实际模型名');
+    expect(body).not.toMatch(/model=(?:claude-)?(?:opus|sonnet|haiku)\b/);
   });
 });

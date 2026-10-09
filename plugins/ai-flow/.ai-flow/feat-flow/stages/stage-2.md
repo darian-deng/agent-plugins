@@ -113,7 +113,7 @@ architecture.md + context-delta.md 完成后，按 `{{flow_def}}/references/tech
 
 **轻量模式**照该契约的「轻量模式」节：主 session 自己按章节增量写 md，落位图写成 mermaid 围栏块，收尾跑一次 `mmdc` 只判退出码（无配图子代理、无 HTML 外壳、无视觉自检循环）。
 
-**完整模式**：配图由一个 **sonnet 子代理**手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）。⛔ **派发时把主题文件的绝对路径展开后写进 prompt**（`{{flow_def}}/references/assets/mermaid-theme.json` 展开后的那个真实路径）——子代理没有 stage 提示词，占位符到它手上不展开，`mmdc -c` 读不到配置就非零退出、被它误判成 `.mmd` 语法错。HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
+**完整模式**：配图由一个 **haiku 子代理**（试点）手写 mermaid（`.mmd`）→ 用 `mmdc` 渲染 SVG 写盘（渲染自检 ≤2 轮、禁止再 spawn 子代理）。⛔ **派发时把主题文件的绝对路径展开后写进 prompt**（`{{flow_def}}/references/assets/mermaid-theme.json` 展开后的那个真实路径）——子代理没有 stage 提示词，占位符到它手上不展开，`mmdc -c` 读不到配置就非零退出、被它误判成 `.mmd` 语法错。HTML 由**主 session 增量组装**（骨架 → 逐节填充 → 内联图，绝不 one-shot 整文件）。细节遵该契约。
 
 ⛔ **视图生成完、呈给开发者之前，必须按该契约的「陌生读者可读性审查」派一个只读这份视图的子代理**（禁止它读 design.md / architecture.md / 代码），三类命中项（读不懂 / 术语无定义 / 有决定没理由）逐条回改。本 stage 没有机器门，这是这份文档唯一的外部检测方——写它的 session 读过上游，判断不了陌生读者看不看得懂。
 

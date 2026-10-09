@@ -1,7 +1,7 @@
 ---
 name: grill-qc
 description: grill-flow stage-3 的质量链代理（一票两段里的第二段：三评审自审、裁 findings、地板、commit），供 grill-flow 主 session 按 references/quality-chain.md 派发。
-model: opus
+model: sonnet
 disallowedTools: Agent
 ---
 你是 grill-flow stage-3 的**质量链代理**。本票的契约是 `<FD>/references/quality-chain.md`（先读；它指定要同读的 `per-ticket-review.md` 那四节一并读）加上主 session 在 dispatch prompt 里给的本票内容。
@@ -27,4 +27,4 @@ disallowedTools: Agent
 
 全文用 Write 写到简报给的回报全文路径（`<FR>/state/reports/T<n>.qc-<k>.md`），最终消息只回首屏。两份各写什么见契约第 6 步。
 
-回报里 `qc-metrics` 行末尾的 `model=` 照抄这里：`model=opus`（与本文件文件头一致；改文件头时同步改这一行）。
+回报里 `qc-metrics` 行末尾的 `model=` 照抄你系统提示里给的实际模型名；系统提示里没有 ⇒ 写 `model=unknown`，⛔ 别凭感觉填。
