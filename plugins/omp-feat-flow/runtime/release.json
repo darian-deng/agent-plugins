@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "buildId": "5ff6f2bac4726080a8d3ef225a137f1a9faaf2f34695402a5b1156f6e68cd906",
+  "bundleBytes": 248531,
+  "bundleSha256": "80a625ffc496eb3e4f733b13987ee33eb90df3318c7ac30da63c565101467eff",
+  "tools": {
+    "esbuild": "0.25.12",
+    "bun": "1.4.4",
+    "sdk": "19.0.0"
+  },
+  "capabilities": [
+    "commands",
+    "tool-call-admission",
+    "request-outbox",
+    "workspace",
+    "sync",
+    "delivery"
+  ]
+}

@@ -1,0 +1,82 @@
+name: Check omp-feat-flow
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/omp-feat-flow/**'
+      - '.github/workflows/check-omp-feat-flow.yml'
+  push:
+    branches: [main, staging]
+    paths:
+      - 'plugins/omp-feat-flow/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: plugins/omp-feat-flow/package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install
+        run: npm ci
+        working-directory: plugins/omp-feat-flow
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: plugins/omp-feat-flow
+
+      - name: Local cases
+        run: npm test
+        working-directory: plugins/omp-feat-flow
+
+      # The committed artifact must be exactly what this source produces; CI never commits it.
+      - name: Rebuild into a temporary tree
+        run: bun scripts/build.ts
+        working-directory: plugins/omp-feat-flow
+        env:
+          OMP_FEAT_FLOW_OUTDIR: ${{ runner.temp }}/release
+
+      - name: Compare fingerprint, bytes and version
+        working-directory: plugins/omp-feat-flow
+        run: |
+          node - <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const committed = JSON.parse(readFileSync("runtime/release.json", "utf8"));
+          const rebuilt = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/release/release.json`, "utf8"));
+          const committedBytes = readFileSync("runtime/index.mjs");
+          const rebuiltBytes = readFileSync(`${process.env.RUNNER_TEMP}/release/index.mjs`);
+          const same = committed.buildId === rebuilt.buildId
+            && committed.bundleSha256 === rebuilt.bundleSha256
+            && committed.version === rebuilt.version
+            && committedBytes.equals(rebuiltBytes);
+          if (!same) {
+            console.error("Committed release does not match this source.", { committed: committed.buildId, rebuilt: rebuilt.buildId });
+            process.exit(1);
+          }
+          console.log("Release matches source:", committed.buildId);
+          NODE
+
+      - name: Catalog entry matches package version
+        run: |
+          node - <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const pkg = JSON.parse(readFileSync("plugins/omp-feat-flow/package.json", "utf8"));
+          const catalog = JSON.parse(readFileSync(".omp-plugin/marketplace.json", "utf8"));
+          const entry = catalog.plugins?.find((plugin) => plugin.name === "omp-feat-flow");
+          if (!entry) throw new Error("omp-feat-flow is missing from .omp-plugin/marketplace.json");
+          if (entry.version !== pkg.version) throw new Error(`catalog ${entry.version} != package ${pkg.version}`);
+          console.log("Catalog version", entry.version);
+          NODE

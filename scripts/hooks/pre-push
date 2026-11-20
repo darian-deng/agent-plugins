@@ -25,3 +25,13 @@ if echo "$CHANGED" | grep -q "^$AIFLOW_DIR/"; then
   npm test
   echo "[pre-push] all tests passed ✓"
 fi
+
+FEATFLOW_DIR="plugins/omp-feat-flow"
+
+if echo "$CHANGED" | grep -q "^$FEATFLOW_DIR/"; then
+  echo "[pre-push] omp-feat-flow changes detected — running typecheck and local cases..."
+  cd "$REPO_ROOT/$FEATFLOW_DIR"
+  npm run typecheck
+  npm test
+  echo "[pre-push] omp-feat-flow checks passed ✓"
+fi

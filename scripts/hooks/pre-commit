@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pre-commit: typecheck ai-flow (fast, catches TS errors before they land)
+# Pre-commit: typecheck ai-flow and omp-feat-flow (fast, catches TS errors before they land)
 set -e
 
 AIFLOW_DIR="plugins/ai-flow"
@@ -10,4 +10,28 @@ if git diff --cached --name-only | grep -q "^$AIFLOW_DIR/"; then
   cd "$REPO_ROOT/$AIFLOW_DIR"
   npm run typecheck
   echo "[pre-commit] typecheck passed ✓"
+fi
+
+FEATFLOW_DIR="plugins/omp-feat-flow"
+
+if git diff --cached --name-only | grep -q "^$FEATFLOW_DIR/"; then
+  echo "[pre-commit] omp-feat-flow changes detected — running typecheck..."
+  cd "$REPO_ROOT/$FEATFLOW_DIR"
+  npm run typecheck
+  echo "[pre-commit] omp-feat-flow typecheck passed ✓"
+fi
+
+# The committed runtime must be exactly what this source produces.
+if git diff --cached --name-only | grep -q "^$FEATFLOW_DIR/"; then
+  echo "[pre-commit] verifying committed runtime matches source..."
+  cd "$REPO_ROOT/$FEATFLOW_DIR"
+  TMP_OUT=$(mktemp -d)
+  OMP_FEAT_FLOW_OUTDIR="$TMP_OUT" bun scripts/build.ts >/dev/null
+  if ! cmp -s runtime/index.mjs "$TMP_OUT/index.mjs" || [ "$(jq -r .buildId runtime/release.json)" != "$(jq -r .buildId "$TMP_OUT/release.json")" ]; then
+    echo "[pre-commit] runtime/ is stale — run: cd $FEATFLOW_DIR && npm run build:runtime" >&2
+    rm -rf "$TMP_OUT"
+    exit 1
+  fi
+  rm -rf "$TMP_OUT"
+  echo "[pre-commit] runtime matches source ✓"
 fi

@@ -20,6 +20,7 @@
 | [eslint-lsp](./plugins/eslint-lsp) | 纯 ESLint LSP server：实时推送诊断，捆绑 `@eslint/mcp` 支持 AI 主动 autofix。适合不需要 TypeScript 语言智能的场景 | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP 代理 + ESLint 诊断二合一：完整保留 go-to-def / hover / references 等 TypeScript 能力，同时实时推送 ESLint 违规。TypeScript 项目的首选 | ✅ LSP | ✅ — |
 | [ai-flow](./plugins/ai-flow) | 通用数据驱动 AI 工作流引擎：用 `config.json` 定义任意阶段流程，含人工审批门（GATE）、Script Validator、跨 session 状态持久化、hooks 机械执行保障。适合需要结构化 AI 工作流的场景 | ✅ Plugin | ❌ |
+| [omp-feat-flow](./plugins/omp-feat-flow) | oh-my-pi 需求交付流程：每条需求一个独占 run，从边界澄清、显式方案批准到单个 PR 与 Linear 交接；写入需原生确认，压缩/新进程/新会话后可恢复 | ❌ | ❌ |
 
 ### 安装（Claude Code）
 
@@ -112,6 +113,7 @@ on in their IDEs.
 | [eslint-lsp](./plugins/eslint-lsp) | Standalone ESLint LSP server: real-time push diagnostics, bundled with `@eslint/mcp` for AI-callable autofix. Use when you don't need TypeScript language intelligence | ✅ LSP + MCP | ✅ MCP |
 | [ts-eslint-lsp](./plugins/ts-eslint-lsp) | TypeScript LSP proxy + ESLint diagnostics in one server: preserves full TypeScript intelligence (go-to-def, hover, references) while simultaneously pushing ESLint violations. The standard choice for TypeScript projects | ✅ LSP | ✅ — |
 | [ai-flow](./plugins/ai-flow) | Generic data-driven AI workflow engine: define any stage pipeline via `config.json`, with human-approval gates, Script Validators, cross-session state persistence, and mechanically-enforced hooks | ✅ Plugin | ❌ |
+| [omp-feat-flow](./plugins/omp-feat-flow) | oh-my-pi requirement delivery flow: one owned run per requirement, from boundary clarification and explicit plan approval to a single PR and a Linear handoff; writes need a native confirmation and survive compaction, a fresh process or a new session | ❌ | ❌ |
 
 ### Installation (Claude Code)
 

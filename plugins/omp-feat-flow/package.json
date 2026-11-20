@@ -1,0 +1,38 @@
+{
+  "name": "omp-feat-flow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.4"
+  },
+  "scripts": {
+    "build:runtime": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests/local",
+    "test:live": "bun scripts/live.ts"
+  },
+  "omp": {
+    "version": "0.1.0",
+    "description": "Requirement delivery flow: one owned run per requirement worktree.",
+    "extensions": [
+      "runtime/index.mjs"
+    ]
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "19.0.0",
+    "@oh-my-pi/pi-utils": "19.0.0",
+    "@types/bun": "1.3.14",
+    "@types/node": "22.19.19",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3"
+  },
+  "files": [
+    "runtime/",
+    "resources/",
+    "README.md"
+  ]
+}
