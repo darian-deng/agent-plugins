@@ -1,5 +1,8 @@
 # agent-plugins — Claude Code 开发说明
 
+**本仓库是个人项目，直接在 main 分支开发。** 不需要 feature branch 工作流。
+
+
 ## Git 操作规范
 
 **未经开发者明确要求，禁止自行 commit 和 push。**
