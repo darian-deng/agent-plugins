@@ -580,8 +580,11 @@ export function createFlow(host: NativeHost): FlowController {
 					const vocabulary = await projectVocabulary(synced.worktree, synced.project?.defaults.knowledge.entryPaths);
 					const review = await runHelper(host.helperSdk(), { kind: "review", cwd: synced.worktree,
 						prompt: `Review this change against the approved scope: ${scope.scope}.\n\n`
-							+ `${vocabulary}\nChanged files:\n${diff.slice(0, 4000)}\n\nDiff:\n${patch.slice(0, 60000)}\n\n`
-							+ "Answer with exactly ACCEPT on the first line if the change matches the scope, otherwise start your reply with REJECT.",
+							+ `${vocabulary}\nThe full diff is sealed at ${patchPath}; read it with the read tool.\n`
+							+ `Changed files:\n${diff.slice(0, 4000)}\n\nHead of the diff (full version in the sealed file):\n${patch.slice(0, 60000)}\n\n`
+							+ "Structure your review under exactly two sections: ## Standards and ## Spec. "
+							+ "Standards checks the standards text above and the project's vocabulary; Spec checks the change matches the approved scope. "
+							+ "Your answer MUST contain both headings. After the two sections, answer on the first line with exactly ACCEPT if both axes pass, otherwise start with REJECT.",
 						...modelOption(host.model()), ...registryOption(host.modelRegistry()),
 						binding: { taskId: synced.runId, epoch: synced.ownerEpoch, snapshotDigest: synced.configDigest } });
 					// An exact verdict: a mixed or hedged answer is not an acceptance.

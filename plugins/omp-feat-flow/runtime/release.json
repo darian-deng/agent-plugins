@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "0.1.0",
-  "buildId": "5ff6f2bac4726080a8d3ef225a137f1a9faaf2f34695402a5b1156f6e68cd906",
-  "bundleBytes": 248531,
-  "bundleSha256": "80a625ffc496eb3e4f733b13987ee33eb90df3318c7ac30da63c565101467eff",
+  "buildId": "6d96c825149979606a512ab4eac717c72461f2510e4155bad8bfe80a5f210cf0",
+  "bundleBytes": 248884,
+  "bundleSha256": "854624d0f99caf6387d16fbd1d3714ab7d7e46054f9d96b049c63880b7838e80",
   "tools": {
     "esbuild": "0.25.12",
     "bun": "1.4.4",

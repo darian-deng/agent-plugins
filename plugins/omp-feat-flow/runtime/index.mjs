@@ -6162,13 +6162,14 @@ Cold read: ${cold.text.slice(0, 400)}`);
             prompt: `Review this change against the approved scope: ${scope.scope}.
 
 ${vocabulary}
+The full diff is sealed at ${patchPath}; read it with the read tool.
 Changed files:
 ${diff.slice(0, 4e3)}
 
-Diff:
+Head of the diff (full version in the sealed file):
 ${patch.slice(0, 6e4)}
 
-Answer with exactly ACCEPT on the first line if the change matches the scope, otherwise start your reply with REJECT.`,
+Structure your review under exactly two sections: ## Standards and ## Spec. Standards checks the standards text above and the project's vocabulary; Spec checks the change matches the approved scope. Your answer MUST contain both headings. After the two sections, answer on the first line with exactly ACCEPT if both axes pass, otherwise start with REJECT.`,
             ...modelOption(host.model()),
             ...registryOption(host.modelRegistry()),
             binding: { taskId: synced.runId, epoch: synced.ownerEpoch, snapshotDigest: synced.configDigest }
@@ -6257,7 +6258,7 @@ Answer with exactly ACCEPT on the first line if the change matches the scope, ot
         const lines2 = methods.methods.map((method) => `${method.name}: ${method.status}${method.update.permitted ? " (update permitted)" : ` (preserved: ${method.update.reason})`}`);
         const installed = await host.installedRelease();
         const unresolved = live ? live.kernel.inspect().operations.filter((operation) => operation.status === "dispatched" || operation.status === "unknown").length : 0;
-        const assessment = inspectUpdate({ loadedBuildId: "5ff6f2bac4726080a8d3ef225a137f1a9faaf2f34695402a5b1156f6e68cd906", installed, unresolvedEffects: unresolved });
+        const assessment = inspectUpdate({ loadedBuildId: "6d96c825149979606a512ab4eac717c72461f2510e4155bad8bfe80a5f210cf0", installed, unresolvedEffects: unresolved });
         const text = `${lines2.join("; ")}. Source ${methods.ref?.slice(0, 12) ?? "unknown"}; nothing was downloaded or overwritten. Build: ${assessment.relation} (${assessment.detail}).`;
         host.notify(text);
         return;
@@ -6283,7 +6284,7 @@ Answer with exactly ACCEPT on the first line if the change matches the scope, ot
           inputRevision: run.inputRevision
         });
         const installed = await host.installedRelease();
-        const build = inspectUpdate({ loadedBuildId: "5ff6f2bac4726080a8d3ef225a137f1a9faaf2f34695402a5b1156f6e68cd906", installed, unresolvedEffects: 0 });
+        const build = inspectUpdate({ loadedBuildId: "6d96c825149979606a512ab4eac717c72461f2510e4155bad8bfe80a5f210cf0", installed, unresolvedEffects: 0 });
         host.notify(`baseline ${run.currentIntegrationSha.slice(0, 12)} (start ${run.startSha.slice(0, 12)}), head ${head.slice(0, 12)}, issue ${run.issue ?? "unbound"}, proofs ${run.proofs.length}${stale.length ? ` (${stale.length} stale)` : ""}, build ${build.relation}`);
         host.notify(`next: ${run.knowledgeCandidate ? `approve the knowledge correction for ${run.knowledgeCandidate.path}` : !run.approvedScope ? "propose and approve a plan" : run.phase === "delivery" ? "finish to deliver and clean up" : "implement, then finish"}`);
       }
@@ -6372,7 +6373,7 @@ function parseJson(text, field) {
     throw new Error(`${field} must be valid JSON.`);
   }
 }
-var BUILD_ID = "5ff6f2bac4726080a8d3ef225a137f1a9faaf2f34695402a5b1156f6e68cd906";
+var BUILD_ID = "6d96c825149979606a512ab4eac717c72461f2510e4155bad8bfe80a5f210cf0";
 function usableCredential(key) {
   if (!key || key === "N/A") return false;
   return /^[A-Z][A-Z0-9_]{2,}$/.test(key) ? Boolean(process.env[key]) : true;
