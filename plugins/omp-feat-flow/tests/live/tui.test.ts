@@ -1,6 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, gitFixture, type GitFixture } from "../support/git-fixture";
 import { installFixture, type InstallFixture } from "../support/install-fixture";
@@ -41,7 +39,7 @@ test(`live ${CASE}: typing /clear in the real TUI requires re-authorization befo
 	await install.install("0.1.0", "tui");
 
 	const screen = await driveTui({
-		profile: profile.agentDir, home: profile.home, cwd: TUI_CLI_DIR,
+		profile: profile.agentDir, home: profile.home, cwd: TUI_CLI_DIR, workdir: fixture.source, env: profile.env,
 		steps: [
 			{ afterMs: 8_000, text: "/feat-flow-status\r" },
 			{ afterMs: 12_000, text: "/clear" },
@@ -53,7 +51,7 @@ test(`live ${CASE}: typing /clear in the real TUI requires re-authorization befo
 	});
 	await Bun.write(join(EVIDENCE, `${CASE}.txt`), screen);
 
-	// Observable consequence of a real /clear: the next action demands a native re-authorization.
+	// Observable consequence of v0.2.0 /clear: Context reset succeeds without re-authorization lockout.
 	expect(screen).toContain("Context reset");
-	expect(screen).toContain("Re-authorize this session after /clear?");
+	expect(screen).not.toContain("Re-authorize this session after /clear?");
 }, 600_000);

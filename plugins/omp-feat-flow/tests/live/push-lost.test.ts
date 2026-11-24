@@ -3,8 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureTools } from "../../src/binding";
-import { deliver, deliveryMarker, type DeliveryPorts } from "../../src/delivery";
+import { deliver, type DeliveryPorts } from "../../src/delivery";
 import type { Proof } from "../../src/evidence";
 import { git } from "../support/git-fixture";
 import { desktopTeamId, graphql, linearKey } from "../support/linear";
@@ -13,7 +12,6 @@ import { parseLiveArgs } from "../support/native-host";
 const CASE = "push-response-lost";
 const args = parseLiveArgs();
 const EVIDENCE = new URL(`../../../../.superpowers/sdd/2026-11-18-omp-feat-flow/live/${args.campaign}/`, import.meta.url).pathname;
-const LINEAR_TOOLS = ["mcp__linear_get_issue", "mcp__linear_update_issue"];
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -70,8 +68,7 @@ test(`live ${CASE}: a lost push receipt reconciles the exact remote head instead
 	const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 	const identity = { worktree: repo, base, head, candidateDigest: hash("c"), configDigest: hash("d"), inputRevision: 3 };
 	const proofs: Proof[] = [{ ...identity, kind: "check", name: "typecheck", detail: "exit 0" }];
-	const request = { binding: { captured: captureTools(LINEAR_TOOLS), current: [...LINEAR_TOOLS], expect: { server: "linear", tool: "get_issue" } },
-		runId: `push-${stamp}`, worktree: repo, remote: "origin", prBase: "staging", branch: "feat/push",
+	const request = { runId: `push-${stamp}`, worktree: repo, remote: "origin", prBase: "staging", branch: "feat/push",
 		head, integrationBase: base, issue: identifier, reviewState: "In Dev", title: "push tracer", proofs, current: identity };
 
 	let pushes = 0;

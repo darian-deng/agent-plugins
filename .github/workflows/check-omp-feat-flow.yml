@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'plugins/omp-feat-flow/**'
+      - '.omp-plugin/marketplace.json'
       - '.github/workflows/check-omp-feat-flow.yml'
   push:
     branches: [main, staging]
     paths:
       - 'plugins/omp-feat-flow/**'
-  workflow_dispatch:
+      - '.omp-plugin/marketplace.json'
+      - '.github/workflows/check-omp-feat-flow.yml'
 
 permissions:
   contents: read

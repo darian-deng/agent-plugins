@@ -1,30 +1,50 @@
 import { afterEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveMethods } from "../../src/methods";
+import {
+	materializeMethodPack,
+	readPackMethod,
+	verifyBundledMethods,
+} from "../../src/methods";
 
-const INSTALLED = join(homedir(), ".agents", "skills");
-const roots: string[] = [];
+const tempDirs: string[] = [];
 afterEach(async () => {
-	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+	for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-async function profile(): Promise<string> {
-	const created = await mkdtemp(join(tmpdir(), "omp-feat-profile-"));
-	roots.push(created);
-	for (const method of ["grilling", "tdd", "code-review"]) await cp(join(INSTALLED, method), join(created, method), { recursive: true });
-	return created;
-}
+test("bundled private methods verify cleanly and expose zero top-level plugin skills dir", async () => {
+	// Top-level skills/ must not exist so omp never registers duplicate /skill:<name> commands.
+	const pluginRoot = new URL("../..", import.meta.url).pathname;
+	expect(existsSync(join(pluginRoot, "skills"))).toBe(false);
 
-test("a missing core method blocks start while a locally modified one does not", async () => {
-	const root = await profile();
-	await rm(join(root, "grilling"), { recursive: true, force: true });
-	await writeFile(join(root, "tdd", "SKILL.md"), "local convention\n");
-	const resolved = await resolveMethods(["grilling", "tdd", "code-review"], root);
-	expect(resolved.blockingCore).toEqual(["grilling"]);
-	expect(resolved.modifiedCore).toEqual(["tdd"]);
-	expect(resolved.guidance).toContain("grilling is missing or incomplete");
-	expect(resolved.guidance).toContain("grilling is missing or incomplete");
+	const check = await verifyBundledMethods();
+	expect(check.valid).toBe(true);
+	expect(check.missing).toEqual([]);
+	expect(check.mismatched).toEqual([]);
+	expect(check.skills).toContain("grilling");
+	expect(check.skills).toContain("retro");
+	expect(check.skills).toContain("prototype");
+});
+
+test("materializeMethodPack snapshots content-addressed bundle and tracks user overrides cleanly", async () => {
+	const commonDir = await mkdtemp(join(tmpdir(), "omp-ff-pack-"));
+	const overrideRoot = await mkdtemp(join(tmpdir(), "omp-ff-ovr-"));
+	tempDirs.push(commonDir, overrideRoot);
+
+	const basePack = await materializeMethodPack(commonDir, { overrideDirs: [overrideRoot] });
+	expect(basePack.methodDigest).toMatch(/^[a-f0-9]{64}$/);
+	expect(basePack.overriddenMethods).toEqual([]);
+	expect(await readPackMethod(basePack.packDir, "tdd")).toContain("Test-Driven Development");
+
+	// User override creates a distinct content-addressed pack without altering the previous pack.
+	await mkdir(join(overrideRoot, "tdd"), { recursive: true });
+	await writeFile(join(overrideRoot, "tdd", "SKILL.md"), "# Custom Team TDD\n");
+	const customPack = await materializeMethodPack(commonDir, { overrideDirs: [overrideRoot] });
+	expect(customPack.methodDigest).not.toBe(basePack.methodDigest);
+	expect(customPack.overriddenMethods).toEqual(["tdd"]);
+	expect(await readPackMethod(customPack.packDir, "tdd")).toBe("# Custom Team TDD\n");
+	// Previously pinned pack remains immutable for in-flight runs.
+	expect(await readFile(join(basePack.packDir, "tdd", "SKILL.md"), "utf8")).toContain("Test-Driven Development");
 });

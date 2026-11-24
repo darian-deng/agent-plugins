@@ -1,9 +1,27 @@
-import { validateBinding, type BindingExpectation, type ToolSnapshot } from "./binding";
 import { deliveryBlockers, type Proof, type ProofCurrent } from "./evidence";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 
-export interface PullRequestHandle { number: number; url: string; headRefOid: string; body: string; base?: string; state?: string }
+export interface PullRequestHandle {
+	number: number;
+	url: string;
+	headRefOid: string;
+	body: string;
+	base?: string;
+	state?: string;
+	isCrossRepository?: boolean;
+}
+
+export type DeliveryStepStatus = "not-started" | "in-flight" | "settled";
+
+export interface DeliveryStepStates {
+	push: DeliveryStepStatus;
+	pr: DeliveryStepStatus;
+	linearState: DeliveryStepStatus;
+	linearComment: DeliveryStepStatus;
+	prNumber?: number | undefined;
+	prUrl?: string | undefined;
+}
 
 /** The only remote surfaces delivery uses; each call is an exact read or an exact write. */
 export interface DeliveryPorts {
@@ -15,13 +33,11 @@ export interface DeliveryPorts {
 	linear: {
 		/** Marker presence must be judged against this run's exact marker, never any delivery marker. */
 		getIssue(identifier: string, marker: string): Promise<{ identifier: string; state: string; hasMarker: boolean } | null>;
-		updateIssue(identifier: string, input: { state: string; marker: string }): Promise<void>;
+		updateIssue(identifier: string, input: { state: string; marker: string; prUrl?: string }): Promise<void>;
 	};
 }
 
 export interface DeliveryRequest {
-	/** The native MCP identity captured before any helper, plus the set active at delivery time. */
-	binding: { captured: ToolSnapshot; current: string[]; expect: BindingExpectation };
 	runId: string;
 	worktree: string;
 	remote: string;
@@ -29,12 +45,15 @@ export interface DeliveryRequest {
 	branch: string;
 	head: string;
 	integrationBase: string;
-	issue: string;
-	/** The team's actual review state, resolved from its metadata rather than assumed. */
+	/** Optional: null in GitHub-only / optional Linear mode when no issue is bound. */
+	issue: string | null;
+	/** Optional pinned remote tip before sync/push; prevents blindly overwriting concurrent remote commits. */
+	expectedRemoteTip?: string | null;
 	reviewState: string;
 	title: string;
 	proofs: Proof[];
 	current: ProofCurrent;
+	onStepUpdate?: (steps: DeliveryStepStates) => Promise<void> | void;
 }
 
 export interface DeliveryReceipt {
@@ -68,82 +87,163 @@ export function hasDeliveryMarker(description: string, marker: string): boolean 
 }
 
 /**
- * Does the side effect once and repairs partial success by reading the exact object back.
- * A lost response never triggers a second create: the existing PR or issue state is reconciled.
+ * Does each external effect once and repairs partial success by reading the exact object back.
+ * Supports GitHub-only mode (`issue === null`) and pinned `expectedRemoteTip` protection.
  */
 export async function deliver(request: DeliveryRequest, ports: DeliveryPorts): Promise<DeliveryReceipt> {
 	const marker = deliveryMarker(request.runId);
-	const binding = validateBinding(request.binding.captured, request.binding.current, request.binding.expect);
-	const blockers = [...binding.blockers, ...deliveryBlockers(request.proofs, request.current)];
-	if (blockers.length > 0) return { outcome: "blocked", blockers, pr: null, linear: null, detail: "the captured binding or the evidence no longer matches this delivery" };
-
-	// Push exactly this head; an already-matching remote head is a settled push, not a new one.
+	const blockers = deliveryBlockers(request.proofs, request.current);
+	if (blockers.length > 0) {
+		return { outcome: "blocked", blockers, pr: null, linear: null, detail: "the recorded evidence no longer matches this delivery" };
+	}
+	const steps: DeliveryStepStates = {
+		push: "not-started",
+		pr: "not-started",
+		linearState: "not-started",
+		linearComment: "not-started",
+	};
+	const reportSteps = async () => { await request.onStepUpdate?.({ ...steps }); };
 	const remoteHead = await ports.git(["ls-remote", "--heads", request.remote, request.branch], request.worktree).catch(() => null);
 	if (remoteHead === null || remoteHead.code !== 0) {
 		return { outcome: "unknown", blockers: [], pr: null, linear: null, detail: "the remote head could not be read; nothing is assumed about the push" };
 	}
 	const remoteSha = /^([0-9a-f]{40})\s/m.exec(remoteHead.stdout)?.[1] ?? null;
 	if (remoteSha !== request.head) {
-		// The lease names the exact ref we just read: a concurrent push becomes a definite rejection,
-		// not an "unknown" that no retry can clear.
-		// A rejected promise and a failed exit code are the same fact: the receipt is lost, so read the remote.
-		const pushed = await ports.git(["push", `--force-with-lease=refs/heads/${request.branch}:${remoteSha ?? ""}`,
-			request.remote, `${request.head}:refs/heads/${request.branch}`], request.worktree)
-			.catch((error: unknown) => ({ code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }));
+		if (request.expectedRemoteTip !== undefined && remoteSha !== request.expectedRemoteTip) {
+			return {
+				outcome: "unknown",
+				blockers: [],
+				pr: null,
+				linear: null,
+				detail: `remote tip moved concurrently (${remoteSha?.slice(0, 12) ?? "none"} !== expected ${request.expectedRemoteTip?.slice(0, 12) ?? "none"}); refusing to overwrite`,
+			};
+		}
+		steps.push = "in-flight";
+		await reportSteps();
+		const pushed = await ports.git([
+			"push",
+			`--force-with-lease=refs/heads/${request.branch}:${remoteSha ?? ""}`,
+			request.remote,
+			`${request.head}:refs/heads/${request.branch}`,
+		], request.worktree).catch((error: unknown) => ({ code: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }));
 		if (pushed.code !== 0) {
 			const after = await ports.git(["ls-remote", "--heads", request.remote, request.branch], request.worktree).catch(() => null);
 			const now = after && after.code === 0 ? /^([0-9a-f]{40})\s/m.exec(after.stdout)?.[1] ?? null : null;
 			if (after === null || after.code !== 0 || now !== request.head) {
-				return { outcome: "unknown", blockers: [], pr: null, linear: null,
-					detail: `push did not apply (remote head ${now?.slice(0, 12) ?? "unreadable"}): ${pushed.stderr.trim().slice(0, 300)}` };
+				return {
+					outcome: "unknown",
+					blockers: [],
+					pr: null,
+					linear: null,
+					detail: `push did not apply (remote head ${now?.slice(0, 12) ?? "unreadable"}): ${pushed.stderr.trim().slice(0, 300)}`,
+				};
 			}
 		}
 	}
+	steps.push = "settled";
+	await reportSteps();
 
-	// One open PR to the approved base per requirement; a closed or retargeted PR is not this delivery.
-	const usable = (candidate: PullRequestHandle): boolean => (candidate.base === undefined || candidate.base === request.prBase)
-		&& (candidate.state === undefined || candidate.state === "OPEN");
-	// Reconcile an existing exact-head PR before creating anything.
-	const existing = (await ports.github.findPullRequests(request.branch)).filter(pr => pr.headRefOid === request.head && usable(pr));
+	const usable = (candidate: PullRequestHandle): boolean =>
+		(candidate.base === undefined || candidate.base === request.prBase)
+		&& (candidate.state === undefined || candidate.state === "OPEN")
+		&& candidate.isCrossRepository !== true;
+	const matchesHeadOrSameRepoOpen = (candidate: PullRequestHandle): boolean =>
+		usable(candidate) && (candidate.headRefOid === request.head || (candidate.base === request.prBase && candidate.state === "OPEN"));
+	const existing = (await ports.github.findPullRequests(request.branch)).filter(matchesHeadOrSameRepoOpen);
 	let pr: PullRequestHandle;
 	if (existing.length > 1) {
 		return { outcome: "unknown", blockers: [], pr: null, linear: null, detail: "more than one pull request matches this head; refusing to guess" };
 	}
 	if (existing.length === 1) pr = existing[0]!;
 	else {
+		steps.pr = "in-flight";
+		await reportSteps();
 		try {
-			pr = await ports.github.createPullRequest({ head: request.branch, base: request.prBase, title: request.title,
-				// The upstream `pr` skill's body shape: the smallest statement of the change, real evidence,
-				// and an explicit door call, instead of a bare marker line.
-				body: prBody(request, marker) });
+			pr = await ports.github.createPullRequest({
+				head: request.branch,
+				base: request.prBase,
+				title: request.title,
+				body: prBody(request, marker),
+			});
 		} catch (error) {
-			const reconciled = (await ports.github.findPullRequests(request.branch)).filter(candidate => candidate.headRefOid === request.head && usable(candidate));
+			const reconciled = (await ports.github.findPullRequests(request.branch)).filter(matchesHeadOrSameRepoOpen);
 			if (reconciled.length !== 1) {
-				return { outcome: "unknown", blockers: [], pr: null, linear: null,
-					detail: `create response lost and reconciliation found ${reconciled.length} candidates: ${error instanceof Error ? error.message : String(error)}` };
+				return {
+					outcome: "unknown",
+					blockers: [],
+					pr: null,
+					linear: null,
+					detail: `create response lost and reconciliation found ${reconciled.length} candidates: ${error instanceof Error ? error.message : String(error)}`,
+				};
 			}
 			pr = reconciled[0]!;
 		}
 	}
+	steps.pr = "settled";
+	steps.prNumber = pr.number;
+	steps.prUrl = pr.url;
+	await reportSteps();
+	if (!request.issue) {
+		return {
+			outcome: "delivered",
+			blockers: [],
+			pr,
+			linear: null,
+			detail: `PR #${pr.number} opened against ${request.prBase} (GitHub-only mode)`,
+		};
+	}
 
-	// Linear backwrite: an issue already carrying the marker is settled, never updated twice.
 	const issue = await ports.linear.getIssue(request.issue, marker);
-	if (!issue) return { outcome: "unknown", blockers, pr, linear: null, detail: `issue ${request.issue} was not readable through the captured binding` };
+	if (!issue) {
+		return { outcome: "unknown", blockers, pr, linear: null, detail: `PR #${pr.number} opened; issue ${request.issue} was not readable` };
+	}
 	if (issue.hasMarker) {
-		return { outcome: "delivered", blockers: [], pr, linear: { identifier: issue.identifier, state: issue.state, updated: false },
-			detail: `PR #${pr.number} and ${issue.identifier} were already reconciled` };
+		steps.linearState = "settled";
+		steps.linearComment = "settled";
+		await reportSteps();
+		return {
+			outcome: "delivered",
+			blockers: [],
+			pr,
+			linear: { identifier: issue.identifier, state: issue.state, updated: false },
+			detail: `PR #${pr.number} and ${issue.identifier} were already reconciled`,
+		};
 	}
+	steps.linearState = "in-flight";
+	steps.linearComment = "in-flight";
+	await reportSteps();
 	try {
-		await ports.linear.updateIssue(request.issue, { state: request.reviewState, marker });
+		await ports.linear.updateIssue(request.issue, { state: request.reviewState, marker, prUrl: pr.url });
 	} catch (error) {
-		const after = await ports.linear.getIssue(request.issue, marker);
+		const after = await ports.linear.getIssue(request.issue, marker).catch(() => null);
 		if (after?.hasMarker) {
-			return { outcome: "delivered", blockers: [], pr, linear: { identifier: after.identifier, state: after.state, updated: true },
-				detail: `backwrite confirmed by reading ${after.identifier} back` };
+			steps.linearState = "settled";
+			steps.linearComment = "settled";
+			await reportSteps();
+			return {
+				outcome: "delivered",
+				blockers: [],
+				pr,
+				linear: { identifier: after.identifier, state: after.state, updated: true },
+				detail: `backwrite confirmed by reading ${after.identifier} back`,
+			};
 		}
-		return { outcome: "unknown", blockers, pr, linear: { identifier: request.issue, state: after?.state ?? "unknown", updated: false },
-			detail: `Linear backwrite unconfirmed: ${error instanceof Error ? error.message : String(error)}` };
+		return {
+			outcome: "unknown",
+			blockers,
+			pr,
+			linear: { identifier: request.issue, state: after?.state ?? "unknown", updated: false },
+			detail: `PR #${pr.number} opened; Linear backwrite pending: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	}
-	return { outcome: "delivered", blockers: [], pr, linear: { identifier: request.issue, state: "In Review", updated: true },
-		detail: `PR #${pr.number} opened against ${request.prBase}; ${request.issue} moved to In Review` };
+	steps.linearState = "settled";
+	steps.linearComment = "settled";
+	await reportSteps();
+	return {
+		outcome: "delivered",
+		blockers: [],
+		pr,
+		linear: { identifier: request.issue, state: request.reviewState, updated: true },
+		detail: `PR #${pr.number} opened against ${request.prBase}; ${request.issue} moved to ${request.reviewState}`,
+	};
 }

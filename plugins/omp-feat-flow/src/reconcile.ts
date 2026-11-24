@@ -14,6 +14,7 @@ export function reconcileInterruptedSync(input: {
 	porcelain: string;
 	head: string;
 	integrationSha: string;
+	preSyncHead?: string | null;
 	/** The fetched PR base, when it could be read. */
 	baseSha?: string | null;
 	/** Whether HEAD is a descendant of that base (computed with git, not assumed). */
@@ -21,7 +22,9 @@ export function reconcileInterruptedSync(input: {
 }): SyncReconciliation {
 	if (input.rebasing) return { kind: "blocked", reason: "rebase-in-progress" };
 	if (input.porcelain.trim()) return { kind: "blocked", reason: "foreign-changes" };
-	if (input.head === input.integrationSha) return { kind: "reclaim", reason: "clean-tree" };
+	if (input.head === input.integrationSha || (input.preSyncHead && input.head === input.preSyncHead)) {
+		return { kind: "reclaim", reason: "clean-tree" };
+	}
 	if (input.baseSha && input.headDescendsFromBase) return { kind: "applied", head: input.head };
 	return { kind: "blocked", reason: "head-moved" };
 }

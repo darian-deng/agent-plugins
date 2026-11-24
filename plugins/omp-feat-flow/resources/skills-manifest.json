@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 2,
+  "repo": "mattpocock/skills",
+  "ref": "abeeaf95660ba9e8b7c753eb38f441ca707a8823",
+  "skills": {
+    "code-review": {
+      "role": "core",
+      "upstream": "skills/engineering/code-review",
+      "files": {
+        "SKILL.md": {
+          "bytes": 6721,
+          "sha256": "9c921a8d88138a41401d8897ca1bb852088ab1b7b605cdd04edc13e3e8aab6dd"
+        }
+      }
+    },
+    "codebase-design": {
+      "role": "conditional",
+      "upstream": "skills/engineering/codebase-design",
+      "files": {
+        "DEEPENING.md": {
+          "bytes": 2553,
+          "sha256": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1"
+        },
+        "DESIGN-IT-TWICE.md": {
+          "bytes": 2699,
+          "sha256": "c222ab5a82e0405672eb9062d62496139a08828e45d07fc5f18e4952c10fac1a"
+        },
+        "SKILL.md": {
+          "bytes": 6446,
+          "sha256": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2"
+        }
+      }
+    },
+    "diagnosing-bugs": {
+      "role": "conditional",
+      "upstream": "skills/engineering/diagnosing-bugs",
+      "files": {
+        "SKILL.md": {
+          "bytes": 8664,
+          "sha256": "849198df88cdb65fd0d97236604c1fca7ff2f22d2f705f9724a800d0266b118d"
+        },
+        "scripts/hitl-loop.template.sh": {
+          "bytes": 1316,
+          "sha256": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503"
+        }
+      }
+    },
+    "domain-modeling": {
+      "role": "core",
+      "upstream": "skills/engineering/domain-modeling",
+      "files": {
+        "ADR-FORMAT.md": {
+          "bytes": 2733,
+          "sha256": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0"
+        },
+        "GLOSSARY-FORMAT.md": {
+          "bytes": 2300,
+          "sha256": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801"
+        },
+        "SKILL.md": {
+          "bytes": 3346,
+          "sha256": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3"
+        }
+      }
+    },
+    "grilling": {
+      "role": "core",
+      "upstream": "skills/productivity/grilling",
+      "files": {
+        "SKILL.md": {
+          "bytes": 2077,
+          "sha256": "a146842ed93ca43d833550fa9adf02e58cb63c83fea9d4b4522995b82242d4e2"
+        }
+      }
+    },
+    "prototype": {
+      "role": "conditional",
+      "upstream": "skills/engineering/prototype",
+      "files": {
+        "LOGIC.md": {
+          "bytes": 6036,
+          "sha256": "f61c7d249e786a79ef289018901c348271e1798dd0b0bc5607b5c6f4d4a01ab9"
+        },
+        "SKILL.md": {
+          "bytes": 2931,
+          "sha256": "714de632d116bb73f65cdb5a882db15b9369a6713b9a47c0fad827848f0bfbe3"
+        },
+        "UI.md": {
+          "bytes": 6913,
+          "sha256": "723211e878acbc7b6ff09755263f3295cde724ba902ff0064da41eed51d45ad3"
+        }
+      }
+    },
+    "research": {
+      "role": "conditional",
+      "upstream": "skills/engineering/research",
+      "files": {
+        "SKILL.md": {
+          "bytes": 19552,
+          "sha256": "87d988639cf26b8971b69702cc0353cce4a781ca316914cce11cb1e29fe01e28"
+        }
+      }
+    },
+    "retro": {
+      "role": "conditional",
+      "upstream": "skills/engineering/retro",
+      "files": {
+        "SKILL.md": {
+          "bytes": 4369,
+          "sha256": "33fbc28568e3146f20fd908b12998bc0ab30aa4f4c87288199a40793efa94696"
+        }
+      }
+    },
+    "tdd": {
+      "role": "core",
+      "upstream": "skills/engineering/tdd",
+      "files": {
+        "SKILL.md": {
+          "bytes": 3629,
+          "sha256": "5505d25bbaa8fc14a79e4d20163936958992a2995b7f1dd1d6197edc9ed722e0"
+        },
+        "mocking.md": {
+          "bytes": 1481,
+          "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef"
+        },
+        "tests.md": {
+          "bytes": 2214,
+          "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a"
+        }
+      }
+    }
+  }
+}

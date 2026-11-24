@@ -1,116 +1,231 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, relative } from "node:path";
-import baseline from "../resources/methods-baseline.json" with { type: "json" };
-import dependencies from "../resources/methods.json" with { type: "json" };
+import { dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import { writeAtomic } from "./config";
+import skillsManifest from "../resources/skills-manifest.json" with { type: "json" };
 
-export interface MethodFileSnapshot {
-	path: string;
+export interface SkillFileEntry {
 	bytes: number;
 	sha256: string;
 }
 
-export type MethodStatus = "audited-match" | "modified" | "incomplete" | "missing" | "unknown-source";
-export interface MethodSnapshot {
-	name: string;
-	directory: string;
-	upstream: string | null;
-	status: MethodStatus;
-	files: MethodFileSnapshot[];
-	missingFiles: string[];
-	extraFiles: string[];
-	changedFiles: string[];
-	/** Allowed only for a selected, source-known and locally unmodified copy. */
-	update: { permitted: boolean; reason: string };
-}
-export interface MethodSnapshotSet {
-	root: string;
-	ref: string | null;
-	core: string[];
-	methods: MethodSnapshot[];
-	/** Only a missing or incomplete core install stops start; a locally modified copy stays usable. */
-	blockingCore: string[];
-	modifiedCore: string[];
-	guidance: string | null;
+export interface SkillManifestEntry {
+	role: "core" | "conditional";
+	upstream: string;
+	files: Record<string, SkillFileEntry>;
 }
 
-interface BaselineFile {
-	schemaVersion: 1;
+export interface SkillsManifest {
+	schemaVersion: 2;
 	repo: string;
 	ref: string;
-	methods: Record<string, { upstream: string; files: Record<string, { bytes: number; sha256: string }> }>;
+	skills: Record<string, SkillManifestEntry>;
 }
 
-const BASELINE = baseline as BaselineFile;
+export const BUNDLED_SKILLS_MANIFEST = skillsManifest as SkillsManifest;
 
-/** The profile's skill directory; a live case points this at a dedicated profile, never the user's. */
-export function methodsRoot(): string {
-	return process.env.OMP_FEAT_FLOW_SKILLS_DIR || join(homedir(), ".agents", "skills");
+export function bundledSkillsRoot(): string {
+	return process.env.OMP_FEAT_FLOW_BUNDLED_SKILLS_DIR || join(dirname(dirname(fileURLToPath(import.meta.url))), "resources", "skills");
 }
 
-async function listFiles(directory: string): Promise<string[]> {
-	const found: string[] = [];
-	const walk = async (current: string): Promise<void> => {
-		for (const entry of await readdir(current, { withFileTypes: true })) {
-			const path = join(current, entry.name);
-			if (entry.isDirectory()) await walk(path);
-			else if (entry.isFile()) found.push(relative(directory, path));
+export function defaultUserOverrideDirs(): string[] {
+	return [
+		join(homedir(), ".omp", "agent", "skills"),
+		join(homedir(), ".claude", "skills"),
+	];
+}
+
+export interface BundleVerification {
+	valid: boolean;
+	ref: string;
+	skills: string[];
+	missing: string[];
+	mismatched: string[];
+}
+
+export async function verifyBundledMethods(root = bundledSkillsRoot()): Promise<BundleVerification> {
+	const missing: string[] = [];
+	const mismatched: string[] = [];
+	const skills = Object.keys(BUNDLED_SKILLS_MANIFEST.skills).sort();
+	for (const name of skills) {
+		const entry = BUNDLED_SKILLS_MANIFEST.skills[name]!;
+		for (const [rel, expected] of Object.entries(entry.files)) {
+			const filePath = join(root, name, rel);
+			if (!existsSync(filePath)) {
+				missing.push(`${name}/${rel}`);
+				continue;
+			}
+			const buf = await readFile(filePath);
+			const actual = createHash("sha256").update(buf).digest("hex");
+			if (actual !== expected.sha256 || buf.byteLength !== expected.bytes) {
+				mismatched.push(`${name}/${rel}`);
+			}
 		}
-	};
-	if (!(await stat(directory).catch(() => null))?.isDirectory()) return [];
-	await walk(directory);
-	return found.sort();
-}
-
-export interface MethodAdoption {
-	runDirectory: string;
-	directory: string;
-	ref: string | null;
-	adopted: Array<{ name: string; status: MethodStatus; files: MethodFileSnapshot[] }>;
-}
-
-export async function resolveMethods(names: readonly string[], root = methodsRoot()): Promise<MethodSnapshotSet> {
-	const methods: MethodSnapshot[] = [];
-	for (const name of names) {
-		const expected = BASELINE.methods[name];
-		const directory = join(root, name);
-		const files: MethodFileSnapshot[] = [];
-		for (const path of await listFiles(directory)) {
-			const bytes = await readFile(join(directory, path));
-			files.push({ path, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") });
-		}
-		const present = new Set(files.map(file => file.path));
-		if (!expected) {
-			methods.push({ name, directory, upstream: null, status: files.length === 0 ? "missing" : "unknown-source", files,
-				missingFiles: [], extraFiles: [], changedFiles: [], update: { permitted: false, reason: "No audited upstream baseline is recorded for this method." } });
-			continue;
-		}
-		const expectedPaths = Object.keys(expected.files);
-		const missingFiles = expectedPaths.filter(path => !present.has(path));
-		const extraFiles = files.map(file => file.path).filter(path => !(path in expected.files));
-		const changedFiles = files.filter(file => {
-			const audited = expected.files[file.path];
-			return audited !== undefined && audited.sha256 !== file.sha256;
-		}).map(file => file.path);
-		const status: MethodStatus = files.length === 0 ? "missing" : missingFiles.length > 0 ? "incomplete"
-			: changedFiles.length > 0 || extraFiles.length > 0 ? "modified" : "audited-match";
-		methods.push({ name, directory, upstream: expected.upstream, status, files, missingFiles, extraFiles, changedFiles,
-			update: status === "audited-match"
-				? { permitted: true, reason: `Matches the audited ${BASELINE.repo}@${BASELINE.ref.slice(0, 12)} content.` }
-				: { permitted: false, reason: status === "modified" ? "The installed copy differs from its known source; it is preserved, not updated."
-					: status === "incomplete" ? "The installed copy is missing audited files; nothing is filled in from a moving global directory."
-					: "The method is not installed from a known source." } });
 	}
-	const core = [...dependencies.core];
-	const blockingCore = methods.filter(method => core.includes(method.name)
-		&& (method.status === "missing" || method.status === "incomplete")).map(method => method.name);
-	const modifiedCore = methods.filter(method => core.includes(method.name) && method.status === "modified").map(method => method.name);
-	const guidance = blockingCore.length === 0 ? null
-		: `${blockingCore.join(", ")} is missing or incomplete and must be installed from a known source before an issue, branch, worktree or workspace is created. `
-			+ `Verified: ${BASELINE.repo}@${BASELINE.ref.slice(0, 12)}. `
-			+ `Option A (selected skills only): ${dependencies.skillsCli}. `
-			+ `Option B (whole official plugin, installs all ${dependencies.pluginSkillCount} methods): ${dependencies.pluginInstall}. `
-			+ `This flow never installs a method or a package manager by itself.`;
-	return { root, ref: BASELINE.ref, core, methods, blockingCore, modifiedCore, guidance };
+	return {
+		valid: missing.length === 0 && mismatched.length === 0,
+		ref: BUNDLED_SKILLS_MANIFEST.ref,
+		skills,
+		missing,
+		mismatched,
+	};
+}
+
+export interface MaterializedMethodPack {
+	methodDigest: string;
+	packDir: string;
+	manifestRef: string;
+	overriddenMethods: string[];
+	skills: string[];
+}
+
+async function listRelativeFiles(dir: string): Promise<string[]> {
+	const entries = await readdir(dir, { withFileTypes: true });
+	const out: string[] = [];
+	for (const entry of entries) {
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			for (const child of await listRelativeFiles(full)) out.push(`${entry.name}/${child}`);
+		} else if (entry.isFile()) {
+			out.push(entry.name);
+		}
+	}
+	return out.sort();
+}
+
+export async function materializeMethodPack(
+	commonDir: string,
+	options?: { bundledRoot?: string; overrideDirs?: string[]; allowUserOverrides?: boolean },
+): Promise<MaterializedMethodPack> {
+	const bundledRoot = options?.bundledRoot ?? bundledSkillsRoot();
+	const allowOverrides = options?.allowUserOverrides ?? false;
+	const overrideDirs = allowOverrides || options?.overrideDirs !== undefined
+		? (options?.overrideDirs ?? defaultUserOverrideDirs())
+		: [];
+	const verification = await verifyBundledMethods(bundledRoot);
+	if (!verification.valid) {
+		throw new Error(
+			`Bundled private skills failed verification (missing: ${verification.missing.join(", ") || "none"}, mismatched: ${verification.mismatched.join(", ") || "none"}).`,
+		);
+	}
+
+	const hash = createHash("sha256");
+	const sources = new Map<string, { dir: string; overridden: boolean }>();
+	const overriddenMethods: string[] = [];
+
+	for (const name of verification.skills) {
+		let sourceDir = join(bundledRoot, name);
+		let overridden = false;
+		for (const overrideBase of overrideDirs) {
+			const candidate = join(overrideBase, name);
+			if (existsSync(join(candidate, "SKILL.md"))) {
+				sourceDir = candidate;
+				overridden = true;
+				break;
+			}
+		}
+		if (overridden) overriddenMethods.push(name);
+		sources.set(name, { dir: sourceDir, overridden });
+		const files = await listRelativeFiles(sourceDir);
+		for (const rel of files) {
+			hash.update(`${name}/${rel}\0`);
+			hash.update(await readFile(join(sourceDir, rel)));
+			hash.update("\0");
+		}
+	}
+
+	const methodDigest = hash.digest("hex");
+	const packsRoot = join(commonDir, "omp-feat-flow", "packs");
+	const packDir = join(packsRoot, methodDigest);
+	await mkdir(packsRoot, { recursive: true, mode: 0o700 });
+	await withFileLock(packDir, async () => {
+		if (existsSync(join(packDir, "MANIFEST.json"))) return;
+		const staging = `${packDir}.tmp-${process.pid}-${Date.now()}`;
+		await rm(staging, { recursive: true, force: true });
+		try {
+			await mkdir(staging, { recursive: true, mode: 0o700 });
+			for (const [name, { dir }] of sources) {
+				const dest = join(staging, name);
+				await mkdir(dirname(dest), { recursive: true, mode: 0o700 });
+				await cp(dir, dest, { recursive: true });
+			}
+			const manifestPayload = {
+				schemaVersion: 2,
+				methodDigest,
+				repo: BUNDLED_SKILLS_MANIFEST.repo,
+				ref: BUNDLED_SKILLS_MANIFEST.ref,
+				overriddenMethods,
+				skills: verification.skills,
+			};
+			await writeAtomic(join(staging, "MANIFEST.json"), JSON.stringify(manifestPayload, null, 2) + "\n");
+			if (!existsSync(join(packDir, "MANIFEST.json"))) {
+				await rm(packDir, { recursive: true, force: true });
+				await rename(staging, packDir);
+			}
+		} finally {
+			await rm(staging, { recursive: true, force: true });
+		}
+	}, { retries: 50, retryDelayMs: 10 });
+
+	return {
+		methodDigest,
+		packDir,
+		manifestRef: BUNDLED_SKILLS_MANIFEST.ref,
+		overriddenMethods,
+		skills: verification.skills,
+	};
+}
+
+export async function openPinnedMethodPack(commonDir: string, expectedMethodDigest: string): Promise<MaterializedMethodPack> {
+	if (!/^[a-f0-9]{64}$/.test(expectedMethodDigest)) {
+		throw new Error("Run has an invalid pinned methodDigest.");
+	}
+	const packDir = join(commonDir, "omp-feat-flow", "packs", expectedMethodDigest);
+	const manifestPath = join(packDir, "MANIFEST.json");
+	if (!existsSync(manifestPath)) {
+		throw new Error(`Pinned MethodPack ${expectedMethodDigest.slice(0, 12)} is missing from ${packDir}; refusing to substitute current methods.`);
+	}
+	const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+		methodDigest?: string;
+		ref?: string;
+		overriddenMethods?: string[];
+		skills?: string[];
+	};
+	if (manifest.methodDigest !== expectedMethodDigest) {
+		throw new Error(`Pinned MethodPack manifest digest mismatch (${manifest.methodDigest ?? "missing"} != ${expectedMethodDigest}).`);
+	}
+	const skills = (manifest.skills ?? []).slice().sort();
+	const hash = createHash("sha256");
+	for (const name of skills) {
+		const dir = join(packDir, name);
+		if (!existsSync(dir)) throw new Error(`Pinned MethodPack skill directory "${name}" is missing.`);
+		const files = await listRelativeFiles(dir);
+		for (const rel of files) {
+			hash.update(`${name}/${rel.split(sep).join("/")}\0`);
+			hash.update(await readFile(join(dir, rel)));
+			hash.update("\0");
+		}
+	}
+	const actualDigest = hash.digest("hex");
+	if (actualDigest !== expectedMethodDigest) {
+		throw new Error(`Pinned MethodPack ${expectedMethodDigest.slice(0, 12)} failed integrity verification (actual ${actualDigest.slice(0, 12)}).`);
+	}
+	return {
+		methodDigest: expectedMethodDigest,
+		packDir,
+		manifestRef: manifest.ref ?? BUNDLED_SKILLS_MANIFEST.ref,
+		overriddenMethods: manifest.overriddenMethods ?? [],
+		skills,
+	};
+}
+export async function readPackMethod(packDir: string, methodName: string, file = "SKILL.md"): Promise<string> {
+	const path = join(packDir, methodName, file);
+	if (!existsSync(path)) {
+		throw new Error(`Method ${methodName}/${file} is missing from pack ${relative(packDir, path)}.`);
+	}
+	return readFile(path, "utf8");
 }

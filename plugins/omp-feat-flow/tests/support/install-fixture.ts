@@ -1,8 +1,9 @@
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const PACKAGE = new URL("../..", import.meta.url).pathname;
+const PACKAGE = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 export interface InstallFixture {
 	root: string;
@@ -62,7 +63,7 @@ export async function installFixture(options: InstallFixtureOptions = {}): Promi
 		await symlink(join(PACKAGE, "node_modules"), join(pluginDir, "node_modules"));
 		const pkg = JSON.parse(await readFile(join(PACKAGE, "package.json"), "utf8")) as Record<string, unknown>;
 		pkg.version = version;
-		pkg.dependencies = { zod: "3.25.76" };
+		delete pkg.dependencies;
 		delete pkg.devDependencies;
 		delete pkg.scripts;
 		delete pkg.files;

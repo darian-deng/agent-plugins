@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { git, gitFixture, type GitFixture } from "../support/git-fixture";
 import { seedProject } from "../support/project";
-import { approvalPacket, coldReadPrompt, renderPacket } from "../../src/questions";
-import { framesText, parseLiveArgs, startIsolatedProfile, startNativeHost, type IsolatedProfile, type NativeHost } from "../support/native-host";
+import { approvalPacket, knowledgeColdReadPrompt } from "../../src/questions";
+import { framesText, parseLiveArgs, startNativeHost, type IsolatedProfile, type NativeHost } from "../support/native-host";
 
 const CASE = "question-approval";
 const args = parseLiveArgs();
@@ -23,7 +23,8 @@ const RUNNER = new URL("../support/helper-runner.ts", import.meta.url).pathname;
 const INSTALLED_SKILLS = { OMP_FEAT_FLOW_SKILLS_DIR: join(homedir(), ".agents", "skills") };
 
 async function runColdRead(packet: ReturnType<typeof approvalPacket>, profile: IsolatedProfile): Promise<{ text: string; tools: string[] }> {
-	const job = { kind: "cold-read", cwd: process.cwd(), prompt: coldReadPrompt(packet),
+	const job = { kind: "cold-read", cwd: process.cwd(),
+		prompt: knowledgeColdReadPrompt({ path: "probe.txt", reason: packet.purpose, diffText: packet.facts.join("\n") }),
 		binding: { taskId: "question-packet", epoch: 1, snapshotDigest: packet.id } };
 	const child = Bun.spawn([process.execPath, RUNNER, JSON.stringify(job)], { env: profile.env, stdout: "pipe", stderr: "pipe" });
 	const [stdout, stderr, exitCode] = await Promise.all([
@@ -131,8 +132,7 @@ test(`live ${PACKET_CASE}: a cold reader answers the packet the native confirm a
 		}, null, 2) + "\n");
 		await writeFile(join(EVIDENCE, `${PACKET_CASE}.rpc.jsonl`), framesText(host.frames) + "\n");
 		const transcript = framesText(host.frames);
-		expect(cold.text).toContain("ANSWERABLE");
-		expect(cold.text).toContain("approve");
+		expect(cold.text).toContain("PASS");
 		expect(String(shown.message)).toContain("Permits implementation writes inside the stated scope");
 		expect(String(shown.message)).toContain("does not permit merge, publication or delivery");
 		expect(transcript).toContain("approved desk-packet revision");

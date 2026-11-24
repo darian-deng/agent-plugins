@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 export interface TuiStep { afterMs: number; text: string }
 
@@ -12,7 +12,7 @@ export async function driveTui(input: {
 	/** The child's working directory; `cwd` only locates the CLI and its node_modules. */
 	workdir?: string;
 }): Promise<string> {
-	const driver = new URL("./tui_driver.py", import.meta.url).pathname;
+	const driver = fileURLToPath(new URL("./tui_driver.py", import.meta.url));
 	const child = Bun.spawn(["/usr/bin/python3", driver, "--profile", input.profile, "--home", input.home,
 		"--cwd", input.cwd, "--steps", JSON.stringify(input.steps), "--total", String(input.totalMs ?? 30_000),
 		"--env", JSON.stringify(input.env ?? {}), "--model", input.model ?? "", "--workdir", input.workdir ?? ""],
@@ -23,4 +23,4 @@ export async function driveTui(input: {
 	return parsed.screen;
 }
 
-export const TUI_CLI_DIR = new URL("../..", import.meta.url).pathname;
+export const TUI_CLI_DIR = fileURLToPath(new URL("../..", import.meta.url));

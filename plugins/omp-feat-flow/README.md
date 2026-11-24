@@ -1,7 +1,8 @@
-# omp-feat-flow
+# omp-feat-flow (v0.2.0)
 
-A requirement-delivery flow for oh-my-pi: one owned run per requirement worktree, from boundary
-clarification through an explicitly approved plan to a single PR and a Linear handoff.
+An oh-my-pi requirement-delivery extension: one owned run per requirement worktree, with two-tier onboarding, private bundled methods (`MethodPack`), adaptive small/medium/large workflows, offline `tech-design.html` alignment reviews, calibrated cold reads, optional independent Security/Performance audits, context-budget handoff, and resumable PR + Linear delivery.
+
+Full visual guide (User Story, internal architecture, role isolation, and troubleshooting): [`docs/feat-flow-design.html`](./docs/feat-flow-design.html).
 
 ## Install
 
@@ -10,136 +11,43 @@ omp plugin marketplace add darian-deng/agent-plugins   # once
 omp plugin install omp-feat-flow                       # user scope
 ```
 
-Then restart the host. `/reload-plugins` re-reads configuration but does **not** replace code that is
-already loaded; only a real restart runs a new build.
+Restart the host after installing or updating. (`/reload-plugins` does not replace already-loaded extension code.)
+
+## First-Time Setup (Interactive, Zero Manual JSON)
+
+1. **User-level onboarding (`~/.omp/agent/omp-feat-flow.json`)**: On your first `/feat-flow-start`, `omp-feat-flow` opens an interactive `ui.formDialog` (with sequential fallback) to configure models & thinking effort for isolated roles (`scout`, `coldReader`, `reviewer`, plus optional `author` default), Linear API key (`LINEAR_API_KEY` or macOS Keychain `omp-linear-api-key`), explicit opt-in for global skill overrides, and `gh` / `cmux` preferences. Interrupted onboarding resumes cleanly at the next unfinished step, and missing/unauthenticated role models are caught via drift detection.
+2. **Project-level onboarding (`<git-common-dir>/omp-feat-flow/project.json`, v2)**: On the first `/feat-flow-start` in a Git repository, `omp-feat-flow` opens a single `ui.formDialog` pre-populated with inferred `remote`, `owner/repo`, local `prBase` candidates, `worktreeRoot` (relative to main checkout root), `knowledge.entryPaths`, and Linear team/reviewState (`mode: "required" | "optional" | "disabled"`). No manual SHA-256 `digest` is stored on disk; legacy v1 configs auto-migrate in memory.
+
+Reconfigure anytime with `/feat-flow-start config [user|project|all]` (or choose `⚙ 修改个人 / 当前仓库配置...` inside `/feat-flow-start`).
+
+## Private Bundled Methods (`resources/skills/`)
+
+Curated methods (`grilling`, `tdd`, `code-review`, `domain-modeling`, `research`, `prototype`, `codebase-design`, `diagnosing-bugs`, `retro`) are bundled privately under `resources/skills/` (never top-level `skills/`), so `omp-feat-flow` **never** pollutes your `/` menu with duplicate `/skill:<name>` commands. On run creation, active methods (plus `~/.omp/agent/skills/<name>` or `~/.claude/skills/<name>` only when explicitly opted in via `methods.allowUserOverrides`) are snapshotted into `<commonDir>/omp-feat-flow/packs/<methodDigest>/`, and existing runs always verify and load their pinned `methodDigest`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/feat-flow-start <slug \| Linear identifier or URL>` | Creates or adopts a requirement. With a bound run it resumes instead of creating another issue, branch or workspace. |
-| `/feat-flow-status` | The public observation surface: real phase, why it is waiting, owner, baseline, running build vs installed build, stale evidence, next allowed action. |
-| `/feat-flow-approve` | Shows the current exact plan or knowledge-diff candidate, then asks for that candidate in a native confirm dialog. A cancelled, timed-out or model-claimed approval grants nothing. |
-| `/feat-flow-sync` | Controlled sync to the PR target branch: preserves local progress, leaves real conflicts inspectable, advances the integration base and invalidates the old quality evidence. |
-| `/feat-flow-update` | Checks the run's method dependency, reports whether content changed, and states the native install/restart path. There is no custom hot loader. |
-| `/feat-flow-finish` | The delivery and cleanup step: an independent review helper must accept the change, its proof is recorded, the run syncs to the PR base first, the review judges that exact base-to-head change, the run enters the delivery phase, pushes, opens exactly one PR, writes the issue state back, and only then closes the workspace this run owns. It refuses while any effect is dispatched or unknown, and never merges, publishes or removes another run's worktree. |
+| `/feat-flow-start [需求描述 \| Linear ID/URL \| config]` | Accepts any natural-language requirement description or Linear ID/URL (no manual slug needed), searches repo-wide runs & branches first (switches cmux workspace via `cmux workspace select` if already open, or recreates), otherwise provisions a worktree and run (`owner: null`, persisted `initialTask`), or opens user/repo reconfiguration when passed `config`. |
+| `/feat-flow-status` | Reports real phase, readiness, wait reason, owner, baseline/HEAD, proof freshness, and build identity. |
+| `/feat-flow-approve` | Plan / Checkpoint / Amendment / Knowledge Gate: opens `ui.formDialog` (or confirm fallback) after calibrated JSON cold-read on Medium/Large docs or knowledge diffs, supports human Security/Performance review toggles, optional Mid-Checkpoint cadence on Large/multi-slice runs, and Small-tier `autoDeliver` opt-in, enforces Linear issue creation/binding when `linear.mode === "required"`, and unlocks implementation. |
+| `/feat-flow-sync` | Rebases the owned worktree onto the latest `prBase` and reconciles any interrupted sync from observed Git state. |
+| `/feat-flow-finish` | Delivery Gate: syncs to `prBase`, runs independent Code Review (+ Security/Performance audit when triggered) with full approved contracts, pushes with pinned expected remote tip, opens 1 PR, and updates Linear via state + idempotent comment. |
+| `/feat-flow-update` | Verifies bundled private method integrity, upstream ref (`resources/skills-manifest.json`), and loaded vs installed build identity. |
 
-## Permission boundaries
+## Workflow, Gates, & Context Continuity
 
-- Product writes stay closed until a human approves the exact candidate (plan or knowledge diff) in the
-  native confirm dialog, and the candidate is unchanged at approval time.
-- Boundary answers reach the run from the human's own files or the PRD (`boundariesPath` JSON or `prdPath`),
-  never from the model's memory of the conversation; the model submits intents, the program records them.
-- Model intents arrive through one durable request outbox (`feat_flow_request`): a task change, a design
-  proposal, boundary answers, a plan, or a knowledge correction. Identity fields are filled by the program,
-  duplicates and stale requests are refused, and a request is consumed atomically. A knowledge correction
-  (path + concrete reason + full corrected content) becomes a candidate with its own native approval; the
-  approval writes exactly that file and grants no write scope.
-- Every tool call is classified before it can touch the worktree; unknown tools are treated as writes.
-- An approved write is an approved capability: a shell tool admitted during implementation can still perform
-  external effects on its own (for example a direct `git push`). "One PR, opened by finish" is enforced on the
-  finish path, not on every admitted shell command.
-- Subagent spawning (`task`) stays denied for the whole run; isolation for review and cold reading comes from
-  the plugin's own helper sessions instead.
-- Helpers (cold reader, review) run in separate sessions with no ambient MCP, and the cold reader gets no
-  tools at all.
-
-## Before the first run in a project
-
-Two one-time steps, in this order.
-
-1. **Domain docs and tracker layout** — upstream `setup-matt-pocock-skills` scaffolds `GLOSSARY.md`,
-   `docs/adr/`, `docs/agents/domain.md` and the issue-tracker choice. Skipping it is fine: the glossary is created
-   lazily by `domain-modeling` once a term is actually settled. `GLOSSARY.md` and ADRs are what make decisions
-   readable after a lost conversation, and the delivery reviewer now receives both in its prompt.
-2. **Flow defaults** — this plugin refuses to guess, so record the project's own values once:
-
-```json
-{
-  "git": { "remote": "origin", "startRef": "origin/main", "prBase": "main", "worktreeRoot": "../<repo>-worktrees" },
-  "github": { "host": "github.com", "repository": "owner/repo" },
-  "linear": { "workspaceId": "...", "teamId": "...",
-              "statusMapping": { "inProgress": "In Dev", "inReview": "In QA", "done": "Done" } },
-  "models": { "author": "provider/model", "helper": "provider/model", "reviewer": "provider/model" },
-  "knowledge": { "entryPaths": ["GLOSSARY.md", "docs/adr"] }
-}
-```
-
-Written to `<git-common-dir>/omp-feat-flow/project.json` through `saveProject`; `/feat-flow-start` refuses a
-project without it, and names the missing defaults instead of assuming `origin/staging`.
-
-## Methods
-
-The flow binds methodology skills from `mattpocock/skills` by name; it never vendors them.
-
-- **Core, blocking:** `grilling`, `tdd`, `code-review`. A missing core method refuses `/feat-flow-start`; a locally
-  modified copy is preserved and simply not auto-updated.
-- **Conditional, never blocking:** `research`, `prototype`, `codebase-design`, `to-spec`, `to-tickets`, `wizard`,
-  `wayfinder`, `diagnosing-bugs`, `to-questionnaire`, and since the 2026-11 audit also `domain-modeling` and `retro`.
-- `domain-modeling` is what keeps grilling's decisions durable for humans: it writes `GLOSSARY.md` and
-  `docs/adr/` inline, so a decision survives a lost conversation even when the run state also holds it.
-- `retro` is the method behind knowledge maintenance: it looks for navigation pointers, missing mechanical checks,
-  coding standards for the reviewer, `AGENTS.md` bloat, tool economy, no-ops and information access. Mechanical
-  violations become deterministic checks; only genuine judgement calls become prose rules.
-- **Alignment entry is `grill-with-docs`**, per upstream's own router: it runs `grilling` and writes what it
-  learns into `GLOSSARY.md` / `docs/adr/` in the same pass. A run's alignment stage is expected to use it, so
-  decisions exist for humans even when the conversation is gone.
-- **Maintenance method is `retro`**: the end-of-run loop over navigation pointers, missing mechanical checks,
-  reviewer standards, steering-file bloat, tooling and information access. Mechanical mistakes become deterministic
-  checks; only judgement calls become prose. It is human-invoked, not an automatic post-delivery step.
-
-## Prerequisites
-
-- oh-my-pi 19.x, Bun ≥ 1.4.4.
-- Git with a remote; the run creates its worktree from the configured base (`origin/staging` by default).
-- The core methods (`grilling`, `tdd`, `code-review`) installed from a known source. A missing or modified
-  core blocks `/feat-flow-start`; a locally modified copy is preserved and simply not auto-updated.
-- The project must record its defaults (`git.remote`, `git.startRef`, `git.prBase`, `git.worktreeRoot`, the GitHub
-  repository and the Linear team plus status mapping). `/feat-flow-start` refuses a project without them rather
-  than assuming `origin/staging`.
-- GitHub uses the `gh` CLI's existing authentication; Linear uses a GraphQL key from `LINEAR_API_KEY` or the
-  developer's `omp-linear-api-key` keychain item. Delivery also validates the exact minted MCP tool name that
-  was captured at startup and refuses to substitute a different connection.
-
-## Verified behaviour and known limits
-
-Verified with real services in this repository: real GitHub push and a single PR against a disposable
-private repository, a real Linear backwrite that applied on the server while its receipt was lost and was
-then settled by reading the exact issue back, native install of release A, upgrade to B reporting `stale`
-while A kept running, and a real restart loading B.
-
-Known limits, stated rather than hidden:
-
-- Binding validation is name-level. The public extension API exposes only the active tool names, so a
-  different server that minted the same name is indistinguishable; viewer, workspace and team identity
-  cannot be checked from an extension.
-- The Linear leg of the recorded delivery campaign ran against the real Linear server through the
-  developer's existing authorized connection, not through the plugin's own process.
-- Recovery after compaction, a fresh process, a failed material read and `new_session` is implemented and
-  live-tested over the native RPC host. A real TUI `/clear` is live-tested as well: the next action demands a
-  native re-authorization. Manual compaction typed inside the TUI is covered by a terminal-UI case that requires
-  a configured model and real material.
-- The kernel's delivery admission checks the worktree and integration base; HEAD and digest changes are
-  caught by the delivery identity check itself, which refuses with a named stale proof.
-- An interrupted sync is reconciled from observed Git state: a rebase still in progress or foreign changes block
-  loudly; a clean worktree whose HEAD sits on top of the fetched base is settled as applied, and one still on the
-  old base as not applied. Only a HEAD that descends from neither stays blocked for a human.
-- cmux integration is opt-in (`OMP_FEAT_FLOW_CMUX=1`). Without cmux the flow reports the real continuation
-  command instead of claiming a switch. The owned workspace id is persisted in the run, so a later session can
-  still close it; only a close that cmux itself confirms is reported as done.
+- **Two Human Gates + Autonomous Execution**:
+  - **Align (non-gate)**: Read-only exploration (`scout` allowed in both flat and batch `tasks[]` forms) + `ask` rounds + `knowledge` diff proposals for `GLOSSARY.md` / ADRs. Small-tier fixes may submit `plan` (or `boundaries` + `plan`) concisely in one call; Medium/Large converge 5 boundaries then submit inline `plan` + `signals` + `alignmentDoc` (no temp JSON files needed).
+  - **Plan Gate (Gate 1)**: Host builds offline `tech-design.html` (showing this run's exact tier `small|medium|large`, scrollable Workflow Map & Placement SVGs, Security/Performance review flags + triggers, change surface, and decision ledger) and **auto-opens it in the browser once generated** in interactive sessions. Fixed approval packets are validated deterministically by the host; calibrated JSON cold-read runs once on variable model-authored content (`AlignmentReadModel` for Medium/Large, knowledge diff for Knowledge Gate). Gate 1 `ui.formDialog` lets the human toggle Security/Performance audits ON/OFF, optionally enable a **Mid-Implementation Checkpoint** for Large/multi-slice/uncertain-seam runs, or (for `small` tier with `declaredFiles`) opt into bounded `autoDeliver` (re-verified post-sync on final `HEAD` before delivery).
+  - **Implement `k/N` (non-gate + optional Mid-Checkpoint & `plan.amend`)**: Serial TDD slices with `realpath` worktree containment (`scout` subagents remain available during implementation to preserve main context). Marking a slice `done` requires host-verified clean worktree, sequential order, new commit advancing past previous slices on `base..HEAD`, and an observed passing verification command (`bash` exit 0, or `no-tests:` only when the repo has no tests). Mid-flight discoveries can submit `plan.amend` (preserving completed slices verbatim & staging the delta atomically behind human approval; original `approvedScope` stays intact if rejected).
+  - **Context Budget & Zero-Friction Continuity**: `ctx.getContextUsage()` returns a model-visible `45%` between-slice advisory in `feat_flow_request` output and latches `FINALIZING_SLICE` / `WRAP_UP` at `60%`. Same-process `/clear`, `compact`, and clean local sessions entering the worktree (`cleanRelease: true`, 0 unsettled ops, intact digests/materials) preserve or auto-inherit approved implementation authority regardless of `sessionId`, re-mint durable `pendingGate` tokens across restarts, and inject a full **Recovery Brief** (including `initialTask` and approved architecture/contracts) via `before_agent_start`. Crashes or unsettled operations stay strictly fail-closed.
+  - **Delivery Gate (Gate 2) & Optional Retro**: Resumable per-step delivery ledger (`push` -> `pr` -> `linearState` -> `linearComment`) with durably pinned `expectedRemoteTip`, safe `returnToImplementation` on pre-effect review reject, and post-delivery prompt to optionally run Retro or cleanly persist state before closing an owned cmux workspace.
 
 ## Development
 
 ```bash
 npm run typecheck
-npm test                 # local cases only, no inference
+npm test                 # 116 local tests across 23 files
 npm run build:runtime    # writes runtime/index.mjs and runtime/release.json
 ```
-
-The committed `runtime/` must match the source: the release id fingerprints sorted sources, static
-resources, the build script, TypeScript config, the lockfile and tool identities, and excludes generated
-output, timestamps and absolute paths. CI rebuilds into a temporary tree and compares bytes, fingerprint
-and version; it never commits.
-
-Live cases (`npm run test:live -- --campaign <id> [--case <name>]`) require an explicit campaign id, an
-LLM proxy credential and a metered budget; they are never part of `npm test`.

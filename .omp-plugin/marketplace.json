@@ -2,7 +2,7 @@
   "name": "darian-omp-plugins",
   "owner": { "name": "darian-deng" },
   "plugins": [
-    { "name": "omp-feat-flow", "source": "./plugins/omp-feat-flow", "version": "0.1.0",
+    { "name": "omp-feat-flow", "source": "./plugins/omp-feat-flow", "version": "0.2.0",
       "description": "Requirement delivery flow: one owned run per requirement worktree." }
   ]
 }

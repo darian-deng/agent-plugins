@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "version": "0.1.0",
-  "buildId": "6d96c825149979606a512ab4eac717c72461f2510e4155bad8bfe80a5f210cf0",
-  "bundleBytes": 248884,
-  "bundleSha256": "854624d0f99caf6387d16fbd1d3714ab7d7e46054f9d96b049c63880b7838e80",
+  "version": "0.2.0",
+  "buildId": "bf0fdc4f39c27ba1ed8f03be4cda277e656a30c221429574e8d2bf6f8cd5921b",
+  "bundleBytes": 522899,
+  "bundleSha256": "cd8577d7f264740dc20d2104018ad31be981f7e571ea3978e00dfcee2fa3481c",
   "tools": {
     "esbuild": "0.25.12",
     "bun": "1.4.4",
@@ -15,6 +15,8 @@
     "request-outbox",
     "workspace",
     "sync",
-    "delivery"
+    "delivery",
+    "onboarding",
+    "tech-design"
   ]
 }

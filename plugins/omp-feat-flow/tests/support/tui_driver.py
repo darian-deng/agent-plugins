@@ -1,5 +1,5 @@
 """Drive the real native TUI through a PTY and return the raw screen transcript."""
-import argparse, json, os, pty, re, select, signal, subprocess, sys, time
+import argparse, json, os, pty, re, select, shutil, signal, subprocess, sys, time
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -18,7 +18,7 @@ def main() -> int:
     env.update(json.loads(args.env))
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        ["/Users/plaud/.bun/bin/bun", os.path.join(args.cwd, "node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"),
+        [shutil.which("bun") or os.path.expanduser("~/.bun/bin/bun"), os.path.join(args.cwd, "node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js"),
          "--no-session"] + (["--model", args.model] if args.model else []),
         stdin=slave, stdout=slave, stderr=slave, env=env, cwd=args.workdir or args.cwd, close_fds=True)
     os.close(slave)

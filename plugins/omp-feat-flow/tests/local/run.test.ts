@@ -169,27 +169,25 @@ test("runs retain independent project snapshots after shared defaults change", a
   const { readProject, saveProject } = await import("../../src/run");
   const defaults = {
     git: { remote: "origin", startRef: "main", prBase: "main", worktreeRoot: join(fixture.root, "features") },
-    github: { host: "github.com", repository: "fixture/owned" },
-    linear: { workspaceId: "fixture-workspace", teamId: "fixture-team",
-      statusMapping: { inProgress: "fixture-started", inReview: "fixture-review", done: "fixture-done" } },
-    models: { author: "fixture/author", helper: "fixture/helper", reviewer: "fixture/reviewer" },
+    github: { repository: "fixture/owned" },
+    linear: { mode: "required" as const, teamId: "fixture-team", reviewState: "fixture-review" },
     knowledge: { entryPaths: ["CLAUDE.md", ".claude/rules", ".claude/skills"] },
   };
   const first = await saveProject(repoA.commonDir, defaults, 0);
   const ctxA = { ...context(repoA, "defaults-a", "first"), project: first };
   const a = await openRun(ctxA); kernels.push(a);
   await a.apply({ kind: "task", task: "work on A" }, ctxA.binding);
-  const changed = { ...defaults, models: { ...defaults.models, reviewer: "fixture/new-reviewer" } };
+  const changed = { ...defaults, linear: { ...defaults.linear, reviewState: "In QA" } };
   const second = await saveProject(repoA.commonDir, changed, first.revision);
   const repoB = await prepare({ repo: fixture.source, remote: "origin", startRef: "main", prBase: "main",
     runId: "defaults-b", branch: "feat/defaults-b", worktree: join(fixture.root, "defaults-b") });
   const ctxB = { ...context(repoB, "defaults-b", "second"), project: second };
   const b = await openRun(ctxB); kernels.push(b);
   await b.apply({ kind: "task", task: "work on B" }, ctxB.binding);
-  expect(a.inspect()).toMatchObject({ currentTask: "work on A", project: { defaults } });
-  expect(b.inspect()).toMatchObject({ currentTask: "work on B", project: { defaults: changed } });
+  expect(a.inspect()).toMatchObject({ currentTask: "work on A", project: { config: { linear: { reviewState: "fixture-review" } } } });
+  expect(b.inspect()).toMatchObject({ currentTask: "work on B", project: { config: { linear: { reviewState: "In QA" } } } });
   await expect(saveProject(repoA.commonDir, defaults, first.revision)).rejects.toBeInstanceOf(Error);
-  expect(readProject(repoA.commonDir)?.defaults.models.reviewer).toBe("fixture/new-reviewer");
+  expect(readProject(repoA.commonDir)?.config.linear?.reviewState).toBe("In QA");
 });
 
 test("recovery resumes only an unstarted operation after a real owner crash", async () => {
@@ -431,23 +429,39 @@ test("a proposed candidate is reviewable but never transitions on its own", asyn
   expect(reopened.inspect()).toMatchObject({ readiness: "blocked", waitingReason: "owner-recovery", approvedScope: null });
 });
 
-test("changing the candidate makes a previous approval stale", async () => {
+test("propose during implementation is rejected; plan.amend closes writes until re-approved", async () => {
   const fixture = await gitFixture(); fixtures.push(fixture);
   const repo = await prepare({ repo: fixture.source, remote: "origin", startRef: "main", prBase: "main",
     runId: "stale", branch: "feat/stale", worktree: join(fixture.root, "stale") });
   const ctx = context(repo, "stale", "owner");
   const kernel = await RunKernel.create(ctx); kernels.push(kernel);
   await kernel.apply({ kind: "request.submit", requestId: "call-1", expectedRevision: kernel.inspect().revision,
-    intent: { kind: "propose", content: "First design.", scope: "fixture only" } }, ctx.binding);
+    intent: {
+      kind: "plan",
+      scope: "fixture only",
+      summary: "First design.",
+      profile: (await import("../../src/profile")).deriveRequirementProfile({
+        signals: { expectedFiles: 1, distinctModules: 1, riskFlags: [], externalEffects: false, estimatedSlices: 1 },
+        declaredFiles: ["a.txt"],
+      }),
+      plan: { activities: [], slices: [{ id: "s1", behavior: "first", test: "t1", dependsOn: [] }], invariant: "one failing behavioral slice, then minimal green, then review; no parallel writers" },
+    } }, ctx.binding);
   const first = kernel.inspect().candidate;
   if (!first) throw new Error("No candidate was stored.");
   await kernel.apply({ kind: "approve", source: "native-ui", approved: true, runId: ctx.runId,
     digest: first.digest, candidateRevision: first.revision, ownerEpoch: kernel.inspect().ownerEpoch }, ctx.binding);
   expect(kernel.admit({ toolCallId: "write-1", effect: "write" }, ctx.binding).allow).toBe(true);
+  await expect(kernel.apply({ kind: "request.submit", requestId: "call-bad", expectedRevision: kernel.inspect().revision,
+    intent: { kind: "propose", content: "Second design.", scope: "fixture only" } }, ctx.binding)).rejects.toThrow(/alignment/i);
   await kernel.apply({ kind: "request.submit", requestId: "call-2", expectedRevision: kernel.inspect().revision,
-    intent: { kind: "propose", content: "Second design.", scope: "fixture only" } }, ctx.binding);
-  expect(kernel.inspect()).toMatchObject({ phase: "alignment", approvedScope: null });
-  expect(kernel.admit({ toolCallId: "write-2", effect: "write" }, ctx.binding)).toMatchObject({ allow: false, reason: "scope-not-approved" });
+    intent: {
+      kind: "plan.amend",
+      scope: "fixture only",
+      summary: "Second design.",
+      plan: { activities: [], slices: [{ id: "s1", behavior: "second", test: "t1", dependsOn: [] }], invariant: "one failing behavioral slice, then minimal green, then review; no parallel writers" },
+    } }, ctx.binding);
+  expect(kernel.inspect().gateToken?.kind).toBe("amendment-approval");
+  expect(kernel.admit({ toolCallId: "write-2", effect: "write" }, ctx.binding)).toMatchObject({ allow: false, reason: "gate-pending" });
 });
 
 test("boundaries persist, and a plan is refused while any boundary is open", async () => {
@@ -456,7 +470,7 @@ test("boundaries persist, and a plan is refused while any boundary is open", asy
     runId: "grill", branch: "feat/grill", worktree: join(fixture.root, "grill") });
   const ctx = context(repo, "grill", "owner");
   const kernel = await RunKernel.create(ctx); kernels.push(kernel);
-  const plan = { activities: [], slices: [{ id: "s1", behavior: "a", test: "ta", dependsOn: [] }], invariant: "serial" };
+  const plan = { activities: [], slices: [{ id: "s1", behavior: "a", test: "ta", dependsOn: [] }], invariant: "one failing behavioral slice, then minimal green, then review; no parallel writers" };
   await kernel.apply({ kind: "request.submit", requestId: "b1", expectedRevision: kernel.inspect().revision,
     intent: { kind: "boundaries", decided: [{ category: "non-goals", answer: "No new table." }], open: ["business-boundary", "error-path"] } }, ctx.binding);
   expect(kernel.inspect()).toMatchObject({ grilling: { open: ["business-boundary", "error-path"] }, plan: null, approvedScope: null });
@@ -500,11 +514,11 @@ test("a recorded proof is replaced by name and survives an approval but not a sy
 
 test("an unsupported run schema is refused with a truthful message", async () => {
 	const file = join(await mkdtemp(join(tmpdir(), "feat-state-")), "state.json");
-	await writeFile(file, JSON.stringify({ schemaVersion: 2, runId: "x" }) + "\n");
+	await writeFile(file, JSON.stringify({ schemaVersion: 3, runId: "x" }) + "\n");
 	expect(() => readRunState(file)).toThrow(RunStateSchemaError);
-	expect(() => readRunState(file)).toThrow("unsupported schemaVersion 2");
-	await writeFile(file, JSON.stringify({ schemaVersion: 1 }) + "\n");
-	// Schema 1 with missing fields is a different failure, and it must not be reported as a version problem.
+	expect(() => readRunState(file)).toThrow("unsupported schemaVersion 3");
+	await writeFile(file, JSON.stringify({ schemaVersion: 2 }) + "\n");
+	// Schema 2 with missing fields is a different failure, and it must not be reported as a version problem.
 	expect(() => readRunState(file)).toThrow();
 	expect(() => readRunState(join(file, "..", "absent.json"))).not.toThrow();
 });
@@ -562,4 +576,30 @@ test("a replayed boundaries request after an unrelated request does not clear th
 	await submit({ kind: "task", task: "implement the seam" }, "t1");
 	await expect(submit(boundaries, "b2")).rejects.toThrow(/already consumed/);
 	expect(kernel.inspect().grilling?.decided).toHaveLength(1);
+});
+
+test("plan validation rejects short invariant, parallel writers, and post-approval mutation", async () => {
+	const fixture = await gitFixture(); fixtures.push(fixture);
+	const repo = await prepare({ repo: fixture.source, remote: "origin", startRef: "main", prBase: "main",
+		runId: "plan-guard", branch: "feat/plan-guard", worktree: join(fixture.root, "plan-guard") });
+	const ctx = context(repo, "plan-guard", "owner");
+	const kernel = await openRun(ctx); kernels.push(kernel);
+	const submit = (intent: unknown, id: string) => kernel.apply({ kind: "request.submit", requestId: id,
+		expectedRevision: kernel.inspect().revision, intent: intent as never }, ctx.binding);
+	await submit({ kind: "boundaries", decided: [{ category: "goals", answer: "Ship." }, { category: "non-goals", answer: "None." },
+		{ category: "business-boundary", answer: "Desk." }, { category: "error-path", answer: "Fail." }, { category: "acceptance", answer: "Green." }], open: [] }, "b1");
+	await expect(submit({ kind: "plan", plan: { activities: [], slices: [{ id: "s1", behavior: "a", test: "ta", dependsOn: [] }], invariant: "short" } }, "p-short"))
+		.rejects.toThrow(/one-line invariant/);
+	await expect(submit({ kind: "plan", plan: { activities: [], slices: [
+		{ id: "s1", behavior: "a", test: "ta", dependsOn: [] },
+		{ id: "s2", behavior: "b", test: "tb", dependsOn: [] },
+	], invariant: "one failing behavioral slice, then minimal green" } }, "p-parallel")).rejects.toThrow(/parallel writers/);
+	await submit({ kind: "plan", plan: { activities: [], slices: [{ id: "s1", behavior: "a", test: "ta", dependsOn: [] }],
+		invariant: "one failing behavioral slice, then minimal green" } }, "p-ok");
+	await submit({ kind: "propose", content: "Change", scope: "a" }, "prop");
+	const candidate = kernel.inspect().candidate!;
+	await kernel.apply({ kind: "approve", source: "native-ui", approved: true, runId: "plan-guard",
+		digest: candidate.digest, candidateRevision: candidate.revision, ownerEpoch: kernel.inspect().ownerEpoch }, ctx.binding);
+	await expect(submit({ kind: "plan", plan: { activities: [], slices: [{ id: "s2", behavior: "b", test: "tb", dependsOn: [] }],
+		invariant: "one failing behavioral slice, then minimal green" } }, "p-late")).rejects.toThrow(/unapproved/);
 });

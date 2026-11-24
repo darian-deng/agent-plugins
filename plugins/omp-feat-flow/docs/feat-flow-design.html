@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>omp-feat-flow v0.2.0 — 零基础开发者实战指南</title>
+<style>
+  :root {
+    --fg:#1a1d23; --muted:#6b7280; --border:#e5e7eb; --surface:#f7f8fa; --card:#ffffff;
+    --accent:#2563eb; --success:#059669; --warning:#d97706; --error:#dc2626; --c5:#7c3aed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e5e7eb; --muted:#9ca3af; --border:#2d3138; --surface:#111318; --card:#181b21; }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; color:var(--fg);
+         background:var(--surface); line-height:1.72; padding:40px 20px; }
+  .wrap { max-width:980px; margin:0 auto; }
+  h1 { font-size:28px; margin-bottom:8px; letter-spacing:-0.01em; }
+  .sub { color:var(--muted); font-size:15px; margin-bottom:22px; }
+  .intro { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--accent);
+           border-radius:10px; padding:18px 22px; margin-bottom:22px; font-size:14.5px; }
+  .intro p + p { margin-top:8px; }
+  section { background:var(--card); border:1px solid var(--border); border-radius:12px;
+            padding:26px 30px; margin-bottom:20px; }
+  @media (max-width:640px){ section{padding:20px} }
+  h2 { font-size:18.5px; margin-bottom:14px; display:flex; align-items:center; gap:10px; }
+  h2 .n { display:inline-flex; min-width:26px; height:26px; border-radius:50%; background:var(--accent);
+          color:#fff; font-size:13px; font-weight:600; align-items:center; justify-content:center; flex-shrink:0; padding:0 6px; }
+  h2 .n.alt { background:var(--c5); }
+  h3 { font-size:15px; margin:18px 0 8px; }
+  p { margin-bottom:10px; font-size:14.5px; }
+  .lead { font-size:15.5px; font-weight:600; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:12px 0; }
+  th,td { border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:color-mix(in srgb, var(--accent) 8%, transparent); font-weight:600; }
+  code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:color-mix(in srgb,var(--accent) 10%,transparent);
+         padding:1px 5px; border-radius:4px; }
+  pre { font-family:ui-monospace,Menlo,monospace; font-size:12px; background:var(--surface);
+        border:1px solid var(--border); border-radius:8px; padding:12px 14px; overflow-x:auto; margin:10px 0; line-height:1.55; }
+  .toast { display:block; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--muted);
+           border-left:3px solid var(--accent); padding:8px 12px; margin:8px 0; background:var(--surface);
+           border-radius:0 8px 8px 0; overflow-wrap:anywhere; }
+  .story { border:1px solid color-mix(in srgb,var(--c5) 35%,var(--border)); border-radius:10px;
+           padding:12px 16px; margin:12px 0; font-size:13.5px; background:color-mix(in srgb,var(--c5) 5%,transparent); }
+  .story b { color:var(--c5); }
+  .gate { border:1px solid color-mix(in srgb,var(--warning) 45%,var(--border)); border-radius:10px;
+          padding:12px 15px; margin:12px 0; font-size:13.5px; background:color-mix(in srgb,var(--warning) 5%,transparent); }
+  .gate b { color:var(--warning); }
+  .check { border:1px solid color-mix(in srgb,var(--success) 40%,var(--border)); border-radius:10px;
+           padding:12px 15px; margin:12px 0; font-size:13.5px; background:color-mix(in srgb,var(--success) 5%,transparent); }
+  .check b { color:var(--success); }
+  .fix { border:1px dashed color-mix(in srgb,var(--accent) 50%,var(--border)); border-radius:10px;
+         padding:10px 14px; margin:8px 0 12px; font-size:13px; background:color-mix(in srgb,var(--accent) 3%,transparent); }
+  .fix b { color:var(--accent); }
+  .warn { border:1px solid color-mix(in srgb,var(--error) 35%,var(--border)); border-radius:10px;
+          padding:11px 14px; margin:10px 0; font-size:13.5px; background:color-mix(in srgb,var(--error) 4%,transparent); }
+  .warn b { color:var(--error); }
+  .tag { display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:99px;
+         border:1px solid var(--border); color:var(--muted); margin:2px 4px 2px 0; }
+  .tag.a { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 40%,var(--border)); }
+  .tag.s { color:var(--success); border-color:color-mix(in srgb,var(--success) 40%,var(--border)); }
+  .tag.w { color:var(--warning); border-color:color-mix(in srgb,var(--warning) 40%,var(--border)); }
+  .card { border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin:10px 0; }
+  .card b { font-size:14px; }
+  .card p { font-size:13.5px; color:var(--muted); margin:6px 0 0; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
+  .route { font-size:13px; color:var(--c5); font-weight:600; margin-top:8px; }
+  ul.steps, ol.steps { padding-left:20px; margin:8px 0 10px; }
+  .steps li { margin-bottom:8px; font-size:14px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .toc { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .toc a { font-size:12.5px; text-decoration:none; color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border)); padding:3px 9px; border-radius:99px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>omp-feat-flow v0.2.0 — 零基础开发者实战指南</h1>
+<div class="sub">omp + 可选 cmux + Linear + GitHub PR · 按一个陌生开发者的真实 User Story 从头到尾展开</div>
+
+<div class="intro">
+  <p><b>如果你完全没听过 feat-flow，先记住它解决的三个痛点：</b>日常用 AI 写需求时，模型最容易犯三个毛病——① 需求边界还没问清就急着改代码；② 上下文一压缩或清屏（<code>/clear</code>）就忘掉先前拍板的边界、切片做到哪一片、甚至把旧代码推错分支；③ 没经过真正隔离的独立审查（和必要的安全/性能审计）就把半成品开成 PR。</p>
+  <p><b><code>omp-feat-flow</code> 的核心思路：</b>不靠「祈祷模型记住规则」，而是用一个落盘的确定性状态机（<code>RunKernel</code>）把<b>写权限、阶段流转、人类拍板点（Gate）与远端交付</b>全部收归程序管辖——模型只管探索、出方案和按切片写测试/代码，剩下的流程卡点由插件自动兜底。</p>
+  <p><b>怎么读这份指南：</b>第 <b>-1</b> 步先带你拆开盒子看清里面到底装了哪几样东西；第 <b>0～7</b> 步按真实 User Story 时间线走完「第一次配置 → 接单建树 → 对齐 → Gate 1 方案审查与批准 → 串行 TDD 实现 → 上下文满清屏/恢复 → Gate 2 审查交付 → 崩溃断网对账」；第 <b>A、B</b> 章深度拆解隔离架构与 <code>tech-design.html</code> 如何做到既全面又清晰；文末附命令速查与排障表。</p>
+  <div class="toc">
+    <a href="#s-minus1">-1 内部全景</a>
+    <a href="#s0">0 首次引导</a>
+    <a href="#s1">1 启动与查重</a>
+    <a href="#s2">2 需求对齐与分级</a>
+    <a href="#s3">3 Gate 1 方案评审</a>
+    <a href="#s4">4 实现与护栏</a>
+    <a href="#s5">5 满上下文与 /clear</a>
+    <a href="#s6">6 Gate 2 交付</a>
+    <a href="#s7">7 崩溃对账</a>
+    <a href="#ch-a">A 内部架构与磁盘布局</a>
+    <a href="#ch-b">B 方案 HTML 如何保质又易读</a>
+    <a href="#ref">命令与排障</a>
+  </div>
+</div>
+
+<!-- step -1 -->
+<section id="s-minus1">
+  <h2><span class="n">-1</span>先拆盒子：omp-feat-flow 内部到底有什么？</h2>
+  <p class="lead">在敲任何命令前，先花 1 分钟建立全景心智模型——插件内部由 5 个明确分工的部件协同工作：</p>
+  <table>
+    <tr><th>内部组件</th><th>它具体是什么（存在哪）</th><th>为什么需要它 / 给开发者什么体验</th></tr>
+    <tr>
+      <td><b>1. 私有内置方法包<br><code>MethodPack</code></b></td>
+      <td>随插件打包在 <code>resources/skills/</code> 下的 9 个策展方法（<code>grilling</code>、<code>tdd</code>、<code>code-review</code>、<code>domain-modeling</code>、<code>research</code>、<code>prototype</code>、<code>codebase-design</code>、<code>diagnosing-bugs</code>、<code>retro</code>），新建需求时按内容 SHA-256 快照进 <code>&lt;commonDir&gt;/omp-feat-flow/packs/&lt;digest&gt;/</code></td>
+      <td><b>零前置安装、零斜杠污染：</b>你装完插件就能直接用，不需要另装外部 skill 仓，你的 <code>/</code> 菜单里也绝不会多出一堆重复的 <code>/skill:grill-me</code> 命令；同时每个进行中的需求严格锁定创建时的 <code>methodDigest</code>，插件升级也不会半路篡改旧需求的规则。</td>
+    </tr>
+    <tr>
+      <td><b>2. 两层配置<br>（个人级 + 仓库级）</b></td>
+      <td>个人级：<code>~/.omp/agent/omp-feat-flow.json</code><br>仓库级：<code>&lt;git-common-dir&gt;/omp-feat-flow/project.json</code>（v2 无手算 digest）</td>
+      <td><b>零手写 JSON：</b>首次 <code>/feat-flow-start</code> 弹出原生表单引导填好，所有 worktree 自动共享同一份仓库配置；环境或凭据变化时会做漂移检测。</td>
+    </tr>
+    <tr>
+      <td><b>3. 状态机内核<br><code>RunKernel</code></b></td>
+      <td>每个需求对应一个独立 <b>run</b>，状态原子落盘在 <code>runs/&lt;runId&gt;/state.json</code> + 文件锁 <code>owner</code> + 绑定的 worktree 定位器 <code>&lt;worktreeGitDir&gt;/omp-feat-flow.json</code></td>
+      <td><b>流程位置永不丢失：</b>即便模型压缩上下文、你敲 <code>/clear</code> 或关掉终端明天再来，当前处于哪个阶段、批准了什么范围、做完哪几个切片、有没有挂起的远端操作，全以磁盘+真实 Git 为准。</td>
+    </tr>
+    <tr>
+      <td><b>4. 四个隔离 AI 角色</b></td>
+      <td><b>author</b>（当前主会话）、<b>scout</b>（只读代码库探路子代理）、<b>coldReader</b>（零工具冷读检验员）、<b>reviewer</b>（只读独立代码/安全/性能审计员）</td>
+      <td><b>分工制衡防自吹：</b>写代码的看不到审核提示词的宽容借口；冷读员与审查员每次都是全新干净的内存会话（关 MCP/LSP/扩展），只读提交物与完整 diff 补丁。</td>
+    </tr>
+    <tr>
+      <td><b>5. 两道人工闸与进度卡</b></td>
+      <td>Gate 1（方案批准 + 必选建单）、Gate 2（交付确认）+ 输入框上方 3 行实时 <code>aboveEditor</code> 状态卡</td>
+      <td><b>不用背流程和命令：</b>平时 AI 自动推进；只有到真正需要你拍板的 Gate 时才会停下来弹窗，进度条实时告诉你在哪一步、上下文占了多少、下一步干嘛。</td>
+    </tr>
+  </table>
+  <p class="muted">先看一眼你工作时输入框上方永远挂着的 3 行 <code>aboveEditor</code> 进度条长什么样：</p>
+  <pre>✓ 对齐 ── ✓ 方案 ── ◉ 实现 [2/3] ── ○ 交付 │ DESK-1234 │ medium │ ctx 38%
+当前切片 s2: 重试队列指数退避与幂等去重
+🤖 AI 正在自动串行推进切片[2/3]（无需操作；随时可发消息纠偏）</pre>
+</section>
+
+<!-- step 0 -->
+<section id="s0">
+  <h2><span class="n">0</span>首次初始化（User Story：新同事第一天装好插件）</h2>
+  <div class="story"><b>场景故事：</b>小王刚装好 <code>omp-feat-flow</code>，打开公司的 <code>my-app</code> 仓库输入 <code>/feat-flow-start</code>。因为是第一次用，他既没有建过个人配置，这个仓库也还没有接过 feat-flow。</div>
+  <div class="cols">
+    <div class="card">
+      <b>0.1 个人级一次性引导（每台机器只需 1 次）</b>
+      <p>插件弹出一个整洁的原生表单（<code>ui.formDialog</code>；若宿主不支持表单则自动降级为分步选择），小王只需在一个框里确认：<br>
+      ① <b>角色模型与 thinking effort：</b>分别为 <code>scout</code>（建议快模型+medium）、<code>coldReader</code>（建议快模型+medium）、<code>reviewer</code>（建议强推理模型+high）选好模型；<code>author</code> 默认「跟随当前 <code>/model</code>」，不强抢你在主窗口的临时切模；<br>
+      ② <b>Linear 凭据：</b>选启用后通过掩码输入框粘贴 Key，macOS 下写入 Keychain <code>omp-linear-api-key</code>（非 macOS 明确提示使用环境变量 <code>LINEAR_API_KEY</code> 持久化，绝不把 Key 存进明文 JSON），并自动拉取团队让你预选常用团队；<br>
+      ③ <b>环境探测与覆盖开关：</b>自动探测 <code>gh auth status</code> 与 <code>cmux</code> 可用性，确认是否显式允许本机全局 skills 覆盖私有方法包（默认关闭，防止被无关全局 skill 静默劫持）。<br>
+      <b>断点续填与漂移修复：</b>哪怕引导填到一半按 Esc 取消，已完成的步骤已落盘，下次重跑从断点接着填；日后某个模型下线或 Key 失效，再次启动时会主动拦截提示修复。</p>
+    </div>
+    <div class="card">
+      <b>0.2 仓库级一次性引导（每个仓库只需 1 次）</b>
+      <p>个人配置保存后，插件立刻对 <code>my-app</code> 发起单次仓库配置表单（存至共享 <code>&lt;git-common-dir&gt;/omp-feat-flow/project.json</code>，之后所有 worktree 通用）：<br>
+      ① 自动推断 <code>origin</code>、<code>owner/repo</code>（不再用假占位符糊弄，解析不出时要求手填合法路径）、本地 <code>prBase</code> 候选（如 <code>staging</code> / <code>main</code>，用本地 refs 零联网秒开）和 <code>worktreeRoot</code>（如 <code>../my-app-worktrees</code>）；<br>
+      ② 自动扫描仓库内已有域文档（<code>GLOSSARY.md</code>、<code>GLOSSARY-MAP.md</code>、<code>CODING_STANDARDS.md</code>、<code>docs/adr</code>、<code>.claude/rules</code> 等）作为独立审查的知识入口；<br>
+      ③ 选择 Linear 协作模式：<code>required</code>（默认：进实现前必须有单）、<code>optional</code>（允许跳过）或 <code>disabled</code>（纯 GitHub PR），以及交付回写状态（如 <code>In Review</code> / <code>In QA</code>）与建单采集字段（<code>project</code> / <code>milestone</code> / <code>labels</code> / <code>priority</code> / <code>cycle</code>）。<br>
+      <b>绝不静默降级：</b>若个人开启了 Linear 但当前离线或团队列表为空，插件会明确弹窗确认是否暂改纯 GitHub PR，不会悄悄把配置写成 disabled。</p>
+    </div>
+  </div>
+  <p class="muted">安装方法与升级重设：<code>omp plugin marketplace add darian-deng/agent-plugins &amp;&amp; omp plugin install omp-feat-flow</code>（升级后需重启 omp 进程才加载新包，<code>/reload-plugins</code> 不替换已加载代码）；随时跑 <code>/feat-flow-start config</code>（或在无参菜单选配置项）修改配置。</p>
+</section>
+
+<!-- step 1 -->
+<section id="s1">
+  <h2><span class="n">1</span>启动或找回需求：/feat-flow-start</h2>
+  <p class="lead">配置就绪后，小王不用记任何分支短名，直接在主仓库输入一句自然语言需求（如 <code>/feat-flow-start 登录超时后自动重试并展示错误提示</code>），或粘贴 Linear 单号/链接（<code>/feat-flow-start DESK-1234</code>），或直接敲 <code>/feat-flow-start</code> 从已有列表点选。</p>
+  <p>在真正创建分支前，插件会在仓级互斥锁（<code>provisioning.lock</code>）下执行<b>全仓查重</b>（按 <b>Linear 单号 / 已结算建单回执 → 需求摘要 / runId → 分支名 → 目标路径</b> 顺序扫描），并把你的原始需求描述（或从 Linear 拉取的标题与摘要）持久化写入 <code>state.initialTask</code>，确保新工作区第 1 轮自动接续你的目标：</p>
+  <table>
+    <tr><th>你的输入 / 当前所处位置</th><th>插件会怎么做</th><th>你看到的反馈</th></tr>
+    <tr>
+      <td><b>新需求（任意自然语言描述，或 Linear 单号 / 链接）</b></td>
+      <td>若带了 Linear 单号，先校验可读性与团队归属并拉取标题摘要；若为自然语言描述，宿主自动派生合法且冲突自动避让的内部标识符（如 <code>req-9a4f2c1b</code> 或 <code>fix-login-8c12a0</code>）与 <code>feat/&lt;id&gt;</code> 分支、固定起点私密 ref、worktree 目录，并<b>先落盘 <code>state.json</code>（<code>owner: null</code> + <code>initialTask</code>）与 locator</b>，然后按每需求互斥锁安全切出独立运行环境。</td>
+      <td>• 若开启 <code>cmux</code>：自动创建带人类可读标题与仓库指纹标记的 cmux workspace，并直接以引导语拉起 <code>omp</code> 自动开始对齐，父窗口绝不抢锁；<br>• 非 <code>cmux</code>：同样不在主仓库父窗口占锁，给出单引号安全转义命令：<span class="toast">run req-9a4f2c1b provisioned at ../my-app-worktrees/req-9a4f2c1b; continue with: cd '../my-app-worktrees/req-9a4f2c1b' &amp;&amp; omp</span></td>
+    </tr>
+    <tr>
+      <td><b>需求已存在（哪怕你现在人在主仓库或其他目录）</b></td>
+      <td>发现同 Linear 单或同 slug 的已有 run：在 <code>cmux</code> 跨窗口树里查找其工作区，找得到就直接 <code>workspace select</code> 切过去；若工作区被手动关过但 worktree 还在，自动重建工作区并持久化新 <code>workspaceId</code>。</td>
+      <td><span class="toast">需求 desk-1234 (DESK-1234 · implementation) 已存在于 .../desk-1234，已为你切换到对应 cmux 工作区。</span></td>
+    </tr>
+    <tr>
+      <td><b>已在需求 worktree 内部执行 <code>/feat-flow-start</code></b></td>
+      <td>认领该 run（支持带参数补绑 Linear 单）。若此前因崩溃留在阻塞态：尚未批准方案时自动 <code>restore</code>；已批准方案但上次异常退出则弹出一次接管确认。</td>
+      <td><span class="toast">resumed desk-1234; nothing was created.</span></td>
+    </tr>
+    <tr>
+      <td><b>已有另一个存活 <code>omp</code> 会话正占用此 run</b></td>
+      <td>文件锁 <code>owner</code> 被其他活跃进程持有，拒绝双写破坏状态。</td>
+      <td><span class="toast">This run has an active owner; inspect it without taking over.</span></td>
+    </tr>
+  </table>
+  <div class="check"><b>完全旁路保证（普通项目零干扰）</b><br>在没有初始化 run 的普通 Git 仓库或非 Git 目录中，不管是主会话还是派生子代理（<code>task</code> / <code>/tan</code>），<code>omp-feat-flow</code> 对全部工具（<code>write</code>、<code>edit</code>、<code>bash</code>、<code>task</code>、MCP 等）<b>100% 直接放行</b>。遇到极端情况需要临时跳过门禁时，可设置环境变量 <code>OMP_FEAT_FLOW_OFF=1</code>。</div>
+</section>
+
+<!-- step 2 -->
+<section id="s2">
+  <h2><span class="n">2</span>需求对齐阶段：只读探索、五类边界与自适应分级</h2>
+  <div class="story"><b>场景故事：</b>小王切进了新开的 <code>desk-1234</code> 工作区，进度条显示 <code>◉ 对齐 ── ○ 方案 ── ○ 实现 ── ○ 交付</code>。他直接和 AI 聊需求：“登录接口超时后现在会静默卡死，帮我加上 5 秒超时和可重试错误提示。”此时所有写代码工具都是<b>关闭状态</b>，AI 不会上来就乱改源码。</div>
+  <ul class="steps">
+    <li><b>只读探路 + <code>scout</code> 子代理放行：</b>AI 可以自由调用 <code>read</code>、<code>grep</code>、<code>glob</code>、<code>lsp</code> 只读查询（hover/definition/references/diagnostics 等），也可以派发<b>只读 <code>scout</code> 子代理</b>（同时兼容单次与批量 <code>tasks[]</code> 调用，自动使用你在引导里为 <code>scout</code> 配置的模型和 effort）大范围摸清相关模块，而不撑爆主会话上下文；任何非 <code>scout</code> 的写代码子代理都会被直接拦截。</li>
+    <li><b>五类边界追问（支持直接喂 PRD）：</b>
+      <p style="margin:6px 0;"><span class="tag a">goals 目标</span><span class="tag">non-goals 非目标</span><span class="tag">business-boundary 业务边界</span><span class="tag">error-path 错误路径</span><span class="tag s">acceptance 验收标准</span></p>
+      AI 基于仓库真实代码，用带推荐答案的提问帮小王拍板未决边界（若小王直接丢来一份带 <code>## Decisions</code> 的 PRD 文件路径 <code>prdPath</code>，插件会先读出已决条目，只问空白项）。
+    </li>
+    <li><b>顺手沉淀术语/架构决策（<code>knowledge</code> 通道）：</b>对话里如果明确了一项团队术语（<code>GLOSSARY.md</code>）或不可逆架构决定（<code>docs/adr/</code>），AI 通过 <code>feat_flow_request</code> 提交单文件知识提案，经冷读校验与小王点击确认后<b>只落盘那一个文档</b>，绝不顺带敞开代码写权。</li>
+    <li><b>按规模自适应提交方案（零临时 JSON 文件）：</b>AI 直接内联调用 <code>feat_flow_request</code> 提交 <code>plan</code>（含严格串行切片 <code>slices</code>、行为与测试描述、不变式 <code>invariant</code>）、必填的风险/规模画像 <code>signals</code>、<code>declaredFiles</code> 与结构化技术方案 <code>alignmentDoc</code>（不再允许写入临时 JSON 文件）：
+      <table>
+        <tr><th>宿主判定的需求等级</th><th>判定尺度</th><th>对齐与审批节奏差异</th></tr>
+        <tr><td><b>Small（快车道）</b></td><td>≤3 文件 · 0 风险标记 · ≤1 切片</td><td>保留 worktree 隔离与测试/CR；<b>允许单次内联直交 <code>plan</code></b>（宿主自动合成精简边界，或一次合交 <code>boundaries + plan</code>），跳过 LLM 冷读秒开 Gate 1，并支持人工在 Gate 1 勾选受限 <code>autoDeliver</code>。</td></tr>
+        <tr><td><b>Medium</b></td><td>≤10 文件 · ≤1 风险标记 · ≤3 切片</td><td>必须收敛全部 5 类边界 → 生成完整离线 <code>tech-design.html</code> → 后台自动触发全 7 核心节校准冷读 → Gate 1 与 Gate 2 双闸把关。</td></tr>
+        <tr><td><b>Large</b></td><td>&gt;10 文件或 ≥2 风险标记或 ≥4 切片或涉及 <code>db-schema</code> / <code>data-migration</code> / <code>payment</code></td><td>完整 5 类边界 + 完整 <code>tech-design.html</code> + 全 7 核心节校准冷读 + 批准后主动建议先 <code>/clear</code> + <b>Gate 1 可选开启「中段复核 Checkpoint Gate」与中途 <code>plan.amend</code> 调整剩余切片</b>。</td></tr>
+      </table>
+    </li>
+  </ul>
+</section>
+
+<!-- step 3 -->
+<section id="s3">
+  <h2><span class="n">3</span>Gate 1：HTML 技术方案评审、冷读校准与强约束建单</h2>
+  <div class="story"><b>场景故事：</b>方案刚提交，插件就在本机默认浏览器<b>自动为你打开了 <code>tech-design.html</code></b>（无需额外敲看图命令），同时 AI 总结 4 行要点并停下；对话进入空闲后，Gate 1 自动弹出原生表单（也可随时手动输入 <code>/feat-flow-approve</code>）。</div>
+  <ol class="steps">
+    <li><b>先看「本次需求专属工作流图」与安全/性能标识：</b>
+      浏览器自动弹出的 <code>tech-design.html</code> 第一屏就是由宿主按本次真实画像生成的 SVG 流程图与徽章（长流程支持横向平滑滚动）——小王一眼能看清：哪些节点自动跑、哪几步是 <code>HUMAN GATE</code>、以及 <b>Security Review: ON/OFF</b> 和 <b>Performance Review: ON/OFF</b> 为什么开或关。
+      <div class="check"><b>通用插件原则（不硬编码仓库私有路径）：</b>插件不会用僵硬的路径规则替你的团队乱猜；<code>signals.riskFlags</code>（<code>auth</code>、<code>crypto</code>、<code>secrets</code>、<code>untrusted-input</code>、<code>network-protocol</code>、<code>ipc</code>、<code>db-schema</code>、<code>data-migration</code>、<code>payment</code>、<code>lockfile-change</code>、<code>permissions</code>、<code>hot-path</code>、<code>memory-sensitive</code>）由模型在提交方案时必填并透明展示，而小王在 Gate 1 的原生 <code>ui.formDialog</code> 里可以直接做<b>人工覆写（强制开启 / 豁免关闭）</b>，提交后插件会立即重绘更新 <code>tech-design.html</code>。</div>
+    </li>
+    <li><b>前置校准冷读检验（仅对可变模型内容）：</b>
+      对于固定不变的宿主审批权限模板，宿主直接做确定性校验（零延迟）；对于 Medium / Large 的模型编写方案正文（<code>AlignmentReadModel</code>）及知识变更 diff，插件在后台派发零工具的 <code>coldReader</code> 会话跑一次严格 JSON 校准冷读（具体如何防漏防废话见 <a href="#ch-b">第 B 章</a>），未通过则拒绝进入确认框，明确指出哪一核心节缺失或冗余。
+    </li>
+    <li><b>Gate 1 原生表单决策（<code>ui.formDialog</code>）：</b>
+      在一个交互框里呈现摘要、范围、分级、安全/性能状态、切片清单与 HTML 路径，小王可选择：
+      <ul class="steps">
+        <li><b>批准进入实现</b>（默认流程：做完全部切片后经 Gate 2 人工确认再交付，2 个 Gate）；</li>
+        <li><b>（仅 Large / ≥4 切片 / 含不确定性活动时出现）执行节奏选择：</b>可保持全程直通 Gate 2，也可勾选<b>在指定中段切片完成后暂停一次 Mid-Checkpoint 复核</b>（含 <code>prototype</code>/<code>research</code> 活动时默认推荐在首片验证后即停下检查）；</li>
+        <li><b>（仅 Small 且填了精确 <code>declaredFiles</code> 时出现）批准并自动交付：</b>全由人工在 Gate 1 显式授予，且后续如果实改文件超出声明清单、或交付前变基改写了 <code>HEAD</code>，会自动吊销并退回人工 Gate 2；</li>
+        <li><b>重新打开 <code>tech-design.html</code> 查看流程图</b>、<b>单独覆写 Security / Performance 独立审计开关</b>，或选<b>暂不批准</b>继续在聊天里调整方案。</li>
+      </ul>
+    </li>
+    <li><b><code>linear.mode === "required"</code> 硬门禁建/绑单：</b>
+      小王如果刚才启动时用的是自然语言描述还没关联 Linear 单，在 Gate 1 真正解锁写权前，插件<b>必须</b>通过 <code>ui.formDialog</code> 引导现场新建（自动预填好你的原始需求标题、已决边界与切片清单，支持选填 <code>project</code>、<code>milestone</code>、<code>labels</code>、<code>priority</code>、<code>cycle</code>，并用 <code>originMarker</code> 幂等防重复建单）或绑定已有单号。未绑单绝不放开写权限！
+    </li>
+  </ol>
+</section>
+
+<!-- step 4 -->
+<section id="s4">
+  <h2><span class="n">4</span>实现期（非 Gate）：AI 自动串行 TDD 与宿主实测护栏</h2>
+  <div class="story"><b>场景故事：</b>Gate 1 一通过，进度条立刻变为 <code>✓ 对齐 ── ✓ 方案 ── ◉ 实现 [1/3] ── ○ 交付</code>。小王不需要一句一句催促「做下一个」，AI 自动按切片顺序推进：写红测 → 最小实现变绿 → 跑验证 → <code>git commit</code> → 报完成 → 自动进入切片 2。</div>
+  <ul class="steps">
+    <li><b>宿主亲自验票（不轻信口头汇报）：</b>AI 每完成一个切片调 <code>feat_flow_request({ sliceUpdate: { status: "done" } })</code> 时，插件后台强制检查四件事：
+      ① 工作区干净（<code>git status --porcelain</code> 无未提交文件）；
+      ② <code>HEAD</code> 严格位于当前基线之后、匹配传入 SHA 且<b>不与之前切片共用同一个提交</b>；
+      ③ 宿主在本次切片写编辑之后确实在 <code>tool_result</code> 里观测到过非平凡测试/构建/类型检查命令以 <code>exit 0</code> 通过（<code>git commit</code> / <code>echo test</code> 不算数；若仓库本身有 <code>tests/</code> 或 <code>package.json test</code> 脚本，禁止用 <code>no-tests:</code> 蒙混过关）；
+      ④ 若此前勾选了 Small 级 <code>autoDeliver</code>，顺带预检是否超出 <code>declaredFiles</code>。
+    </li>
+    <li><b>worktree 文件防火墙 + 命令行/MCP 护栏：</b>
+      <ul class="steps">
+        <li>所有 <code>write</code> / <code>edit</code> 以及 <code>knowledge</code> 写入都会先解析 <code>realpath</code>，哪怕通过 <code>../</code> 或符号链接指向 worktree 外部也会被立刻拦下（<code>path-outside-worktree</code>）；</li>
+        <li><code>bash</code> 放开用于本地测试、构建和 <code>git commit</code>，但命令解析器会自动跳过 <code>git -C .</code> / <code>-c</code> 等全局参数，精确拦截任何远端交付行为（<code>git push</code>、<code>gh pr create/merge/edit/close</code>、Linear GraphQL）；</li>
+        <li>只读查询类 MCP（<code>mcpReadOnlyHint === true</code>，如读 Linear 单、查 PostHog/Notion）正常放行，但会拦截交付类远端写 MCP（如 <code>mcp__linear_save_issue</code> / <code>mcp__linear_save_comment</code> / <code>mcp__linear_merge_diff</code>），确保所有对外交付收敛到 Gate 2。</li>
+      </ul>
+    </li>
+    <li><b>大型需求中途发现偏差怎么办？（中段复核 + 原子 <code>plan.amend</code> + 实现期 <code>scout</code>）：</b>
+      <ul class="steps">
+        <li><b>实现期继续使用 <code>scout</code>：</b>主会话在实现大型多模块需求时仍可派发只读 <code>scout</code> 子代理跨模块探路，避免把 60% 上下文全耗在读文件上；</li>
+        <li><b>中段复核 Gate（<code>checkpoint-review</code>）：</b>若 Gate 1 开启了中段复核，当指定切片标为 <code>done</code> 时，内核会自动挂起 <code>pendingGate</code> 锁住后续写权（即使重启也不会丢失该停顿），展示已完成切片提交、<code>git diff --stat</code> 与途中发现，由你拍板「继续剩余切片」或「停下来调整方案」；</li>
+        <li><b>原子改案与无损退回（<code>plan.amend</code>）：</b>若中途踩坑需要拆分/重排剩余切片，AI 提交 <code>plan.amend</code> 后宿主会强制校验「<b>已完成切片的 id/行为/测试/依赖必须原样保留在前缀并继承宿主 commitSha</b>」，把新方案暂存在独立的 <code>pendingAmendment</code> 并自动打开更新后的设计图——批准后原子切换并保留原有的安全/性能强开开关；若你点击退回，原 <code>approvedScope</code> 与原切片计划毫秒级无损恢复，绝不卡死。</li>
+      </ul>
+    </li>
+  </ul>
+</section>
+
+<!-- step 5 -->
+<section id="s5">
+  <h2><span class="n">5</span>上下文快满了怎么办？（45% / 60% / <code>/clear</code> / <code>compact</code> / 关窗续跑）</h2>
+  <div class="story"><b>场景故事：</b>大需求做到第 2 个切片一半时，模型调用了十几次 <code>read</code> 和 <code>bash</code>，上下文一路涨到 61%。小王以前最怕两件事：要么不清理导致后面模型失忆改坏代码，要么清屏后还得背一串恢复指令重新给 AI 讲一遍背景。v0.2.0 把这一步做成了完全无感接续：</div>
+  <table>
+    <tr><th>触发场景 / 阈值</th><th>插件自动做什么</th><th>开发者只需要做什么</th></tr>
+    <tr>
+      <td><b>切片之间上下文 ≥ <code>45%</code></b>（未到 60%）</td>
+      <td>每当一个切片刚标记 <code>done</code> 且后面还有待做切片时，不仅提示用户，还会把 <code>ADVISORY</code> <b>直接写进工具返回结果喂给模型</b>，促成在切片间隙主动 <code>checkpoint</code> 并清屏。</td>
+      <td>让 AI 存个 <code>checkpoint</code> 后敲 <code>/clear</code>，然后直接说「继续」。下次唤醒时 <b>Recovery Brief 会同时带回原始需求目标与 Gate 1 拍板的核心架构/接口契约/失败模式</b>，跨多轮 <code>/clear</code> 也不失忆。</td>
+    </tr>
+    <tr>
+      <td>在 <code>tool_result</code> 采样中立即将状态落盘锁定为 <b><code>FINALIZING_SLICE</code></b>（或非实现期 <code>WRAP_UP</code>）：<b>封锁新文件修改</b>，仅允许运行测试、执行本切片的 <code>git commit</code> 并提交 <code>checkpoint</code>（把当前进展、未决问题、真实 <code>gitHead</code> 写入 <code>handoff</code>）。若模型忘了存断点就想停下，<code>session_stop</code> 会拦截并催它补写一次。</td>
+      <td>看到顶部提示「✓ 断点已保存 · 随时敲 <code>/clear</code>」后，输入 <code>/clear</code>，然后像平常聊天一样打「<b>继续</b>」即可！<b>不需要任何额外恢复命令</b>。</td>
+    </tr>
+    <tr>
+      <td><b>直接 <code>/clear</code> 或自动 <code>compact</code></b></td>
+      <td>只要没有未结算的外部操作且材料摘要完整，同进程 <code>/clear</code> / <code>compact</code> <b>绝不吊销写权限</b>，仅原子递增 <code>contextEpoch</code> 并清除上下文锁。下一轮对话首条 <code>before_agent_start</code> 自动从磁盘和真实 Git（<code>git log</code>、脏文件、已决边界、切片 <code>[x]/[>]/[ ]</code> 与 <code>handoff</code>）重建一份权威 <b>Recovery Brief</b> 注入系统上下文（也在压缩钩子 <code>session.compacting</code> 同步注入）。</td>
+      <td>什么多余口令都不用背，直接接着发下一句需求或说「继续」。</td>
+    </tr>
+    <tr>
+      <td><b>正常退出后次日重开窗口<br><code>cd &lt;worktree&gt; &amp;&amp; omp</code></b></td>
+      <td>上次干净退出时内核核验 <code>readiness === "ready"</code>、0 未决操作、权限合法后写入 <code>cleanRelease: true</code>。这些 worktree 本就是为该需求专建的——哪怕新开窗口换了全新的 <code>sessionId</code>，只要互斥锁空闲且摘要校验完整，新会话自动继承已批准的实现写权（若退出前正停在 <code>pendingGate</code> 审批点，重开后会自动用新世代重铸门禁令牌继续锁住写权并弹窗，绝不丢失闸门）并首轮注入 Recovery Brief。</td>
+      <td>进入对应 worktree 启动 <code>omp</code> 直接继续工作（若发现上次未干净退出/崩溃或有未决操作，则会严格锁住并先要求对账/确认，绝不盲目放行）。</td>
+    </tr>
+  </table>
+  <div class="warn"><b>防洗白安全底线：</b>如果一个未获授权的陌生会话在阻塞态（<code>owner-recovery</code> / <code>owner-authorization-required</code>）打开 run 后正常退出，<code>dispose({ clean: true })</code> <b>绝不会</b>为它写入 <code>cleanRelease: true</code>，彻底杜绝通过「进门退出再进门」绕过人工授权。</div>
+</section>
+
+<!-- step 6 -->
+<section id="s6">
+  <h2><span class="n">6</span>Gate 2：独立代码/安全/性能审查与事务化幂等交付</h2>
+  <div class="story"><b>场景故事：</b>最后一个切片完成并干净提交后，AI 核验工作区干净并调用 <code>readyForDelivery</code>，Gate 2 确认框弹出（仅当 Small 级在 Gate 1 经人工勾选自动交付、且此刻终态 <code>HEAD</code> 经宿主二次复核干净、全切片完成、测试通过且改动 100% 落在 <code>declaredFiles</code> 内时才会直通交付）。</div>
+  <ol class="steps">
+    <li><b>准入硬核验与前置预检：</b>不管是弹出 Gate 2 确认还是开发者直接敲 <code>/feat-flow-finish</code>，插件首先校验：若有计划则<b>全部切片必须为 <code>done</code></b>、工作区必须干净、且前置条件（<code>github.repository</code>、<code>linear.mode === "required"</code> 的单号与凭据）完备——所有预检都在状态机切入 <code>delivery</code> <b>之前</b>完成，避免缺配置时把 run 卡死在不可编辑的交付态。</li>
+    <li><b>先 Sync 再封存 Diff 派审（含设计契约对照）：</b>先把最新远端 <code>prBase</code> 变基进来（若基线前进，旧基线上的审查 proof 会立刻失效；若启用了 <code>autoDeliver</code> 且变基改写了 <code>HEAD</code>，自动吊销直通并退回人工验证确认）。随后把完整差异封存到 <code>materials/review-&lt;head12&gt;.patch</code>，派发完全隔离的 <code>reviewer</code> 会话（注入经 <code>realpath</code> 校验 containment 后的项目词汇表、规范文档，<b>以及批准方案中的 Goals / Non-Goals / Contracts / Failure Modes 与完整变动文件清单</b>）执行严格 JSON 规范+规格双轴评审。若 Gate 1 开启了 <b>Security Review</b> 或 <b>Performance Review</b>，同步执行独立的阻塞级安全/性能审计。任何拒绝或格式违规均无损留在 <code>implementation</code> 阶段，修改提交后再重跑 <code>/feat-flow-finish</code> 即可。</li>
+    <li><b>锁定旧 Tip 的四步幂等交付事务：</b>进入 <code>delivery</code> 后，台账先持久钉死首次观测到的远端分支旧 tip（<code>expectedRemoteTip</code>），再按 <code>push → pr → linearState → linearComment</code> 分步落地回执（任一步持久化失败立即中止而不盲目推进下一外部副作用）：
+      <ul class="steps">
+        <li><b>开且仅开 1 个同仓 PR：</b>在证明 <code>remoteSha === HEAD</code> 后按同仓（<code>!isCrossRepository</code>）+ 分支 + <code>prBase</code> + <code>OPEN</code> 匹配现有 PR（免受 GitHub <code>headRefOid</code> 短暂索引延迟导致重复建 PR 的坑）；</li>
+        <li><b>回写 Linear（绝不踩坏人工描述）：</b>把单据流转至配置的 <code>reviewState</code>（如 <code>In Review</code> / <code>In QA</code>），并检查最近 50 条评论是否已有本 run 的精确标记，没有才<b>追加一条附带 PR 链接的幂等评论</b>——绝不覆盖人类编辑过的 <code>issue.description</code>！</li>
+      </ul>
+      <span class="toast">delivered desk-1234: PR #7511 (https://github.com/org/repo/pull/7511); Linear DESK-1234 In QA. PR, branch and worktree remain intact.</span>
+    </li>
+    <li><b>展示回执后的安全收尾：</b>先让你看到完整 PR URL 和 Linear 状态，再弹窗询问是否关闭本次 run 自建的 <code>cmux</code> 工作区（点关闭前先把 <code>workspace: null</code> 与 <code>cleanRelease</code> 落盘，防止关闭自身 PTY 导致状态写丢；你手动开的窗格绝不误关）。也可留着工作区跑一次 <code>retro</code> 把这次踩过的坑沉淀成团队 lint/规范，等 PR 合入后再自行删 worktree 和分支。</li>
+  </ol>
+</section>
+
+<!-- step 7 -->
+<section id="s7">
+  <h2><span class="n">7</span>断网、Rebase 冲突与崩溃对账（绝不重头来过）</h2>
+  <p class="lead">不管遇到中途掉网、Git 变基冲突还是电脑休眠断电，状态机靠外部真实状态自动对账接续：</p>
+  <div class="cols">
+    <div class="card">
+      <b>Alignment 期崩溃或 Linear 建单丢响应</b>
+      <p>• 未批准方案前异常中断：重新进入目录执行 <code>/feat-flow-start</code>，确认无未决操作后自动 <code>restore</code> 恢复；<br>
+      • Gate 1 创建 Linear 单时如果断网响应丢失导致 <code>linear-issue</code> 处于 <code>unknown</code>：下次执行 <code>/feat-flow-approve</code> 时会在准入检查<b>之前</b>优先按 <code>originMarker</code>（含已归档检索）查回单据并原子补绑，不会卡死闸门。</p>
+    </div>
+    <div class="card">
+      <b>Sync 变基冲突 / 断头台重启</b>
+      <p>若 <code>/feat-flow-sync</code> 遇冲突停在 <code>rebase-merge</code>：台账会保持 <code>git-sync</code> 为 <code>unknown</code>（锁住写入），哪怕你中途重启了 <code>omp</code>，<code>inspectRepository</code> 仍能从 <code>rebase-merge/head-name</code> 认出原本的 feature 分支，不会失去定位；待你手工解决冲突并 <code>git rebase --continue</code>（或 <code>--abort</code> 回退到保存的 <code>preSyncHead</code>）后，再跑 <code>/feat-flow-sync</code> 自动对照 Git 真实历史结算续跑。</p>
+    </div>
+  </div>
+  <div class="card">
+    <b>交付链路半途断网（例如 Push 成功但开 PR 或写 Linear 超时）</b>
+    <p>台账已持久化记录 <code>push</code> / <code>pr</code> / <code>linearState</code> / <code>linearComment</code> 的每步状态与 <code>expectedRemoteTip</code>：重跑 <code>/feat-flow-finish</code> 时会自动跳过重复 <code>sync</code>（避免改写已推送的 <code>HEAD</code>），命中已推送则不重推，命中已开好的同仓 OPEN PR 则直接复用，命中 Linear 幂等评论则不再重复回写；若整体已结算完成，重跑会直接返回幂等收据而不重复执行外部写。</p>
+  </div>
+</section>
+
+<!-- chapter A -->
+<section id="ch-a">
+  <h2><span class="n alt">A</span>内部架构、隔离模型与磁盘文件清单</h2>
+  <h3>1. 四个隔离角色的模型、工具面与安全边界</h3>
+  <table>
+    <tr><th>角色</th><th>模型与 Effort 来源</th><th>隔离方式</th><th>工具权限面</th></tr>
+    <tr>
+      <td><b>author</b>（主会话）</td>
+      <td>默认跟随宿主当前 <code>/model</code>（可在引导里固定模型+effort）</td>
+      <td>正常主会话（可交互、可看历史与 MCP）</td>
+      <td>读始终放行；写受 <code>RunKernel</code> 阶段/边界/<code>realpath</code> 防火墙与护栏控制；<code>task</code> 仅允许 <code>scout</code></td>
+    </tr>
+    <tr>
+      <td><b>scout</b>（探索子代理）</td>
+      <td>个人配置 <code>roles.scout</code>（<code>model:effort</code> 注入）</td>
+      <td><code>task</code> 只读子代理（经 <code>ctx.agent.kind === "sub"</code> 识别）</td>
+      <td>在受管 worktree 内强制只读（拦截一切写/嵌套 spawn）；在非 feat-flow 仓完全旁路</td>
+    </tr>
+    <tr>
+      <td><b>coldReader</b>（冷读员）</td>
+      <td>个人配置 <code>roles.coldReader</code>（校验 <code>assertDispatchModel</code>）</td>
+      <td>全新内存会话：关 MCP、关 LSP、关扩展与 contextFiles、用完销毁</td>
+      <td><b>零工具</b>（<code>[]</code>），只读待检文档的纯文本投影，防模型回退降级</td>
+    </tr>
+    <tr>
+      <td><b>reviewer</b>（独立/安全/性能审计员）</td>
+      <td>个人配置 <code>roles.reviewer</code>（完全信任用户选型，不弹同族警告）</td>
+      <td>同上全新隔离内存会话（支持自选强推理模型）</td>
+      <td>仅 <code>read</code> / <code>grep</code> / <code>glob</code>；只读已封存补丁与 containment 校验过的域文档</td>
+    </tr>
+  </table>
+
+  <h3>2. 真实磁盘目录结构（到底在哪落了什么文件）</h3>
+  <pre>~/.omp/agent/omp-feat-flow.json                 # 本机个人级配置（角色模型/effort、cmux 偏好、Linear 开关，绝不含密钥）
+&lt;git-common-dir&gt;/omp-feat-flow/
+  ├── project.json                                # 仓库级配置 v2（prBase、worktreeRoot、repository、linear、knowledge）
+  ├── provisioning.lock                           # 仓级建树互斥锁，彻底杜绝并发抢建/误删他人 ref
+  ├── packs/&lt;methodDigest&gt;/                       # 按内容寻址的私有方法包快照 + MANIFEST.json
+  └── runs/&lt;runId&gt;/
+        ├── state.json                            # RunKernel 状态机（含 v1 迁移备份 state.v1.bak.json）
+        ├── owner                                 # 进程级独占文件锁，防多终端同时写坏同一个 run
+        └── materials/
+              ├── &lt;candidateDigest&gt;.json          # 不可变方案候选封存物料
+              ├── alignment-&lt;digest12&gt;.json       # 结构化 AlignmentDocument + ReadModel 摘要
+              ├── tech-design-&lt;digest12&gt;.html     # 离线自包含技术方案评审 HTML
+              └── review-&lt;head12&gt;.patch         # 交付前封存供独立审查的完整 Git Diff
+&lt;worktreeGitDir&gt;/omp-feat-flow.json               # worktree 定位器（逐项绑定 runId/repoIdentity/branch/worktreeGitDir）</pre>
+</section>
+
+<!-- chapter B -->
+<section id="ch-b">
+  <h2><span class="n alt">B</span>揭秘：方案评审 HTML（<code>tech-design.html</code>）如何保障「全面、清晰、又易读」？</h2>
+  <p class="lead">AI 时代最危险的审批反模式，是 AI 在聊天里把复杂方案一笔带过，或者直接吐出几千行原始代码/废话让人类「盲签」。<code>omp-feat-flow</code> 通过五层确定性工程设计解决这一矛盾：</p>
+  <ol class="steps">
+    <li><b>单一结构化数据源 → 双投影分离（人看 HTML，冷读员只看纯文本投影）：</b>
+      <br>模型提交的不是一段自由发挥的 Markdown，而是受严格 Zod Schema 约束的结构化 <code>AlignmentDocument</code>（见 <code>src/profile.ts</code>）。宿主程序由此一次性生成两个受 <code>candidateDigest</code> 绑定的投影（见 <code>src/tech-design.ts</code>）：
+      <br>• <b>给人类看的 <code>tech-design.html</code>：</b>带高对比度徽章、离线内联 SVG 图表、差异表与折叠区块；
+      <br>• <b>给 <code>coldReader</code> 看的 <code>AlignmentReadModel</code>：</b>彻底剥离 HTML/CSS/SVG 语法噪音，按 <code>core</code>（核心）与 <code>appendix</code>（附录）整理成纯文本章节，让冷读员检验的是「信息自洽性」而不是在读 HTML 标签。
+    </li>
+    <li><b>首屏第一眼：宿主程序亲自画出「本次真实流程地图」，绝不让 AI 凭记忆编造：</b>
+      <br><code>tech-design.html</code> 的最顶部（TL;DR + 第 1 节 Workflow Map）<b>不由 AI 自由填写</b>，而是宿主根据实际 <code>RequirementProfile</code> 与 <code>project.json</code> 确定性绘制的 SVG 流程图与徽章——清清楚楚标明本次是 <code>SMALL / MEDIUM / LARGE</code>、哪些步骤 <code>AUTO</code> 自动跑、哪些是 <code>HUMAN GATE</code>、<code>Security Review</code> 与 <code>Performance Review</code> 各自是 <b>ON 还是 OFF</b> 及原因、以及是否启用了 Small 级 <code>Auto-Deliver</code>。人类签字前第一秒就能纠正「小改动误触高风险」或「高危改动漏了审计」。
+    </li>
+    <li><b>渐进式披露（核心决策默认全展开，庞杂明细收进附录折叠）：</b>
+      <br>遵循「不点开附录就能拍板核心决策」的信息分层原则：
+      <br>• <b>默认全展开的核心 7 节（<code>core</code>）：</b>① 30 秒对齐摘要（TL;DR + Problem）→ ② 本次专属工作流图 → ③ Goals &amp; Non-Goals → ④ 架构落位（含防穿盒避让弧线的 SVG 组件关系图 + 上下游流向与约束）→ ⑤ 机制与失败契约（含接口契约、失败模式与持久化/迁移影响）→ ⑥ 代码改动面清单（逐文件 <code>add / modify / delete</code>，没涉及的动作会明确生成 <code>(none)</code> 占位行，防 AI 悄悄省略）→ ⑦ 串行切片与验收方式；
+      <br>• <b><code>&lt;details&gt;</code> 默认折叠附录（<code>appendix</code>）：</b>长篇的「备选方案淘汰台账（Decision Ledger）」与「风险/假设明细」收进折叠栏，避免首屏视觉过载，需要深究时点开即看。
+    </li>
+    <li><b>零外部依赖离线可用（不用装 <code>mmdc</code> / 无外网脚本 / 无 XSS 风险）：</b>
+      <br>全部图表由宿主的 TypeScript 渲染器直接转义输出为原生内联 SVG（支持长标题自动换行、跨节点弧线避让箭头与横向滚动容器），不依赖 <code>mermaid-cli</code>、Chromium 或任何 CDN，在内网/离线环境生成即自动在默认浏览器毫秒级打开；同时与任何自动批准隔离——HTML 永远只是只读视图，最终拍板只能回到终端原生 <code>ui.formDialog</code>。
+    </li>
+    <li><b>反事实 + 消融实验驱动的「全 7 节逐字冷读门禁」：</b>
+      <br>为了防止冷读员变成「读两行就喊 PASS 的橡皮图章」，<code>src/questions.ts</code> 执行三道硬防线：
+      <br>• <b>防空洞糊弄（反事实MISSING）：</b>冷读员必须站在「没有对话历史、没有仓库工具的新入职开发者」视角，判定是否存在两种合理理解会导致截然不同的审批或实现结果；
+      <br>• <b>防长文注水（消融测试BLOAT）：</b>要求冷读员做消融论证——如果删掉某段引用后所有核心答案、风险与导航都不受影响，即判 <code>FAIL_BLOAT</code> 退回瘦身；
+      <br>• <b>宿主机逐字原文核验：</b>返回必须满足严格 JSON Schema，<b>必须同时覆盖全部 7 个核心 <code>sectionId</code></b>（<code>tldr</code>、<code>workflow</code>、<code>goals</code>、<code>placement</code>、<code>mechanism</code>、<code>change-surface</code>、<code>verification</code>），且每条回答引用的 <code>quote</code> 必须在对应章节原文中<b>逐字存在</b>，否则宿主直接报错拦截！
+    </li>
+  </ol>
+</section>
+
+<!-- reference card -->
+<section id="ref">
+  <h2><span class="n">·</span>命令速查与常见排障表</h2>
+  <table>
+    <tr><th>命令</th><th>常用参数</th><th>何时使用与效果</th></tr>
+    <tr><td><code>/feat-flow-start</code></td><td>任意需求描述 / Linear ID 或 URL / <code>config</code> / 空</td><td>日常唯一起手式：首次自动跑引导；老需求查重切入 worktree/cmux；新需求建树并带原始需求入场；传 <code>config</code> 随时修改个人或仓库配置</td></tr>
+    <tr><td><code>/feat-flow-approve</code></td><td>无</td><td>手动呼出 Gate 1 / Mid-Checkpoint / Plan Amendment / 知识变更审批（正常空闲时也会自动弹窗），触发冷读、安全/性能覆写与 Linear 建/绑单</td></tr>
+    <tr><td><code>/feat-flow-finish</code></td><td>无</td><td>触发 Gate 2 交付（切片/脏树校验 → sync → 独立审查/安全性能审计 → 幂等 push / PR / Linear 回写 → 安全收尾）</td></tr>
+    <tr><td><code>/feat-flow-sync</code></td><td>无</td><td>手动把最新 <code>prBase</code> 变基进当前分支，并对账修复中断的同步/rebase 冲突</td></tr>
+    <tr><td><code>/feat-flow-status</code></td><td>无</td><td>查看实时阶段、<code>readiness</code>、阻塞原因、基线/HEAD、proof 新鲜度与构建版本</td></tr>
+    <tr><td><code>/feat-flow-update</code></td><td>无</td><td>检查私有方法包完整性、本地覆盖状态与当前运行/已安装插件版本是否需要重启更新</td></tr>
+  </table>
+
+  <h3>遇到这些报错怎么办（速查排障）</h3>
+  <table>
+    <tr><th>现象 / 提示</th><th>原因与处理方式</th></tr>
+    <tr><td><code>This run has an active owner</code></td><td>另一个终端窗口正拿着这个 run 的锁；关掉那个窗口（或直接在那个窗口继续）即可。</td></tr>
+    <tr><td><code>Linear issue required before implementation</code></td><td>当前仓库配置了 <code>linear.mode === "required"</code> 且无单/无凭据；先用 <code>/feat-flow-start config user</code> 配好 Linear Key 或用 <code>/feat-flow-start DESK-xxx</code> 绑定已有单号。</td></tr>
+    <tr><td><code>Host did not observe a passing verification command</code></td><td>当前切片修改后还没观察到非平凡测试/构建命令成功；跑一遍真实的 <code>bun test</code> / <code>npm run typecheck</code> 后再提交切片完成。</td></tr>
+    <tr><td><code>remote tip moved concurrently ... refusing to overwrite</code></td><td>交付重试期间远端同分支被他人提交推进；先确认远端提交并跑 <code>/feat-flow-sync</code> / <code>git pull --rebase</code> 合并后再交付，绝不会盲目覆盖他人代码。</td></tr>
+  </table>
+</section>
+
+<footer>omp-feat-flow v0.2.0 · 严格对照最新源码与 116 项本地验证用例编写</footer>
+</div>
+</body>
+</html>

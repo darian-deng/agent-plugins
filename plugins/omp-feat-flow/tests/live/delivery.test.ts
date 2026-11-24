@@ -3,7 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureTools } from "../../src/binding";
 import { deliver, deliveryMarker, type DeliveryPorts } from "../../src/delivery";
 import type { Proof } from "../../src/evidence";
 import { git } from "../support/git-fixture";
@@ -16,7 +15,6 @@ setDefaultTimeout(180_000);
 const CASE = "delivery-partial-success";
 const args = parseLiveArgs();
 const EVIDENCE = new URL(`../../../../.superpowers/sdd/2026-11-18-omp-feat-flow/live/${args.campaign}/`, import.meta.url).pathname;
-const LINEAR_TOOLS = ["mcp__linear_get_issue", "mcp__linear_update_issue"];
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -105,7 +103,6 @@ test(`live ${CASE}: PR success followed by a lost Linear receipt repairs only th
 		{ ...identity, kind: "check", name: "typecheck", detail: "exit 0" },
 		{ ...identity, kind: "review", name: "independent", detail: "accept" },
 	];
-	const binding = { captured: captureTools(LINEAR_TOOLS), current: [...LINEAR_TOOLS], expect: { server: "linear", tool: "get_issue" } };
 
 	const marker = deliveryMarker(`live-${stamp}`);
 	const issue = async (_identifier?: string, expected = marker): Promise<{ identifier: string; state: string; hasMarker: boolean; description: string } | null> => {
@@ -130,7 +127,7 @@ test(`live ${CASE}: PR success followed by a lost Linear receipt repairs only th
 		},
 	};
 
-	const request = { binding, runId: `live-${stamp}`, worktree, remote: "origin", prBase: "staging", branch: "feat/delivery",
+	const request = { runId: `live-${stamp}`, worktree, remote: "origin", prBase: "staging", branch: "feat/delivery",
 		head, integrationBase: base, issue: identifier, reviewState: "In Dev", title: "omp-feat-flow live delivery",
 		proofs, current: identity };
 

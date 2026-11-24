@@ -1,5 +1,17 @@
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { CreateAgentSessionOptions, ModelRegistry, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { RoleEffort } from "./config";
+
+const THINKING_LEVEL_MAP: Record<RoleEffort, ConfiguredThinkingLevel> = {
+	off: ThinkingLevel.Off,
+	minimal: ThinkingLevel.Minimal,
+	low: ThinkingLevel.Low,
+	medium: ThinkingLevel.Medium,
+	high: ThinkingLevel.High,
+	xhigh: ThinkingLevel.XHigh,
+};
 
 /** The SDK entry points a helper needs; the extension passes `pi.pi`, tests pass the real module. */
 export interface HelperSdk {
@@ -15,7 +27,7 @@ export interface HelperSession {
 	dispose(): Promise<void> | void;
 }
 
-export type HelperKind = "cold-read" | "review";
+export type HelperKind = "cold-read" | "review" | "sec-perf-review";
 
 export interface HelperBinding {
 	taskId: string;
@@ -27,9 +39,9 @@ export interface HelperJob {
 	kind: HelperKind;
 	cwd: string;
 	prompt: string;
-	/** Pinned when the calling host already knows them; otherwise the isolated profile's default. */
-	model?: Model<any>;
-	modelRegistry?: ModelRegistry;
+	model?: Model | undefined;
+	thinkingLevel?: RoleEffort | undefined;
+	modelRegistry?: ModelRegistry | undefined;
 	binding: HelperBinding;
 }
 
@@ -42,8 +54,12 @@ export interface HelperReceipt {
 	sessionId?: string;
 }
 
-/** A cold reader must not act; a review may only inspect. Nothing else is admitted. */
-export const HELPER_TOOLS: Record<HelperKind, string[]> = { "cold-read": [], review: ["read", "grep", "glob"] };
+/** A cold reader must not act; reviewers may only inspect. Nothing else is admitted. */
+export const HELPER_TOOLS: Record<HelperKind, string[]> = {
+	"cold-read": [],
+	review: ["read", "grep", "glob"],
+	"sec-perf-review": ["read", "grep", "glob"],
+};
 
 /**
  * One fresh isolated session per job. Ambient resources, MCP, process-state binding, warming,
@@ -79,7 +95,16 @@ export async function runHelper(sdk: HelperSdk, job: HelperJob): Promise<HelperR
 		disableModelFallback: true,
 		disableServerSideFallback: true,
 	};
-	if (job.model) options.model = job.model;
+	if (job.model) {
+		const expectedModel = job.model;
+		options.model = expectedModel;
+		options.assertDispatchModel = model => {
+			if (model.provider !== expectedModel.provider || model.id !== expectedModel.id) {
+				throw new Error(`Helper dispatch model mismatch: expected ${expectedModel.provider}/${expectedModel.id}, got ${model.provider}/${model.id}.`);
+			}
+		};
+	}
+	if (job.thinkingLevel) options.thinkingLevel = THINKING_LEVEL_MAP[job.thinkingLevel];
 	if (job.modelRegistry) {
 		options.modelRegistry = job.modelRegistry;
 		options.authStorage = job.modelRegistry.authStorage;
@@ -87,16 +112,18 @@ export async function runHelper(sdk: HelperSdk, job: HelperJob): Promise<HelperR
 	const created = await sdk.createAgentSession(options);
 	const session = created.session;
 	let text: string | undefined;
+	let capturedModel: Model | undefined;
 	try {
 		const accepted = await session.prompt(job.prompt);
 		if (!accepted) throw new Error("The helper session refused the job prompt.");
 		await session.waitForIdle();
 		text = session.getLastAssistantText();
+		capturedModel = session.model;
 	} finally {
 		await session.dispose();
 	}
 	if (text === undefined) throw new Error("The helper session ended without an assistant answer.");
-	const actual = job.model ?? session.model;
+	const actual = capturedModel ?? job.model;
 	if (!actual) throw new Error("The helper session ran without a resolvable model identity.");
 	return { kind: job.kind, text, tools, binding: job.binding, model: { provider: actual.provider, id: actual.id } };
 }

@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 export interface KnowledgeCandidate {
 	/** Path relative to the project root. */
@@ -55,12 +55,25 @@ export async function proposeKnowledge(request: KnowledgeRequest): Promise<Knowl
 	if (request.candidates.length === 0) {
 		return { change: false, reason: "Nothing in the current project knowledge is contradicted by observed evidence.", changes: [] };
 	}
-	const root = resolve(request.root);
+	const root = await realpath(resolve(request.root));
 	const changes: KnowledgeChange[] = [];
 	for (const candidate of request.candidates) {
 		if (!candidate.reason.trim()) throw new Error(`${candidate.path}: a knowledge correction needs its concrete reason.`);
 		const target = resolve(join(root, candidate.path));
-		if (!target.startsWith(root + "/")) throw new Error(`${candidate.path} escapes the project root.`);
+		if (!target.startsWith(root + sep)) throw new Error(`${candidate.path} escapes the project root.`);
+		// Resolve the nearest existing ancestor (and the file itself if present) to block symlink escapes.
+		let probe = target;
+		while (probe !== root && probe !== dirname(probe)) {
+			const stat = await lstat(probe).catch(() => null);
+			if (stat) {
+				const realTarget = await realpath(probe);
+				if (realTarget !== root && !realTarget.startsWith(root + sep)) {
+					throw new Error(`${candidate.path} escapes the project root via symlink.`);
+				}
+				break;
+			}
+			probe = dirname(probe);
+		}
 		const existing = await readFile(target, "utf8").catch(() => null);
 		if (existing === candidate.proposed) continue;
 		const diff = existing === null ? lines(candidate.proposed).map(line => `+${line}`)

@@ -1,4 +1,5 @@
 export type ActivityKind = "prototype" | "research" | "spec" | "ticket" | "wizard";
+export type SliceStatus = "pending" | "in_progress" | "partial" | "done";
 
 export interface PlanActivity {
 	kind: ActivityKind;
@@ -12,6 +13,10 @@ export interface PlanSlice {
 	behavior: string;
 	test: string;
 	dependsOn: string[];
+	status?: SliceStatus | undefined;
+	commitSha?: string | null | undefined;
+	testProof?: string | null | undefined;
+	remaining?: string | null | undefined;
 }
 
 export interface ImplementationPlan {
@@ -22,10 +27,6 @@ export interface ImplementationPlan {
 
 export const PLAN_INVARIANT = "one failing behavioral slice, then minimal green, then review; no parallel writers";
 
-/**
- * An adaptive plan, not a stage template: an activity exists only for a named uncertain seam, and the
- * slices are strictly serial so each one has a single writer and a single failing test.
- */
 /**
  * Validates a submitted plan on the real input path: duplicate ids, unknown dependencies and parallel
  * writers are refused here, not only in the builder tests.
@@ -66,5 +67,16 @@ export function buildPlan(input: { uncertainties: PlanActivity[]; slices: PlanSl
 		}
 		seen.set(slice.id, index);
 	});
-	return { activities: input.uncertainties.map(activity => ({ ...activity })), slices: input.slices.map(slice => ({ ...slice, dependsOn: [...slice.dependsOn] })), invariant: PLAN_INVARIANT };
+	return {
+		activities: input.uncertainties.map(activity => ({ ...activity })),
+		slices: input.slices.map(slice => ({
+			...slice,
+			dependsOn: [...slice.dependsOn],
+			status: slice.status ?? "pending",
+			commitSha: slice.commitSha ?? null,
+			testProof: slice.testProof ?? null,
+			remaining: slice.remaining ?? null,
+		})),
+		invariant: PLAN_INVARIANT,
+	};
 }

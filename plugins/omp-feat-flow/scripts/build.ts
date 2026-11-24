@@ -1,16 +1,15 @@
 import { build, version as esbuildVersion } from "esbuild";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // CI rebuilds into a temporary tree and compares against the committed artifact.
 const outdir = process.env.OMP_FEAT_FLOW_OUTDIR ?? join(root, "runtime");
 
 async function fingerprint(): Promise<string> {
 	const files: string[] = ["package.json", "tsconfig.json", "scripts/build.ts"];
-	// A published artifact need not ship a lockfile; its identity then omits it.
-	if (await readFile(join(root, "package-lock.json")).then(() => true).catch(() => false)) files.push("package-lock.json");
 	const walk = async (directory: string): Promise<void> => {
 		for (const entry of await readdir(directory, { withFileTypes: true })) {
 			const path = join(directory, entry.name);
@@ -32,7 +31,7 @@ async function fingerprint(): Promise<string> {
 		dependencies?: Record<string, string>; devDependencies?: Record<string, string>;
 	};
 	const sdk = (pkg.devDependencies ?? pkg.dependencies)?.["@oh-my-pi/pi-coding-agent"] ?? "unpinned";
-	hash.update(`esbuild:${esbuildVersion}\0bun:${Bun.version}\0sdk:${sdk}`);
+	hash.update(`esbuild:${esbuildVersion}\0sdk:${sdk}`);
 	return hash.digest("hex");
 }
 
@@ -44,6 +43,7 @@ const sdkVersion = (pkg.devDependencies ?? pkg.dependencies)?.["@oh-my-pi/pi-cod
 
 const result = await build({
 	entryPoints: [join(root, "src/index.ts")],
+	absWorkingDir: root,
 	outfile: join(outdir, "index.mjs"),
 	bundle: true,
 	format: "esm",
@@ -68,7 +68,7 @@ const release = {
 	bundleSha256: createHash("sha256").update(bytes).digest("hex"),
 	tools: { esbuild: esbuildVersion, bun: Bun.version, sdk: sdkVersion },
 	// Executable resources stay out of the manifest; only identities and facts are recorded.
-	capabilities: ["commands", "tool-call-admission", "request-outbox", "workspace", "sync", "delivery"],
+	capabilities: ["commands", "tool-call-admission", "request-outbox", "workspace", "sync", "delivery", "onboarding", "tech-design"],
 };
 await writeFile(join(outdir, "release.json"), JSON.stringify(release, null, 2) + "\n");
 for (const output of result.outputFiles ?? []) void output;
